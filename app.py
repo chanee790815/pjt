@@ -11,32 +11,28 @@ import plotly.express as px
 st.set_page_config(page_title="현장 공정 관리", page_icon="🏗️", layout="wide")
 
 # =========================================================
-# 🔐 [인증 키 구역] 
-# =========================================================
-raw_json_data = '''
-{
-  "type": "service_account",
-  "project_id": "mp-pms-app",
-  "private_key_id": "f5b012b75886d6044e44f29acb307ffd808a9a4a",
-  "private_key": "-----BEGIN PRIVATE KEY-----\\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDkDvzaqIsoTJ76\\nKw9I7s7KyU/qMz1k2H3i6+Foo70NJVcDZUUnUoRxhix7jWqQFhjHgqHWN8UJ4/sf\\n1Wogz3gx3lTUyAEzlpmD772dOZJB1WN2W/W0M66+vrlAzHiUnENAAVXBLD8b+cme\\n+jMph2BMj3/OmIyzEGqztiOqMjZxyLFfriy6idiAX82PvIATF4czPfIjhap+aCn4\\nhqdUZ4qy1oh/N0Rn2kx/MhLIPZUsJ2rbxeG7eert7CMmnxrBKF77kY70u4MoJCYN\\nKWfTvsP4Z3MUclh/2gMh/StbPdMJxg+01LSdk2fhMN3YD5MJAH6kRa3GBoTRE2wh\\naNkDeiBzAgMBAAECggEARPKpDFxXUfQ0PhLlmJmmSFWrhPU/0uzGxmOk7rNOFRrc\\nXyjvSs+ePgogCax78prTnAHI9tA+kFpuEjY90zSWNJFwmTHsdxHJUMOa0l1U8/VV\\nEDQGKRhU9NMJg+ctb1R82m1s5S2A2O7gP2GKNTx55zudGrMxGnPUpodi6fIrVqOR\\nmRfzqRc3bT8YDr2s2hv5Ne5F+iyEHJHTPB5f/2opUmQ2v9On9N4Vm06n/Fm+Mo5e\\nrJ/quLNx4gcpIeieIwJox02CKonsBuX8tpsgCWP/4Zf3hip2alWx4Ed3BdHI54gg\\nihp8t5yfOk/C1WuHtsCuhxhsV28xbdGwTQSpjyu1wQKBgQD59GQYSk2bXGHfHf61\\nJLKlhXXEfwt4l4qZTB0PSWYymNR5/yIhwtF00EIKYHWQD2rCWA6pu11yaUSy5Msu\\nlxCweqcyUQJh+wbO/RgMoalCyvPQzWw7OJ3Q1IYdUQAsdTZS35l15yBPPE47vMoR\\nKP99L7I8URmOnpkwn5STmJ1CswKBgQDpkwaS0CiXz4EuI1FHYK2RbKtcP1Ksh23d\\nFgDzDRcAlYINNS8JiI0BqC1EA5LVCaizGLG0JTd5N1tQvkFbwcqTL9rozOL9uYjE\\nGPc0DYZoH59NuV0m861MuAdfbCX1Rl9tUTqdOzC02N1SLz3r2FzhLtGjAjXukUYG\\nk2HTtNeLQQKBgQCw2kxgK2KRxGGzXiOzw01rc+yJpWJWZtK3+HSvNj3LGvtrfiuG\\nO7O7tQalFO7ZiS7+ZxOo4FsT8oubD+r7AgPa+k2Gem73KIf+uHDlrxR1n+e3G0Gy\\n/TIcaeKip4c57Y0MQgzwsSHZLlAkUEWgsqNizfaMWs18bZbyIlcbv2W1pQKBgQC7\\nDpEUIHpx4a+dyJD+LdGzBilSDjBilW8JwOZvv8rtH87wTuhlpSLv8cSWlJoR3NNq\\n4trl32xGumt6BXQITPGz4H5bNEKRWfXKvgezeyVp2/FTaKDOYhYmu7bD17Oqc3pW\\n7NeZNd7y5j6Q496eMz9m43zmJA4XCebfu0Z8Knb4QQKBgG+DpJ7ULG910h1yedVJ\\numdWoVCOMvYdr/VrgdEVDSSnK925goABy4wHXzsh8ol8CzMqhmwzMpfeYzNGwTJO\\nmIfCh0vhegb1o97hrwNPl2k3RSqqMDtdcYpGHRDOgYOpmgTl/qNxKrvQIPF8rGCE\\nJNSMtvkVFuUpuDl9kRw8s+WQ\\n-----END PRIVATE KEY-----\\n",
-  "client_email": "streamlit-bot@mp-pms-app.iam.gserviceaccount.com",
-  "client_id": "100863669822809695078",
-  "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-  "token_uri": "https://oauth2.googleapis.com/token",
-  "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-  "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/streamlit-bot%40mp-pms-app.iam.gserviceaccount.com",
-  "universe_domain": "googleapis.com"
-}
-'''
+# 🔐 [보안 설정 완료] 
+# 이제 비밀번호는 Streamlit Secrets에서 안전하게 불러옵니다.
+# 코드에는 더 이상 개인 키가 노출되지 않습니다.
 # =========================================================
 
 # --- 구글 시트 연결 함수 ---
 @st.cache_resource
 def get_connection():
     try:
-        key_dict = json.loads(raw_json_data)
-        
-        # ✅ [수정] 드라이브 권한(drive)을 추가했습니다! 이게 없으면 403 에러가 납니다.
+        # 1. Secrets에서 정보 가져오기 (없으면 에러 처리)
+        if "gcp_service_account" not in st.secrets:
+            st.error("🚨 Secrets 설정이 비어있습니다!")
+            return None
+
+        # 2. 딕셔너리로 변환
+        key_dict = dict(st.secrets["gcp_service_account"])
+
+        # 3. 줄바꿈 문자(\n)가 깨졌을 경우를 대비해 교정
+        if "private_key" in key_dict:
+            key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
+
+        # 4. 권한 설정
         scopes = [
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive"
@@ -46,20 +42,20 @@ def get_connection():
         client = gspread.authorize(creds)
         return client
     except Exception as e:
+        st.error(f"🚨 인증 연결 실패: {e}")
         return None
 
 def get_pms_data():
     client = get_connection()
     if client:
         try:
-            # ⚠️ 구글 시트 제목이 'pms_db'가 맞는지 확인하세요.
+            # 시트 이름 확인: 'pms_db'
             sh = client.open('pms_db') 
             worksheet = sh.sheet1
             data = worksheet.get_all_records()
             return pd.DataFrame(data), worksheet
         except gspread.SpreadsheetNotFound:
-            st.error("🚨 구글 시트를 찾을 수 없습니다. (이유: 시트 이름이 틀렸거나, 봇에게 공유하지 않음)")
-            st.info("💡 해결법: 구글 시트 우측 상단 '공유' 버튼 누르고 streamlit-bot@mp-pms-app.iam.gserviceaccount.com 에게 '편집자' 권한을 주세요.")
+            st.error("🚨 구글 시트를 찾을 수 없습니다. (시트 이름 확인 또는 공유 권한 확인 필요)")
             return pd.DataFrame(), None
         except Exception as e:
              st.error(f"🚨 데이터 읽기 오류: {e}")
@@ -67,12 +63,13 @@ def get_pms_data():
     return pd.DataFrame(), None
 
 # --- 메인 화면 ---
-st.title("🏗️ 당진 적서리 태양광 PMS (Final Ver.)")
+st.title("🏗️ 당진 적서리 태양광 PMS (Secure Ver.)")
 
 # 데이터 로딩
 df, sheet = get_pms_data()
 
 if sheet is None:
+    st.warning("데이터베이스 연결 대기 중...")
     st.stop()
 
 # 탭 구성
