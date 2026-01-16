@@ -36,7 +36,6 @@ def get_pms_data():
             sh = client.open('pms_db') 
             worksheet = sh.sheet1
             data = worksheet.get_all_records()
-            # 데이터 로드 즉시 데이터프레임으로 변환
             return pd.DataFrame(data), worksheet
         except Exception as e:
              st.error(f"🚨 데이터 읽기 오류: {e}")
@@ -60,23 +59,23 @@ with tab1:
     if not df_raw.empty:
         try:
             df = df_raw.copy()
-            # 날짜 형식 변환
+            # 1. 날짜 데이터 형식 변환 및 전처리
             df['시작일'] = pd.to_datetime(df['시작일'])
             df['종료일'] = pd.to_datetime(df['종료일'])
-            # 빈 구분 처리
-            df['구분'] = df['구분'].astype(str).str.strip().replace('', '인허가 진행중').fillna('인허가 진행중')
+            # 구분이 비어있으면 '내용 없음'으로 채워 차트 누락 방지
+            df['구분'] = df['구분'].astype(str).str.strip().replace('', '내용 없음').fillna('내용 없음')
             
-            # [핵심 수정] 시작일 오름차순으로 완벽 정렬
-            df = df.sort_values(by="시작일", ascending=True)
+            # 2. [핵심] 시작일 기준으로 오름차순 정렬 (빠른 날짜가 위로)
+            df = df.sort_values(by="시작일", ascending=True).reset_index(drop=True)
 
-            # 마일스톤과 일반 공정 분리
+            # 3. 마일스톤과 일반 공정 분리
             main_df = df[df['대분류'] != 'MILESTONE'].copy()
             ms_df = df[df['대분류'] == 'MILESTONE'].copy()
             
-            # Y축 순서 리스트 생성 (정렬된 시작일 순서 그대로)
+            # 4. [중요] Y축 표시 순서를 정렬된 데이터의 '구분' 순서 그대로 고정
             y_order = main_df['구분'].unique().tolist()
 
-            # 간트 차트 생성
+            # 5. 간트 차트 생성
             fig = px.timeline(
                 main_df, 
                 x_start="시작일", 
@@ -84,10 +83,10 @@ with tab1:
                 y="구분", 
                 color="진행상태",
                 hover_data=["대분류", "비고"],
-                category_orders={"구분": y_order}  # 정렬된 리스트 순서 강제 주입
+                category_orders={"구분": y_order}  # 리스트 순서대로 Y축 배치 강제
             )
 
-            # 상단 마일스톤 화살표 추가
+            # 6. 상단 마일스톤 화살표 추가 (PDF 스타일)
             if not ms_df.empty:
                 for _, row in ms_df.iterrows():
                     fig.add_trace(go.Scatter(
@@ -103,7 +102,7 @@ with tab1:
                         cliponaxis=False
                     ))
 
-            # 레이아웃 최종 교정 (상단 년월 및 격자선)
+            # 7. 레이아웃 최종 교정 (상단 년월 및 격자선)
             fig.update_layout(
                 plot_bgcolor="white",
                 xaxis=dict(
@@ -115,7 +114,7 @@ with tab1:
                     ticks="outside"
                 ),
                 yaxis=dict(
-                    autorange="reversed", # 시작일이 빠른 항목이 맨 위로 오게 반전
+                    autorange="reversed", # 리스트의 첫 항목(빠른 날짜)이 맨 위로 오게 함
                     showgrid=True, 
                     gridcolor="rgba(240, 240, 240, 0.8)"
                 ),
@@ -132,6 +131,7 @@ with tab1:
 
         st.divider()
         st.write("📋 상세 데이터 목록")
+        # 목록도 날짜순으로 정렬해서 보여줌
         st.dataframe(df.sort_values(by="시작일"), use_container_width=True, hide_index=True)
 
 # [탭 2] 일정 등록
@@ -146,15 +146,17 @@ with tab2:
         in_status = st.selectbox("진행상태", ["예정", "진행중", "완료", "지연"])
         in_note = st.text_input("비고")
         if st.form_submit_button("저장하기 💾", use_container_width=True):
-            sheet.append_row([str(in_start), str(in_end), in_dae, in_gubun, in_status, in_note])
+            # 빈 구분에 대한 보정
+            final_gubun = in_gubun if in_gubun.strip() != "" else "내용 없음"
+            sheet.append_row([str(in_start), str(in_end), in_dae, final_gubun, in_status, in_note])
             st.success("✅ 일정이 저장되었습니다!"); time.sleep(1); st.rerun()
 
 # [탭 3] 일정 수정 및 삭제
 with tab3:
     st.subheader("기존 일정 관리")
     if not df_raw.empty:
-        # 데이터 정렬을 위해 임시 변환
         df_manage = df_raw.copy()
+        # 선택박스에서 식별하기 편하도록 구분+날짜 결합
         df_manage['selection'] = df_manage['구분'].astype(str) + " (" + df_manage['시작일'].astype(str) + ")"
         
         target_item = st.selectbox("수정 또는 삭제할 항목 선택", df_manage['selection'].tolist())
