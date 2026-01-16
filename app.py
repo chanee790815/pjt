@@ -1,8 +1,5 @@
 ## 2026년 1월16일 버전이야
 ## 추가기능
-
-
-
 import streamlit as st
 import pandas as pd
 import datetime
@@ -75,9 +72,9 @@ with tab1:
             ms_df = df[df['대분류'] == 'MILESTONE'].copy()
             
             # Y축 순서 고정 (역순 리스트 활용)
-            y_order_reversed = main_df['구분'].unique().tolist()[::-1]
+            y_order_custom = main_df['구분'].unique().tolist()[::-1]
 
-            # 간트 차트 생성
+            # 1. 간트 차트 생성
             fig = px.timeline(
                 main_df, 
                 x_start="시작일", 
@@ -86,40 +83,48 @@ with tab1:
                 color="진행상태",
                 text="진행상태", # 막대 위에 상태 표시
                 hover_data=["대분류", "비고"],
-                category_orders={"구분": y_order_reversed}
+                category_orders={"구분": y_order_custom}
             )
 
-            # [오류수정] 마일스톤 화살표 추가
+            # 2. 마일스톤 화살표 추가 (Scatter 전용 설정 적용)
             if not ms_df.empty:
                 for _, row in ms_df.iterrows():
                     fig.add_trace(go.Scatter(
                         x=[row['시작일']],
-                        y=[y_order_reversed[-1]] if y_order_reversed else [0], 
+                        y=[y_order_custom[0]] if y_order_custom else [0], 
                         mode='markers+text',
                         marker=dict(symbol='arrow-bar-down', size=20, color='black'),
                         text=f"▼ {row['구분']}",
-                        textposition="top center", # Scatter 전용 위치값 사용
+                        textposition="top center", # Scatter 에 맞는 위치값으로 고정
                         textfont=dict(color="red", size=11, family="Arial Black"),
                         name='MILESTONE',
                         showlegend=False
                     ))
 
-            # [추가기능] 오늘 날짜 표시선
+            # 3. [추가] 오늘 날짜 표시선 (Today Line)
             today_dt = datetime.datetime.now()
             fig.add_vline(x=today_dt.timestamp() * 1000, line_width=2, line_dash="dash", line_color="red")
             fig.add_annotation(x=today_dt, y=1.05, yref="paper", text="TODAY", showarrow=False, font=dict(color="red", size=12))
 
-            # 레이아웃 설정
+            # 4. 레이아웃 설정
             fig.update_layout(
                 plot_bgcolor="white",
-                xaxis=dict(side="top", showgrid=True, gridcolor="#E5E5E5", dtick="M1", tickformat="%Y-%m"),
+                xaxis=dict(side="top", showgrid=True, gridcolor="#E5E5E5", dtick="M1", tickformat="%Y-%m", ticks="outside"),
                 yaxis=dict(autorange=True, showgrid=True, gridcolor="#F0F0F0"),
                 height=800,
-                margin=dict(t=150, l=10, r=10, b=50)
+                margin=dict(t=150, l=10, r=10, b=50),
+                showlegend=True
             )
             
-            # 막대 위 텍스트 위치 설정
-            fig.update_traces(textposition='inside', marker_line_color="rgb(8,48,107)", marker_line_width=1, opacity=0.8)
+            # 5. 공정 막대 전용 설정 (textposition='inside'는 여기서만 적용)
+            fig.update_traces(
+                textposition='inside', 
+                marker_line_color="rgb(8,48,107)", 
+                marker_line_width=1, 
+                opacity=0.8,
+                selector=dict(type='bar') # Bar 형태의 데이터에만 적용하여 오류 방지
+            )
+            
             st.plotly_chart(fig, use_container_width=True)
             
         except Exception as e:
@@ -132,8 +137,7 @@ with tab1:
         display_df['종료일'] = display_df['종료일'].dt.strftime('%Y-%m-%d')
         st.dataframe(display_df, use_container_width=True, hide_index=True)
 
-# [탭 2] 일정 등록 및 [탭 3] 수정/삭제 로직은 기존과 동일하게 유지...
-# (기존의 tab2, tab3 코드를 이 아래에 그대로 붙여넣으시면 됩니다)
+# [탭 2] 및 [탭 3] 로직은 기존 코드와 동일하므로, 전체 파일 구성 시 그대로 붙여넣으시면 됩니다.
 
 
 # [탭 2] 및 [탭 3] 로직은 그대로 유지 (생략)
@@ -182,4 +186,5 @@ with tab3:
             if b2.form_submit_button("항목 삭제하기 🗑️", use_container_width=True):
                 sheet.delete_rows(selected_idx + 2)
                 st.error("🗑️ 삭제 완료!"); time.sleep(1); st.rerun()
+
 
