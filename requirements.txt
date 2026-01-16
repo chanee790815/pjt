@@ -1,9 +1,4 @@
 streamlit
-yfinance
 pandas
-requests
-beautifulsoup4
-plotly
-openpyxl
 gspread
 google-auth
