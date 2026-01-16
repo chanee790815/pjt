@@ -103,25 +103,29 @@ with tab1:
                     ))
 
             # 7. 레이아웃 최종 교정 (상단 년월 및 격자선)
-            fig.update_layout(
-                plot_bgcolor="white",
-                xaxis=dict(
-                    side="top",
-                    showgrid=True,
-                    gridcolor="rgba(220, 220, 220, 0.8)",
-                    dtick="M1",
-                    tickformat="%Y-%m",
-                    ticks="outside"
-                ),
-                yaxis=dict(
-                    autorange="True", # 리스트의 첫 항목(빠른 날짜)이 맨 위로 오게 함
-                    showgrid=True, 
-                    gridcolor="rgba(240, 240, 240, 0.8)"
-                ),
-                height=800,
-                margin=dict(t=150, l=10, r=10, b=50),
-                showlegend=True
-            )
+fig.update_layout(
+    plot_bgcolor="white",
+    xaxis=dict(
+        side="top",
+        showgrid=True,
+        gridcolor="rgba(220, 220, 220, 0.8)",
+        dtick="M1",
+        tickformat="%Y-%m",
+        ticks="outside"
+    ),
+    yaxis=dict(
+        # [수정] 따옴표 없는 True를 사용하거나, 설정 자체를 True로 고정합니다.
+        autorange=True, 
+        showgrid=True, 
+        gridcolor="rgba(240, 240, 240, 0.8)",
+        # 정렬된 순서를 유지하기 위해 categoryorder를 추가로 지정합니다.
+        categoryorder="array",
+        categoryarray=y_order
+    ),
+    height=800,
+    margin=dict(t=150, l=10, r=10, b=50),
+    showlegend=True
+)
             
             fig.update_traces(marker_line_color="rgb(8,48,107)", marker_line_width=1, opacity=0.8)
             st.plotly_chart(fig, use_container_width=True)
@@ -189,4 +193,5 @@ with tab3:
             if b2.form_submit_button("항목 삭제하기 🗑️", use_container_width=True):
                 sheet.delete_rows(selected_idx + 2)
                 st.error("🗑️ 삭제 완료!"); time.sleep(1); st.rerun()
+
 
