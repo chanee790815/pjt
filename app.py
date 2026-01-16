@@ -43,14 +43,14 @@ def get_pms_data():
     return pd.DataFrame(), None
 
 # --- 메인 화면 ---
-st.title("🏗️ 당진 적서리 태양광 PMS (Latest First)")
+st.title("🏗️ 당진 적서리 태양광 PMS (Custom Sorting)")
 
 df_raw, sheet = get_pms_data()
 if sheet is None:
     st.warning("데이터베이스 연결 대기 중...")
     st.stop()
 
-# 탭 구성
+# 탭 구성: 조회 / 등록 / 수정 및 삭제
 tab1, tab2, tab3 = st.tabs(["📊 공정표 (Gantt)", "📝 일정 등록", "⚙️ 일정 수정 및 삭제"])
 
 # [탭 1] 공정표 조회
@@ -64,15 +64,16 @@ with tab1:
             df['종료일'] = pd.to_datetime(df['종료일']).dt.normalize()
             df['구분'] = df['구분'].astype(str).str.strip().replace('', '내용 없음').fillna('내용 없음')
             
-            # 2. [정렬 수정] 시작일 기준 내림차순 정렬 (늦은 날짜일수록 상단 배치)
-            df = df.sort_values(by="시작일", ascending=False).reset_index(drop=True)
+            # 2. 시작일 기준 오름차순 정렬 (데이터 명단 확보)
+            df = df.sort_values(by="시작일", ascending=True).reset_index(drop=True)
 
             # 3. 마일스톤과 일반 공정 분리
             main_df = df[df['대분류'] != 'MILESTONE'].copy()
             ms_df = df[df['대분류'] == 'MILESTONE'].copy()
             
-            # 4. Y축 순서 고정 (내림차순 정렬된 데이터프레임 순서 그대로 사용)
-            y_order = main_df['구분'].unique().tolist()
+            # 4. [핵심 수정] 정렬된 리스트를 역순으로 뒤집어 추출 (종합 시운전이 리스트 0번)
+            # 이 한 줄이 차트의 위아래 순서를 결정합니다.
+            y_order_custom = main_df['구분'].unique().tolist()[::-1]
 
             # 5. 간트 차트 생성
             fig = px.timeline(
@@ -82,15 +83,15 @@ with tab1:
                 y="구분", 
                 color="진행상태",
                 hover_data=["대분류", "비고"],
-                category_orders={"구분": y_order}
+                category_orders={"구분": y_order_custom} # 뒤집힌 순서 강제 주입
             )
 
-            # 6. 마일스톤 화살표 추가 (데이터가 있을 때만)
+            # 6. 상단 마일스톤 화살표 추가
             if not ms_df.empty:
                 for _, row in ms_df.iterrows():
                     fig.add_trace(go.Scatter(
                         x=[row['시작일']],
-                        y=[y_order[0]] if y_order else [0], 
+                        y=[y_order_custom[0]] if y_order_custom else [0], 
                         mode='markers+text',
                         marker=dict(symbol='arrow-bar-down', size=20, color='black'),
                         text=f"▼ {row['구분']}",
@@ -101,12 +102,12 @@ with tab1:
                         cliponaxis=False
                     ))
 
-            # 7. 레이아웃 설정
+            # 7. 레이아웃 설정 (autorange=True로 고정)
             fig.update_layout(
                 plot_bgcolor="white",
                 xaxis=dict(side="top", showgrid=True, gridcolor="#E5E5E5", dtick="M1", tickformat="%Y-%m", ticks="outside"),
                 yaxis=dict(
-                    autorange=True, # reversed를 쓰지 않아야 '종합 시운전'이 맨 위로 유지됩니다.
+                    autorange=True, # reversed를 쓰지 않고 리스트 순서를 그대로 따름
                     showgrid=True, 
                     gridcolor="#F0F0F0"
                 ),
@@ -123,7 +124,6 @@ with tab1:
 
         st.divider()
         st.write("📋 상세 데이터 목록")
-        # 데이터 목록은 사용자가 보기 편하게 다시 시작일 순(오름차순)으로 보여줍니다.
         st.dataframe(df.sort_values(by="시작일"), use_container_width=True, hide_index=True)
 
 # [탭 2] 일정 등록
