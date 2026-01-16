@@ -61,17 +61,16 @@ with tab1:
             df = df_raw.copy()
             df['시작일'] = pd.to_datetime(df['시작일'])
             df['종료일'] = pd.to_datetime(df['종료일'])
-            # 구분이 비어있으면 '내용 없음'으로 채움
             df['구분'] = df['구분'].astype(str).str.strip().replace('', '내용 없음').fillna('내용 없음')
             
-            # [핵심] 시작일 빠른 순으로 정렬
+            # [순서 고정] 시작일 빠른 순으로 정렬
             df = df.sort_values(by="시작일", ascending=True).reset_index(drop=True)
 
             main_df = df[df['대분류'] != 'MILESTONE'].copy()
             ms_df = df[df['대분류'] == 'MILESTONE'].copy()
             
-            # Y축 순서 리스트 생성
-            y_order = main_df['구분'].unique().tolist()
+            # [핵심] Y축 순서를 역순으로 뒤집어 주입 (상단부터 시간순 배치 위함)
+            y_order_reversed = main_df['구분'].unique().tolist()[::-1]
 
             # 간트 차트 생성
             fig = px.timeline(
@@ -81,7 +80,7 @@ with tab1:
                 y="구분", 
                 color="진행상태",
                 hover_data=["대분류", "비고"],
-                category_orders={"구분": y_order}
+                category_orders={"구분": y_order_reversed}
             )
 
             # 상단 마일스톤 화살표 추가
@@ -89,7 +88,7 @@ with tab1:
                 for _, row in ms_df.iterrows():
                     fig.add_trace(go.Scatter(
                         x=[row['시작일']],
-                        y=[y_order[0]] if y_order else [0], 
+                        y=[y_order_reversed[-1]] if y_order_reversed else [0], 
                         mode='markers+text',
                         marker=dict(symbol='arrow-bar-down', size=20, color='black'),
                         text=f"▼ {row['구분']}",
@@ -100,31 +99,15 @@ with tab1:
                         cliponaxis=False
                     ))
 
-      
-# 레이아웃 설정 수정
-fig.update_layout(
-    plot_bgcolor="white",
-    xaxis=dict(
-        side="top", 
-        showgrid=True, 
-        gridcolor="rgba(220, 220, 220, 0.8)", 
-        dtick="M1", 
-        tickformat="%Y-%m", 
-        ticks="outside"
-    ),
-    yaxis=dict(
-        # [수정] "reversed"를 제거하고 True로 설정합니다. 
-        # 이미 위에서 category_orders로 순서를 잡았기 때문에 reversed를 쓰면 역순이 됩니다.
-        autorange=True, 
-        showgrid=True, 
-        gridcolor="rgba(240, 240, 240, 0.8)",
-        # 추가로 항목 간 간격을 조절하여 표 느낌을 더 살릴 수 있습니다.
-        fixedrange=False
-    ),
-    height=800,
-    margin=dict(t=150, l=10, r=10, b=50),
-    showlegend=True
-)
+            # 레이아웃 설정 (SyntaxError 해결을 위해 try 블록 내부 유지)
+            fig.update_layout(
+                plot_bgcolor="white",
+                xaxis=dict(side="top", showgrid=True, gridcolor="rgba(220, 220, 220, 0.8)", dtick="M1", tickformat="%Y-%m", ticks="outside"),
+                yaxis=dict(autorange=True, showgrid=True, gridcolor="rgba(240, 240, 240, 0.8)"),
+                height=800,
+                margin=dict(t=150, l=10, r=10, b=50),
+                showlegend=True
+            )
             
             fig.update_traces(marker_line_color="rgb(8,48,107)", marker_line_width=1, opacity=0.8)
             st.plotly_chart(fig, use_container_width=True)
@@ -179,4 +162,3 @@ with tab3:
             if b2.form_submit_button("삭제 🗑️", use_container_width=True):
                 sheet.delete_rows(selected_idx + 2)
                 st.error("🗑️ 삭제 완료!"); time.sleep(1); st.rerun()
-
