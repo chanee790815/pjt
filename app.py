@@ -1,162 +1,125 @@
 import streamlit as st
-import yfinance as yf
 import pandas as pd
-import requests
-from bs4 import BeautifulSoup
-import time
-import plotly.express as px
+import datetime
 import gspread
-from google.oauth2.service_account import Credentials
+from google.oauth2.service_account import Credentials # 최신 라이브러리 사용
+import time
 
-# 1. 페이지 설정
-st.set_page_config(
-    page_title="통합 PMS & 금융 대시보드",
-    page_icon="💰",
-    layout="wide",
-    initial_sidebar_state="collapsed"
-)
+# --- 페이지 설정 ---
+st.set_page_config(page_title="현장 공정 관리", page_icon="🏗️", layout="wide")
 
-# 2. 스타일 설정
-st.markdown("""
-    <style>
-    [data-testid="stMetricValue"] { font-size: 1.5rem !important; }
-    button[data-baseweb="tab"] { font-size: 1.1rem !important; font-weight: 600 !important; }
-    </style>
-    """, unsafe_allow_html=True)
+# --- 구글 시트 연결 함수 (수정됨) ---
+# @st.cache_resource는 DB 연결을 캐싱하여 속도를 높여줍니다.
+@st.cache_resource
+def get_connection():
+    # 1. Secrets에서 인증 정보 가져오기
+    # 스트림릿 클라우드에 설정한 secrets를 가져옵니다.
+    credentials_info = st.secrets["gcp_service_account"]
 
-# --- [함수 1] 금융 데이터 ---
-@st.cache_data(ttl=300)
-def get_financial_data():
-    tickers = {'Gold_Intl': 'GC=F', 'Ex_Rate': 'KRW=X', 'SP500': '^GSPC', 'Trans': '^DJT'}
-    result = {}
-    for key, val in tickers.items():
-        try:
-            df = yf.Ticker(val).history(period="5d")
-            result[key] = df['Close'].iloc[-1] if not df.empty else 0.0
-        except: result[key] = 0.0
-    return result
+    # 2. Scopes 설정
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+    ]
+    
+    # 3. 인증 처리 (google-auth 라이브러리 사용)
+    creds = Credentials.from_service_account_info(
+        credentials_info, scopes=scopes
+    )
+    client = gspread.authorize(creds)
+    return client
 
-# --- [함수 2] 금 시세 크롤링 ---
-def get_krx_gold():
-    try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        url = "https://finance.naver.com/marketindex/goldDetail.naver"
-        res = requests.get(url, headers=headers, timeout=5)
-        soup = BeautifulSoup(res.text, 'html.parser')
-        price = soup.select_one("em.no_up") or soup.select_one("em.no_down") or soup.select_one("em.no_today")
-        return float(price.get_text(strip=True).replace(',', '')) if price else 0.0
-    except: return 0.0
-
-# --- [함수 3] 구글 시트 데이터 가져오기 (JWT 에러 해결 로직 포함) ---
-def load_data_from_gsheets():
-    try:
-        # 1. Secrets에서 인증 정보 가져오기
-        if "gcp_service_account" not in st.secrets:
-            st.error("Secrets에 'gcp_service_account' 정보가 없습니다.")
-            return pd.DataFrame()
-
-        # 딕셔너리로 변환
-        secrets_dict = dict(st.secrets["gcp_service_account"])
-
-        # ✅ [핵심 수정] 줄바꿈 문자(\n)가 깨진 것을 강제로 고침
-        if "private_key" in secrets_dict:
-            secrets_dict["private_key"] = secrets_dict["private_key"].replace("\\n", "\n")
-
-        # 2. 인증 및 연결
-        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-        creds = Credentials.from_service_account_info(secrets_dict, scopes=scopes)
-        client = gspread.authorize(creds)
-
-        # 3. 시트 열기 (Secrets에 저장된 시트 URL 사용)
-        sheet_url = st.secrets["private_gsheets_url"]
-        sh = client.open_by_url(sheet_url)
-        worksheet = sh.get_worksheet(0) # 첫 번째 시트
-
-        # 4. 데이터프레임 변환
-        data = worksheet.get_all_records()
-        df = pd.DataFrame(data)
-        return df
-
-    except Exception as e:
-        st.error(f"구글 시트 연결 실패: {e}")
-        return pd.DataFrame()
-
-# --- [함수 4] 샘플 데이터 (연결 실패 시 대타) ---
-def get_sample_schedule():
-    return pd.DataFrame([
-        dict(Task="샘플: 기초공사", Start='2024-01-01', Finish='2024-02-28', Department="토목팀", Completion=100),
-        dict(Task="샘플: 골조공사", Start='2024-03-01', Finish='2024-05-15', Department="건축팀", Completion=60)
-    ])
+def get_pms_data():
+    client = get_connection()
+    # 시트 열기
+    sh = client.open('pms_db') 
+    worksheet = sh.sheet1
+    
+    # 데이터 가져오기
+    data = worksheet.get_all_records()
+    df = pd.DataFrame(data)
+    return df, worksheet
 
 # --- 메인 화면 ---
-st.title("🏗️ 당진 적서리 태양광 PMS & Market Watch")
-st.caption(f"Last Update: {time.strftime('%Y-%m-%d %H:%M')}")
+st.title("🏗️ 당진 적서리 태양광 PMS")
 
-if st.button('새로고침 🔄', use_container_width=True):
-    st.rerun()
-
-tab1, tab2, tab3 = st.tabs(["📊 금/시장 지표", "🚛 경기 동향", "📅 공정 관리(DB)"])
-
-# --- 탭 1 & 2: 금융 정보 (기존 유지) ---
-with tab1:
-    fin_data = get_financial_data()
-    kr_gold = get_krx_gold()
-    intl_gold = fin_data.get('Gold_Intl', 0)
-    rate = fin_data.get('Ex_Rate', 1300)
-    th_price = (intl_gold * rate) / 31.1035 if intl_gold > 0 else 0
-    spread = ((kr_gold - th_price)/th_price)*100 if th_price > 0 else 0
+# 로그인/연결 시도
+try:
+    df, sheet = get_pms_data()
     
-    col1, col2, col3 = st.columns(3)
-    col1.metric("국내 금값", f"{kr_gold:,.0f}원")
-    col2.metric("국제 이론가", f"{th_price:,.0f}원")
-    col3.metric("괴리율", f"{spread:.2f}%", delta_color="inverse")
-
-with tab2:
-    st.metric("다우 운송지수", f"{fin_data.get('Trans', 0):,.0f}")
-    try:
-        st.line_chart(yf.Ticker('^DJT').history(period='1mo')['Close'])
-    except: st.write("차트 로딩 실패")
-
-# --- 탭 3: 구글 시트 공정표 (오류 수정 적용됨) ---
-with tab3:
-    st.subheader("실시간 공정 현황 (Google Sheets)")
+    # 탭 구성
+    tab1, tab2 = st.tabs(["📅 공정표 보기", "📝 일정 업데이트"])
     
-    # DB 연결 시도
-    with st.spinner("구글 시트 데이터 불러오는 중..."):
-        df_schedule = load_data_from_gsheets()
-    
-    # 실패하면 샘플 데이터 사용
-    if df_schedule.empty:
-        st.warning("⚠️ 구글 시트 연결에 실패하여 샘플 데이터를 보여줍니다. (Secrets 설정을 확인하세요)")
-        df_schedule = get_sample_schedule()
-    else:
-        st.success("✅ 구글 DB 연결 성공!")
+    with tab1:
+        st.subheader("전체 예정 공정표")
+        
+        if not df.empty:
+            # 날짜순 정렬 (데이터가 있을 때만)
+            if '시작일' in df.columns:
+                try:
+                    df['시작일'] = pd.to_datetime(df['시작일'])
+                    df = df.sort_values(by="시작일")
+                    # 보여줄 때는 다시 문자열로 (선택사항)
+                    df['시작일'] = df['시작일'].dt.strftime('%Y-%m-%d')
+                except:
+                    pass # 날짜 변환 실패시 그냥 둠
+            
+            # 진행상태별 색상 함수
+            def color_status(val):
+                color = ''
+                if val == '완료': color = 'background-color: #d4edda' # 연두색
+                elif val == '진행중': color = 'background-color: #fff3cd' # 노란색
+                elif val == '지연': color = 'background-color: #f8d7da' # 빨간색
+                return color
+            
+            # 스타일 적용 (Pandas 버전에 따라 applymap 혹은 map 사용)
+            try:
+                styled_df = df.style.map(color_status, subset=['진행상태'])
+            except:
+                styled_df = df.style.applymap(color_status, subset=['진행상태'])
 
-    # 데이터 전처리 및 차트
-    try:
-        if 'Start' in df_schedule.columns and 'Finish' in df_schedule.columns:
-            df_schedule['Start'] = pd.to_datetime(df_schedule['Start'])
-            df_schedule['Finish'] = pd.to_datetime(df_schedule['Finish'])
-            
-            # 검색 기능
-            query = st.text_input("검색 (공정명/부서)", placeholder="예: 전기")
-            if query:
-                mask = df_schedule.astype(str).apply(lambda x: x.str.contains(query, case=False)).any(axis=1)
-                df_view = df_schedule[mask]
-            else:
-                df_view = df_schedule
-            
-            # 간트 차트
-            fig = px.timeline(df_view, x_start="Start", x_end="Finish", y="Task", 
-                              color="Completion", title="Project Schedule", height=400)
-            fig.update_yaxes(autorange="reversed")
-            st.plotly_chart(fig, use_container_width=True)
-            
-            with st.expander("원본 데이터 확인"):
-                st.dataframe(df_view)
+            st.dataframe(
+                styled_df,
+                use_container_width=True,
+                height=600,
+                hide_index=True
+            )
         else:
-            st.error("데이터에 'Start', 'Finish', 'Task' 컬럼이 꼭 있어야 합니다.")
-            st.dataframe(df_schedule)
+            st.info("데이터가 비어있습니다.")
+
+    with tab2:
+        st.subheader("일정 등록 및 수정")
+        st.caption("새로운 일정을 입력하면 구글 시트 맨 아래에 추가됩니다.")
+        
+        with st.form("input_form"):
+            c1, c2 = st.columns(2)
+            input_start = c1.date_input("시작일", datetime.date.today())
+            input_end = c2.date_input("종료일", datetime.date.today() + datetime.timedelta(days=30))
             
-    except Exception as e:
-        st.error(f"차트 그리기 오류: {e}")
+            c3, c4 = st.columns(2)
+            input_dae = c3.selectbox("대분류", ["인허가", "설계/조사", "계약", "토목공사", "건축공사", "송전선로", "변전설비", "전기공사", "준공", "MILESTONE"])
+            input_gubun = c4.text_input("구분 (세부내용)", placeholder="예: 부지 정지 작업")
+            
+            c5, c6 = st.columns(2)
+            input_status = c5.selectbox("진행상태", ["예정", "진행중", "완료", "지연"])
+            input_note = c6.text_input("비고", placeholder="특이사항 입력")
+            
+            submitted = st.form_submit_button("일정 저장하기 💾", use_container_width=True)
+            
+            if submitted:
+                new_row = [
+                    str(input_start), 
+                    str(input_end), 
+                    input_dae, 
+                    input_gubun, 
+                    input_status, 
+                    input_note
+                ]
+                sheet.append_row(new_row)
+                st.success("✅ 저장이 완료되었습니다! (잠시 후 새로고침 됩니다)")
+                time.sleep(1.5)
+                st.rerun()
+
+except Exception as e:
+    st.error("🚨 연결 오류 발생!")
+    st.write("Streamlit Secrets 설정을 확인해주세요.")
+    st.expander("에러 상세 내용").write(e)
