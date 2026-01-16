@@ -10,29 +10,19 @@ import plotly.express as px
 # 1. 페이지 설정
 st.set_page_config(page_title="현장 공정 관리", page_icon="🏗️", layout="wide")
 
-# =========================================================
-# 🔐 [보안 설정 완료] 
-# 이제 비밀번호는 Streamlit Secrets에서 안전하게 불러옵니다.
-# 코드에는 더 이상 개인 키가 노출되지 않습니다.
-# =========================================================
-
 # --- 구글 시트 연결 함수 ---
 @st.cache_resource
 def get_connection():
     try:
-        # 1. Secrets에서 정보 가져오기 (없으면 에러 처리)
         if "gcp_service_account" not in st.secrets:
             st.error("🚨 Secrets 설정이 비어있습니다!")
             return None
 
-        # 2. 딕셔너리로 변환
         key_dict = dict(st.secrets["gcp_service_account"])
 
-        # 3. 줄바꿈 문자(\n)가 깨졌을 경우를 대비해 교정
         if "private_key" in key_dict:
             key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
 
-        # 4. 권한 설정
         scopes = [
             "https://www.googleapis.com/auth/spreadsheets",
             "https://www.googleapis.com/auth/drive"
@@ -49,13 +39,12 @@ def get_pms_data():
     client = get_connection()
     if client:
         try:
-            # 시트 이름 확인: 'pms_db'
             sh = client.open('pms_db') 
             worksheet = sh.sheet1
             data = worksheet.get_all_records()
             return pd.DataFrame(data), worksheet
         except gspread.SpreadsheetNotFound:
-            st.error("🚨 구글 시트를 찾을 수 없습니다. (시트 이름 확인 또는 공유 권한 확인 필요)")
+            st.error("🚨 구글 시트를 찾을 수 없습니다.")
             return pd.DataFrame(), None
         except Exception as e:
              st.error(f"🚨 데이터 읽기 오류: {e}")
@@ -82,10 +71,17 @@ with tab1:
     if not df.empty:
         if '시작일' in df.columns and '종료일' in df.columns:
             try:
+                # 데이터 전처리
                 df['시작일'] = pd.to_datetime(df['시작일'])
                 df['종료일'] = pd.to_datetime(df['종료일'])
+                
+                # [개선 1] 구분이 비어있는 경우(직접 업데이트 항목 등) 이름 부여
+                df['구분'] = df['구분'].astype(str).replace('', '인허가 보완/진행')
+                df['구분'] = df['구분'].fillna('인허가 보완/진행')
+                
                 df = df.sort_values(by="시작일")
                 
+                # 간트 차트 생성
                 fig = px.timeline(
                     df, 
                     x_start="시작일", 
@@ -95,7 +91,30 @@ with tab1:
                     hover_data=["대분류", "비고"],
                     title="전체 공정 스케줄"
                 )
-                fig.update_yaxes(autorange="reversed") 
+
+                # [개선 2] 차트 레이아웃 수정 (상단 년월, 격자선 추가)
+                fig.update_layout(
+                    plot_bgcolor="white",          # 배경을 흰색으로 변경
+                    xaxis=dict(
+                        side="top",                # 년월 표시를 상단으로 이동
+                        showgrid=True,             # 가로 격자선(월별 구분선) 활성화
+                        gridcolor="rgba(220, 220, 220, 0.8)", # 연한 실선 색상
+                        dtick="M1",                # 1개월 단위 눈금
+                        tickformat="%Y-%m",        # 표시 형식
+                        ticks="outside"
+                    ),
+                    yaxis=dict(
+                        autorange="reversed",      # 상단부터 시간순 배치
+                        showgrid=True,             # 세로 격자선(항목 구분선) 활성화
+                        gridcolor="LightGray"
+                    ),
+                    height=600,                    # 차트 높이 조절
+                    margin=dict(t=100, l=10, r=10, b=10) # 상단 축 공간 확보
+                )
+                
+                # 막대 테두리 및 두께 조절 (표 느낌 강조)
+                fig.update_traces(marker_line_color="rgb(8,48,107)", marker_line_width=1, opacity=0.9)
+                
                 st.plotly_chart(fig, use_container_width=True)
                 
             except Exception as e:
@@ -146,11 +165,14 @@ with tab2:
         submitted = st.form_submit_button("저장하기 💾", use_container_width=True)
         
         if submitted:
+            # 입력값이 비어있을 경우에 대한 기본값 처리 (차트 오류 방지)
+            save_gubun = input_gubun if input_gubun.strip() != "" else "인허가 보완/진행"
+            
             new_row = [
                 input_start.strftime('%Y-%m-%d'), 
                 input_end.strftime('%Y-%m-%d'), 
                 input_dae, 
-                input_gubun, 
+                save_gubun, 
                 input_status, 
                 input_note
             ]
