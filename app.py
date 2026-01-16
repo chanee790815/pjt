@@ -43,14 +43,13 @@ def get_pms_data():
     return pd.DataFrame(), None
 
 # --- 메인 화면 ---
-st.title("🏗️ 당진 적서리 태양광 PMS (Final Corrected)")
+st.title("🏗️ 당진 적서리 태양광 PMS (Sequence Fixed)")
 
 df_raw, sheet = get_pms_data()
 if sheet is None:
     st.warning("데이터베이스 연결 대기 중...")
     st.stop()
 
-# 탭 구성
 tab1, tab2, tab3 = st.tabs(["📊 공정표 (Gantt)", "📝 일정 등록", "⚙️ 일정 수정 및 삭제"])
 
 # [탭 1] 공정표 조회
@@ -63,25 +62,23 @@ with tab1:
             df['종료일'] = pd.to_datetime(df['종료일'])
             df['구분'] = df['구분'].astype(str).str.strip().replace('', '내용 없음').fillna('내용 없음')
             
-            # [수정] 시작일 빠른 순으로 정렬
+            # 1. [강력 정렬] 시작일 순으로 정렬 후 번호 매기기
             df = df.sort_values(by="시작일", ascending=True).reset_index(drop=True)
+            
+            # 2. [번호 부여] Y축 이름 앞에 01, 02... 를 붙여 정렬 오류 원천 차단
+            df['표시구분'] = [f"{i+1:02d}. {name}" for i, name in enumerate(df['구분'])]
 
             main_df = df[df['대분류'] != 'MILESTONE'].copy()
             ms_df = df[df['대분류'] == 'MILESTONE'].copy()
             
-            # [핵심] Y축 순서를 역순 리스트로 생성 (Plotly는 아래서 위로 쌓기 때문)
-            # 이렇게 해야 리스트의 끝항목(빠른 날짜)이 차트의 맨 위로 갑니다.
-            y_order_reversed = main_df['구분'].unique().tolist()[::-1]
-
-            # 간트 차트 생성
+            # 3. 간트 차트 생성 (정렬된 '표시구분' 사용)
             fig = px.timeline(
                 main_df, 
                 x_start="시작일", 
                 x_end="종료일", 
-                y="구분", 
+                y="표시구분", 
                 color="진행상태",
-                hover_data=["대분류", "비고"],
-                category_orders={"구분": y_order_reversed}
+                hover_data=["대분류", "비고", "구분"]
             )
 
             # 상단 마일스톤 화살표 추가
@@ -89,7 +86,7 @@ with tab1:
                 for _, row in ms_df.iterrows():
                     fig.add_trace(go.Scatter(
                         x=[row['시작일']],
-                        y=[y_order_reversed[-1]] if y_order_reversed else [0], 
+                        y=[main_df['표시구분'].iloc[0]] if not main_df.empty else [0], 
                         mode='markers+text',
                         marker=dict(symbol='arrow-bar-down', size=20, color='black'),
                         text=f"▼ {row['구분']}",
@@ -100,11 +97,11 @@ with tab1:
                         cliponaxis=False
                     ))
 
-            # 레이아웃 설정 (autorange=True로 고정)
+            # 레이아웃 설정 (autorange="reversed"를 통해 01번이 맨 위로 오게 함)
             fig.update_layout(
                 plot_bgcolor="white",
                 xaxis=dict(side="top", showgrid=True, gridcolor="rgba(220, 220, 220, 0.8)", dtick="M1", tickformat="%Y-%m", ticks="outside"),
-                yaxis=dict(autorange=True, showgrid=True, gridcolor="rgba(240, 240, 240, 0.8)"),
+                yaxis=dict(autorange="reversed", showgrid=True, gridcolor="rgba(240, 240, 240, 0.8)", title="공정명"),
                 height=800,
                 margin=dict(t=150, l=10, r=10, b=50),
                 showlegend=True
@@ -118,7 +115,7 @@ with tab1:
 
         st.divider()
         st.write("📋 상세 데이터 목록")
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.dataframe(df_raw, use_container_width=True, hide_index=True)
 
 # [탭 2] 일정 등록
 with tab2:
