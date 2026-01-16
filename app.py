@@ -57,40 +57,48 @@ with tab1:
     
     if not df.empty:
         try:
+            # 데이터 전처리
             df['시작일'] = pd.to_datetime(df['시작일'])
             df['종료일'] = pd.to_datetime(df['종료일'])
-            df['구분'] = df['구분'].astype(str).replace('', '내용 없음').fillna('내용 없음')
-            df = df.sort_values(by="시작일")
+            df['구분'] = df['구분'].astype(str).replace('', '인허가 보완/진행').fillna('인허가 보완/진행')
+            
+            # 마일스톤과 일반 공정 분리
+            main_df = df[df['대분류'] != 'MILESTONE'].copy().sort_values(by="시작일")
+            ms_df = df[df['대분류'] == 'MILESTONE'].copy()
 
-            # 1. 기본 간트 차트 생성
+            # 1. 기본 간트 차트 (일반 공정)
             fig = px.timeline(
-                df, 
+                main_df, 
                 x_start="시작일", 
                 x_end="종료일", 
                 y="구분", 
                 color="진행상태",
                 hover_data=["대분류", "비고"],
-                title="전체 공정 및 주요 마일스톤"
+                category_orders={"구분": main_df["구분"].tolist()}
             )
 
-            # 2. 마일스톤(MILESTONE 대분류) 따로 표기 로직 추가
-            # 시작일과 종료일이 같거나, 대분류가 MILESTONE인 경우 점(다이아몬드)으로 표시
-            ms_df = df[df['대분류'] == 'MILESTONE'].copy()
+            # 2. 상단 마일스톤 (화살표 및 텍스트) 추가
             if not ms_df.empty:
                 fig.add_trace(
                     go.Scatter(
                         x=ms_df['시작일'],
-                        y=ms_df['구분'],
+                        # Y축의 가장 상단(첫 번째 공정 위)에 위치하도록 설정
+                        y=[main_df['구분'].iloc[0]] * len(ms_df) if not main_df.empty else [0] * len(ms_df),
                         mode='markers+text',
-                        marker=dict(symbol='diamond', size=15, color='red', line=dict(width=2, color='DarkSlateGrey')),
+                        marker=dict(
+                            symbol='arrow-bar-down', # 아래 방향 화살표 형태
+                            size=20,
+                            color='black',
+                        ),
                         text=ms_df['구분'],
-                        textposition="top center",
+                        textposition="top center", # 텍스트를 화살표 위에 표시
+                        textfont=dict(color="red", size=12), # PDF 예시처럼 강조
                         name='주요 마일스톤',
-                        hoverinfo='text'
+                        cliponaxis=False
                     )
                 )
 
-            # 레이아웃 개선
+            # 레이아웃 개선 (상단 년월 및 격자선)
             fig.update_layout(
                 plot_bgcolor="white",
                 xaxis=dict(
@@ -103,7 +111,7 @@ with tab1:
                 ),
                 yaxis=dict(autorange="reversed", showgrid=True, gridcolor="LightGray"),
                 height=700,
-                margin=dict(t=120, l=10, r=10, b=10),
+                margin=dict(t=150, l=10, r=10, b=10), # 상단 마일스톤 텍스트를 위한 여백 확대
                 showlegend=True
             )
             
@@ -121,13 +129,12 @@ with tab2:
     st.subheader("일정 및 마일스톤 등록")
     with st.form("input_form"):
         c1, c2 = st.columns(2)
-        input_start = c1.date_input("시작일(마일스톤은 이 날짜 기준)", datetime.date.today())
+        input_start = c1.date_input("날짜 (마일스톤일 경우 당일 기준)", datetime.date.today())
         input_end = c2.date_input("종료일", datetime.date.today() + datetime.timedelta(days=30))
         
         c3, c4 = st.columns(2)
-        # MILESTONE 선택 시 차트에서 특별하게 표시됩니다.
-        input_dae = c3.selectbox("대분류", ["MILESTONE", "인허가", "설계/조사", "계약", "토목공사", "송전선로", "준공"])
-        input_gubun = c4.text_input("구분", placeholder="예: 착공식, 사용전검사 완료 등")
+        input_dae = c3.selectbox("대분류", ["인허가", "설계/조사", "계약", "토목공사", "송전선로", "MILESTONE"])
+        input_gubun = c4.text_input("구분", placeholder="예: MTR, GIS 선발주, 착공, 종합준공 등")
         
         input_status = st.selectbox("진행상태", ["예정", "진행중", "완료", "지연"])
         input_note = st.text_input("비고")
