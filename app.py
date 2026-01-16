@@ -63,9 +63,10 @@ with tab1:
             df['종료일'] = pd.to_datetime(df['종료일']).dt.normalize()
             df['구분'] = df['구분'].astype(str).str.strip().replace('', '내용 없음').fillna('내용 없음')
             
+         #   # 시작일 기준 오름차순 정렬
+         #   df = df.sort_values(by="시작일", ascending=True).reset_index(drop=True)
             # 시작일 기준 오름차순 정렬
-            df = df.sort_values(by="시작일", ascending=True).reset_index(drop=True)
-
+            df = df.sort_values(by="시작일", ascending=False).reset_index(drop=True)
             main_df = df[df['대분류'] != 'MILESTONE'].copy()
             ms_df = df[df['대분류'] == 'MILESTONE'].copy()
             
@@ -125,3 +126,4 @@ with tab1:
 
 # [탭 2] 및 [탭 3] 로직은 이전과 동일하게 유지...
 # (지면 관계상 핵심 수정부 위주로 기재하며, 전체 기능은 동일하게 작동합니다)
+
