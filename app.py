@@ -56,37 +56,86 @@ if sheet is None:
 # 탭 구성: 조회 / 등록 / 수정 및 삭제
 tab1, tab2, tab3 = st.tabs(["📊 공정표 (Gantt)", "📝 일정 등록", "⚙️ 일정 수정 및 삭제"])
 
+
+
+
 # [탭 1] 공정표 조회
 with tab1:
     st.subheader("실시간 공정 현황")
     if not df_raw.empty:
-        try:
-            df = df_raw.copy()
-            # 1. 데이터 전처리 및 엄격한 날짜 정렬
-            df['시작일'] = pd.to_datetime(df['시작일'])
-            df['종료일'] = pd.to_datetime(df['종료일'])
-            # 구분이 비어있으면 자동 채움 (누락 방지)
-            df['구분'] = df['구분'].astype(str).str.strip().replace('', '내용 없음').fillna('내용 없음')
-            
-            # [핵심] 시작일 빠른 순으로 전체 정렬 후 인덱스 초기화
-            df = df.sort_values(by="시작일", ascending=True).reset_index(drop=True)
+            # [탭 1] 실시간 공정 현황 - 정렬 로직 완전 강제
+try:
+    df = df_raw.copy()
+    # 1. 날짜 데이터 형식 변환 및 전처리
+    df['시작일'] = pd.to_datetime(df['시작일'])
+    df['종료일'] = pd.to_datetime(df['종료일'])
+    
+    # 구분이 비어있으면 자동 채움 (누락 방지)
+    df['구분'] = df['구분'].astype(str).str.strip().replace('', '인허가 보완/진행').fillna('인허가 보완/진행')
+    
+    # 2. [핵심] 시작일 기준으로 '오름차순' 정렬 (빠른 날짜가 먼저 나오도록)
+    df = df.sort_values(by="시작일", ascending=True)
 
-            # 2. 마일스톤과 일반 공정 분리
-            main_df = df[df['대분류'] != 'MILESTONE'].copy()
-            ms_df = df[df['대분류'] == 'MILESTONE'].copy()
-            
-            # [핵심] Y축 순서를 정렬된 데이터의 순서 그대로 리스트화
-            y_order = main_df['구분'].unique().tolist()
+    # 3. 마일스톤과 일반 공정 분리
+    main_df = df[df['대분류'] != 'MILESTONE'].copy()
+    ms_df = df[df['대분류'] == 'MILESTONE'].copy()
+    
+    # 4. [중요] Y축에 표시될 고유한 이름들을 정렬된 순서 그대로 리스트화
+    # 이 리스트 순서가 차트의 '위에서 아래' 순서가 됩니다.
+    y_order_list = main_df['구분'].unique().tolist()
 
-            # 3. 간트 차트 생성
-            fig = px.timeline(
-                main_df, 
-                x_start="시작일", 
-                x_end="종료일", 
-                y="구분", 
-                color="진행상태",
-                hover_data=["대분류", "비고"],
-                category_orders={"구분": y_order}  # 정렬된 리스트 순서 강제 주입
+    # 5. 간트 차트 생성
+    fig = px.timeline(
+        main_df, 
+        x_start="시작일", 
+        x_end="종료일", 
+        y="구분", 
+        color="진행상태",
+        hover_data=["대분류", "비고"],
+        # category_orders를 통해 위에서 만든 리스트 순서를 강제로 주입합니다.
+        category_orders={"구분": y_order_list}
+    )
+
+    # 6. 상단 마일스톤 화살표 추가
+    if not ms_df.empty:
+        for _, row in ms_df.iterrows():
+            fig.add_trace(go.Scatter(
+                x=[row['시작일']],
+                y=[y_order_list[0]] if y_order_list else [0], 
+                mode='markers+text',
+                marker=dict(symbol='arrow-bar-down', size=20, color='black'),
+                text=f"▼ {row['구분']}",
+                textposition="top center",
+                textfont=dict(color="red", size=12, family="Arial Black"),
+                name='MILESTONE',
+                showlegend=False,
+                cliponaxis=False
+            ))
+
+    # 7. 레이아웃 최종 설정
+    fig.update_layout(
+        plot_bgcolor="white",
+        xaxis=dict(
+            side="top",
+            showgrid=True,
+            gridcolor="rgba(220, 220, 220, 0.8)",
+            dtick="M1",
+            tickformat="%Y-%m",
+            ticks="outside"
+        ),
+        yaxis=dict(
+            # [중요] autorange="reversed"로 설정해야 y_order_list의 첫 항목이 맨 위로 옵니다.
+            autorange="reversed", 
+            showgrid=True, 
+            gridcolor="rgba(240, 240, 240, 0.8)"
+        ),
+        height=800,
+        margin=dict(t=150, l=10, r=10, b=50),
+        showlegend=True
+    )
+    
+    fig.update_traces(marker_line_color="rgb(8,48,107)", marker_line_width=1, opacity=0.8)
+    st.plotly_chart(fig, use_container_width=True)
             )
 
             # 4. 상단 마일스톤 (PDF 스타일 화살표) 추가
@@ -194,3 +243,4 @@ with tab3:
             if b2.form_submit_button("항목 삭제하기 🗑️", use_container_width=True):
                 sheet.delete_rows(selected_idx + 2)
                 st.error("🗑️ 삭제 완료!"); time.sleep(1); st.rerun()
+
