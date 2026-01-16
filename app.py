@@ -107,7 +107,7 @@ with tab1:
                 plot_bgcolor="white",
                 xaxis=dict(side="top", showgrid=True, gridcolor="#E5E5E5", dtick="M1", tickformat="%Y-%m", ticks="outside"),
                 yaxis=dict(
-                    autorange=True, # reversed를 쓰지 않고 리스트 순서를 그대로 따름
+                    autorange=false, # reversed를 쓰지 않고 리스트 순서를 그대로 따름--> True를 false로 변경
                     showgrid=True, 
                     gridcolor="#F0F0F0"
                 ),
@@ -169,3 +169,4 @@ with tab3:
             if b2.form_submit_button("항목 삭제하기 🗑️", use_container_width=True):
                 sheet.delete_rows(selected_idx + 2)
                 st.error("🗑️ 삭제 완료!"); time.sleep(1); st.rerun()
+
