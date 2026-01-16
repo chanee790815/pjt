@@ -1,58 +1,5 @@
-import streamlit as st
-import pandas as pd
-import datetime
-import gspread
-from google.oauth2.service_account import Credentials
-import time
-import json
-import plotly.express as px
-import plotly.graph_objects as go
+# [탭 1] 공정표 조회 부분의 핵심 로직입니다. 이 부분 위주로 확인해 주세요.
 
-# 1. 페이지 설정
-st.set_page_config(page_title="현장 공정 관리", page_icon="🏗️", layout="wide")
-
-# --- 구글 시트 연결 함수 ---
-@st.cache_resource
-def get_connection():
-    try:
-        if "gcp_service_account" not in st.secrets:
-            st.error("🚨 Secrets 설정이 비어있습니다!")
-            return None
-        key_dict = dict(st.secrets["gcp_service_account"])
-        if "private_key" in key_dict:
-            key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
-        scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-        creds = Credentials.from_service_account_info(key_dict, scopes=scopes)
-        client = gspread.authorize(creds)
-        return client
-    except Exception as e:
-        st.error(f"🚨 인증 연결 실패: {e}")
-        return None
-
-def get_pms_data():
-    client = get_connection()
-    if client:
-        try:
-            sh = client.open('pms_db') 
-            worksheet = sh.sheet1
-            data = worksheet.get_all_records()
-            return pd.DataFrame(data), worksheet
-        except Exception as e:
-             st.error(f"🚨 데이터 읽기 오류: {e}")
-             return pd.DataFrame(), None
-    return pd.DataFrame(), None
-
-# --- 메인 화면 ---
-st.title("🏗️ 당진 적서리 태양광 PMS (Sequence Fixed)")
-
-df_raw, sheet = get_pms_data()
-if sheet is None:
-    st.warning("데이터베이스 연결 대기 중...")
-    st.stop()
-
-tab1, tab2, tab3 = st.tabs(["📊 공정표 (Gantt)", "📝 일정 등록", "⚙️ 일정 수정 및 삭제"])
-
-# [탭 1] 공정표 조회
 with tab1:
     st.subheader("실시간 공정 현황")
     if not df_raw.empty:
@@ -60,48 +7,49 @@ with tab1:
             df = df_raw.copy()
             df['시작일'] = pd.to_datetime(df['시작일'])
             df['종료일'] = pd.to_datetime(df['종료일'])
-            df['구분'] = df['구분'].astype(str).str.strip().replace('', '내용 없음').fillna('내용 없음')
+            df['구분'] = df['구분'].astype(str).str.strip()
             
-            # 1. [강력 정렬] 시작일 순으로 정렬 후 번호 매기기
+            # 1. [핵심] 시작일 기준으로 데이터를 정렬합니다. 
+            # 이제 업무를 새로 추가해도 '시작일'만 맞으면 자동으로 순서가 배치됩니다.
             df = df.sort_values(by="시작일", ascending=True).reset_index(drop=True)
-            
-            # 2. [번호 부여] Y축 이름 앞에 01, 02... 를 붙여 정렬 오류 원천 차단
-            df['표시구분'] = [f"{i+1:02d}. {name}" for i, name in enumerate(df['구분'])]
 
             main_df = df[df['대분류'] != 'MILESTONE'].copy()
             ms_df = df[df['대분류'] == 'MILESTONE'].copy()
             
-            # 3. 간트 차트 생성 (정렬된 '표시구분' 사용)
+            # 2. [가장 중요] 현재 정렬된 '구분' 리스트를 뽑아냅니다.
+            # Plotly에게 "이 리스트에 있는 순서대로 위에서 아래로 그려줘"라고 명령하는 리스트입니다.
+            y_axis_order = main_df['구분'].unique().tolist()
+
+            # 3. 간트 차트 생성
             fig = px.timeline(
                 main_df, 
                 x_start="시작일", 
                 x_end="종료일", 
-                y="표시구분", 
+                y="구분", 
                 color="진행상태",
-                hover_data=["대분류", "비고", "구분"]
+                hover_data=["대분류", "비고"],
+                # category_orders에 정렬된 리스트를 주입하여 순서를 강제합니다.
+                category_orders={"구분": y_axis_order}
             )
 
-            # 상단 마일스톤 화살표 추가
-            if not ms_df.empty:
-                for _, row in ms_df.iterrows():
-                    fig.add_trace(go.Scatter(
-                        x=[row['시작일']],
-                        y=[main_df['표시구분'].iloc[0]] if not main_df.empty else [0], 
-                        mode='markers+text',
-                        marker=dict(symbol='arrow-bar-down', size=20, color='black'),
-                        text=f"▼ {row['구분']}",
-                        textposition="top center",
-                        textfont=dict(color="red", size=12, family="Arial Black"),
-                        name='MILESTONE',
-                        showlegend=False,
-                        cliponaxis=False
-                    ))
-
-            # 레이아웃 설정 (autorange="reversed"를 통해 01번이 맨 위로 오게 함)
+            # 4. 레이아웃 설정
             fig.update_layout(
                 plot_bgcolor="white",
-                xaxis=dict(side="top", showgrid=True, gridcolor="rgba(220, 220, 220, 0.8)", dtick="M1", tickformat="%Y-%m", ticks="outside"),
-                yaxis=dict(autorange="reversed", showgrid=True, gridcolor="rgba(240, 240, 240, 0.8)", title="공정명"),
+                xaxis=dict(
+                    side="top", 
+                    showgrid=True, 
+                    gridcolor="rgba(220, 220, 220, 0.8)", 
+                    dtick="M1", 
+                    tickformat="%Y-%m", 
+                    ticks="outside"
+                ),
+                yaxis=dict(
+                    # autorange를 "reversed"로 설정해야 리스트의 첫 번째(가장 빠른 날짜)가 맨 위로 옵니다.
+                    autorange="reversed", 
+                    showgrid=True, 
+                    gridcolor="rgba(240, 240, 240, 0.8)",
+                    title="공정명"
+                ),
                 height=800,
                 margin=dict(t=150, l=10, r=10, b=50),
                 showlegend=True
@@ -109,54 +57,3 @@ with tab1:
             
             fig.update_traces(marker_line_color="rgb(8,48,107)", marker_line_width=1, opacity=0.8)
             st.plotly_chart(fig, use_container_width=True)
-            
-        except Exception as e:
-            st.warning(f"차트 생성 중 오류: {e}")
-
-        st.divider()
-        st.write("📋 상세 데이터 목록")
-        st.dataframe(df_raw, use_container_width=True, hide_index=True)
-
-# [탭 2] 일정 등록
-with tab2:
-    st.subheader("새로운 일정 등록")
-    with st.form("input_form"):
-        c1, c2 = st.columns(2)
-        in_start = c1.date_input("시작일", datetime.date.today())
-        in_end = c2.date_input("종료일", datetime.date.today() + datetime.timedelta(days=30))
-        in_dae = st.selectbox("대분류", ["인허가", "설계/조사", "계약", "토목공사", "건축공사", "송전선로", "변전설비", "전기공사", "MILESTONE"])
-        in_gubun = st.text_input("구분")
-        in_status = st.selectbox("진행상태", ["예정", "진행중", "완료", "지연"])
-        in_note = st.text_input("비고")
-        if st.form_submit_button("저장하기 💾", use_container_width=True):
-            sheet.append_row([str(in_start), str(in_end), in_dae, in_gubun, in_status, in_note])
-            st.success("✅ 저장되었습니다!"); time.sleep(1); st.rerun()
-
-# [탭 3] 일정 관리 (수정 및 삭제)
-with tab3:
-    st.subheader("기존 일정 수정 및 삭제")
-    if not df_raw.empty:
-        df_manage = df_raw.copy()
-        df_manage['selection'] = df_manage['구분'].astype(str) + " (" + df_manage['시작일'].astype(str) + ")"
-        target_item = st.selectbox("항목 선택", df_manage['selection'].tolist())
-        selected_idx = df_manage[df_manage['selection'] == target_item].index[0]
-        row_data = df_raw.iloc[selected_idx]
-        
-        with st.form("edit_form"):
-            e_c1, e_c2 = st.columns(2)
-            up_start = e_c1.date_input("시작일 수정", pd.to_datetime(row_data['시작일']).date())
-            up_end = e_c2.date_input("종료일 수정", pd.to_datetime(row_data['종료일']).date())
-            up_dae = st.selectbox("대분류 수정", ["인허가", "설계/조사", "계약", "토목공사", "건축공사", "송전선로", "변전설비", "전기공사", "MILESTONE"], 
-                                   index=["인허가", "설계/조사", "계약", "토목공사", "건축공사", "송전선로", "변전설비", "전기공사", "MILESTONE"].index(row_data['대분류']) if row_data['대분류'] in ["인허가", "설계/조사", "계약", "토목공사", "건축공사", "송전선로", "변전설비", "전기공사", "MILESTONE"] else 0)
-            up_gubun = st.text_input("구분 수정", value=row_data['구분'])
-            up_status = st.selectbox("진행상태 수정", ["예정", "진행중", "완료", "지연"], 
-                                      index=["예정", "진행중", "완료", "지연"].index(row_data['진행상태']) if row_data['진행상태'] in ["예정", "진행중", "완료", "지연"] else 0)
-            up_note = st.text_input("비고 수정", value=row_data['비고'])
-            
-            b1, b2 = st.columns(2)
-            if b1.form_submit_button("내용 업데이트 🆙", use_container_width=True):
-                sheet.update(f"A{selected_idx + 2}:F{selected_idx + 2}", [[str(up_start), str(up_end), up_dae, up_gubun, up_status, up_note]])
-                st.success("✅ 수정 완료!"); time.sleep(1); st.rerun()
-            if b2.form_submit_button("항목 삭제하기 🗑️", use_container_width=True):
-                sheet.delete_rows(selected_idx + 2)
-                st.error("🗑️ 삭제 완료!"); time.sleep(1); st.rerun()
