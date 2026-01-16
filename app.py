@@ -43,7 +43,7 @@ def get_pms_data():
     return pd.DataFrame(), None
 
 # --- 메인 화면 ---
-st.title("🏗️ 당진 적서리 태양광 PMS (Final Corrected)")
+st.title("🏗️ 당진 적서리 태양광 PMS (Order Fixed Ver.)")
 
 df, sheet = get_pms_data()
 if sheet is None:
@@ -57,22 +57,23 @@ with tab1:
     
     if not df.empty:
         try:
-            # 1. 데이터 전처리 및 정렬
+            # 1. 데이터 전처리 및 엄격한 날짜 정렬
             df['시작일'] = pd.to_datetime(df['시작일'])
             df['종료일'] = pd.to_datetime(df['종료일'])
-            df['구분'] = df['구분'].astype(str).str.strip().replace('', '내용 없음').fillna('내용 없음')
+            df['구분'] = df['구분'].astype(str).str.strip().replace('', '인허가 보완/진행').fillna('인허가 보완/진행')
             
-            # [수정 1] 시작일 기준으로 오름차순 정렬 (빠른 날짜가 먼저 나오도록)
+            # [핵심 수정] 시작일이 빠른 순서대로 전체 데이터를 정렬합니다.
             df = df.sort_values(by="시작일", ascending=True)
 
-            # 2. 마일스톤과 일반 공정 분리
+            # 마일스톤과 일반 공정 분리
             main_df = df[df['대분류'] != 'MILESTONE'].copy()
             ms_df = df[df['대분류'] == 'MILESTONE'].copy()
             
-            # [수정 2] Y축 순서 리스트 추출 (시작일이 빠른 항목이 리스트의 앞쪽에 위치)
+            # [핵심 수정] Y축에 표시될 이름들을 정렬된 순서 그대로 리스트로 만듭니다.
+            # 이 리스트의 첫 번째 항목이 차트의 맨 위로 가게 됩니다.
             y_order = main_df['구분'].unique().tolist()
 
-            # 3. 간트 차트 생성
+            # 2. 간트 차트 생성
             fig = px.timeline(
                 main_df, 
                 x_start="시작일", 
@@ -80,11 +81,11 @@ with tab1:
                 y="구분", 
                 color="진행상태",
                 hover_data=["대분류", "비고"],
-                # [수정 3] 리스트 순서(빠른 날짜순)대로 카테고리 지정
+                # [핵심 수정] category_orders를 통해 위에서 만든 y_order 순서를 강제합니다.
                 category_orders={"구분": y_order} 
             )
 
-            # 4. 상단 마일스톤 (PDF 스타일 화살표) 추가
+            # 3. 상단 마일스톤 (PDF 스타일 화살표) 추가
             if not ms_df.empty:
                 for _, row in ms_df.iterrows():
                     fig.add_trace(go.Scatter(
@@ -100,20 +101,19 @@ with tab1:
                         cliponaxis=False
                     ))
 
-            # 5. 레이아웃 최종 교정 (상단 년월 및 격자선)
+            # 4. 레이아웃 교정 (상단 년월 및 격자선)
             fig.update_layout(
                 plot_bgcolor="white",
                 xaxis=dict(
-                    side="top",
-                    showgrid=True,
+                    side="top",                # 날짜 축 상단 이동
+                    showgrid=True,             # 월별 세로 실선 추가
                     gridcolor="rgba(220, 220, 220, 0.8)",
-                    dtick="M1",
+                    dtick="M1",                # 1개월 단위 간격
                     tickformat="%Y-%m",
                     ticks="outside"
                 ),
                 yaxis=dict(
-                    # [핵심] 정렬된 리스트 순서를 유지하기 위해 autorange 설정을 "reversed"로 확정
-                    # 이렇게 해야 y_order의 첫 번째 항목(가장 빠른 날짜)이 차트 상단에 배치됩니다.
+                    # [핵심 수정] autorange="reversed"로 설정해야 y_order의 첫 항목이 맨 위로 옵니다.
                     autorange="reversed", 
                     showgrid=True, 
                     gridcolor="rgba(240, 240, 240, 0.8)"
@@ -131,7 +131,8 @@ with tab1:
 
         st.divider()
         st.write("📋 상세 데이터 목록")
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        # 목록도 날짜순으로 정렬해서 보여줍니다.
+        st.dataframe(df.sort_values(by="시작일"), use_container_width=True, hide_index=True)
 
 with tab2:
     st.subheader("일정 및 마일스톤 등록")
