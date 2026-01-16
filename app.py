@@ -9,8 +9,7 @@ import time
 st.set_page_config(page_title="현장 공정 관리", page_icon="🏗️", layout="wide")
 
 # ==========================================
-# 🚨 [비상용] 인증 키 직접 입력 (Secrets 우회)
-# GitHub에 공개되므로, 테스트 후에는 반드시 이 키를 폐기하고 새로 발급받으세요!
+# 🚨 [비상용] 인증 키 직접 입력
 # ==========================================
 secrets_dict = {
   "type": "service_account",
@@ -29,7 +28,11 @@ secrets_dict = {
 # --- 구글 시트 연결 함수 ---
 @st.cache_resource
 def get_connection():
-    # Secrets 대신 위에서 만든 secrets_dict 변수를 직접 사용합니다.
+    # ✅ [핵심 수정] 줄바꿈 문자(\n)가 깨진 것을 강제로 고침
+    # 이 부분이 없으면 'Invalid JWT Signature' 에러가 납니다.
+    if "\\n" in secrets_dict["private_key"]:
+        secrets_dict["private_key"] = secrets_dict["private_key"].replace("\\n", "\n")
+        
     scopes = ["https://www.googleapis.com/auth/spreadsheets"]
     creds = Credentials.from_service_account_info(secrets_dict, scopes=scopes)
     client = gspread.authorize(creds)
@@ -37,7 +40,7 @@ def get_connection():
 
 def get_pms_data():
     client = get_connection()
-    # ⚠️ 구글 시트 이름이 'pms_db'가 맞는지 꼭 확인하세요!
+    # ⚠️ 구글 시트 이름 확인!
     sh = client.open('pms_db') 
     worksheet = sh.sheet1
     data = worksheet.get_all_records()
@@ -70,7 +73,7 @@ try:
             try:
                 st.dataframe(df.style.map(color_status, subset=['진행상태']), use_container_width=True, height=600, hide_index=True)
             except:
-                st.dataframe(df, use_container_width=True) # 스타일 적용 실패시 그냥 출력
+                st.dataframe(df, use_container_width=True) 
         else:
             st.info("데이터가 없습니다.")
 
@@ -95,4 +98,5 @@ try:
 
 except Exception as e:
     st.error("🚨 오류 발생!")
-    st.error(e)
+    st.write(f"에러 상세: {e}")
+    st.warning("⚠️ 만약 여전히 'Invalid JWT' 에러가 난다면, 사용 중인 키 파일이 '삭제(폐기)'되었을 수 있습니다. 구글 클라우드에서 새 키를 받으세요.")
