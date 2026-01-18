@@ -1,13 +1,13 @@
 ## [PMS Revision History]
 ## 수정 일자: 2026-01-18
-## 버전: Rev. 2026-01-18.6
+## 버전: Rev. 2026-01-18.7
 ## 업데이트 요약:
-## 1. 정렬 로직 고정: [탭 1] 공정표 조회 시 시작일 기준 '내림차순(False)' 정렬 적용 (최신 공정 상단 배치)
-## 2. 모바일 최적화: 
-##    - 화면 폭에 따른 가변 높이(chart_height) 설정으로 세로 스크롤 확보
-##    - 폰트 크기(10px) 및 범례 위치(하단) 최적화로 좁은 화면 가독성 증대
-## 3. 기존 기능 통합: D-Day 대시보드, 진행률 시각화, 왼쪽 정렬, 26-01 날짜 형식 등
-## 4. 데이터 관리: [탭 3] 하단 실시간 데이터 목록 및 수정/삭제 기능 유지
+## 1. 모바일 터치 오동작 방지: 
+##    - 차트 확대/축소(Zoom) 기능을 비활성화(scrollZoom=False)하여 터치 시 화면이 백색으로 날아가는 현상 차단
+##    - 불필요한 도구 모음(Mode Bar)을 숨겨 실수로 버튼을 누르는 일 방지
+## 2. 정렬 로직 고정: 최신 공정 상단 배치 (내림차순 정렬)
+## 3. 모바일 가독성: 가변 높이 및 폰트 최적화 유지
+## 4. 기존 기능 통합: D-Day 대시보드, 진행률 표시, 관리 탭 등 전체 기능 포함
 
 import streamlit as st
 import pandas as pd
@@ -54,7 +54,7 @@ def get_pms_data():
     return pd.DataFrame(), None
 
 # --- 메인 화면 상단 ---
-st.title("🏗️ 당진 적서리 태양광 PMS (Rev. 2026-01-18.6)")
+st.title("🏗️ 당진 적서리 태양광 PMS (Rev. 2026-01-18.7)")
 
 df_raw, worksheet = get_pms_data()
 if worksheet is None:
@@ -94,31 +94,27 @@ if not ms_only.empty:
 # --- 탭 구성 ---
 tab1, tab2, tab3 = st.tabs(["📊 통합 공정표", "📝 일정 등록", "⚙️ 관리 및 수정"])
 
-# [탭 1] 공정표 조회 (정렬 로직 수정 및 모바일 최적화)
+# [탭 1] 공정표 조회 (터치 오동작 방지 적용)
 with tab1:
     if not df.empty:
         try:
-            # [수정됨] 시작일 기준 내림차순 정렬 (최신 공정이 상단에 오도록)
+            # 시작일 기준 내림차순 정렬 (최신 상단)
             df_sorted = df.sort_values(by="시작일", ascending=False).reset_index(drop=True)
             main_df = df_sorted[df_sorted['대분류'] != 'MILESTONE'].copy()
-            
-            # Y축 순서 고정 (Plotly 특성상 리스트를 뒤집어서 주입해야 화면 위부터 그려짐)
             y_order = main_df['구분'].unique().tolist()[::-1]
             
             main_df['상태표시'] = main_df.apply(lambda x: f"{x['진행상태']} ({x['진행률']}%)", axis=1)
 
-            # 간트 차트 생성
             fig = px.timeline(
                 main_df, x_start="시작일", x_end="종료일", y="구분", color="진행상태",
                 text="상태표시", hover_data={"대분류":True, "담당자":True, "진행률":True, "비고":True},
                 category_orders={"구분": y_order}
             )
 
-            # 오늘 날짜 수직선
             today_dt = datetime.datetime.now()
             fig.add_vline(x=today_dt.timestamp() * 1000, line_width=2, line_dash="dash", line_color="red")
 
-            # [모바일 최적화] 데이터 양에 따른 가변 높이 계산
+            # 모바일 최적화 높이
             chart_height = max(500, len(main_df) * 35) 
 
             fig.update_layout(
@@ -126,22 +122,32 @@ with tab1:
                 xaxis=dict(
                     side="top", showgrid=True, gridcolor="#E5E5E5", 
                     dtick="M1", tickformat="%y-%m", ticks="outside", 
-                    tickfont=dict(size=10) # 폰트 크기 최적화
+                    tickfont=dict(size=10)
                 ),
                 yaxis=dict(
                     autorange=True, showgrid=True, gridcolor="#F0F0F0", 
                     title="", 
-                    tickfont=dict(size=10), # 공정명 폰트 크기 최적화
+                    tickfont=dict(size=10),
                     automargin=True
                 ),
-                height=chart_height, # 가변 높이 적용
+                height=chart_height,
                 margin=dict(t=80, l=10, r=10, b=20),
-                legend=dict(orientation="h", yanchor="bottom", y=-0.1, xanchor="right", x=1) # 범례 하단 이동
+                legend=dict(orientation="h", yanchor="bottom", y=-0.1, xanchor="right", x=1)
             )
             fig.update_yaxes(ticksuffix=" ")
             fig.update_traces(textposition='inside', textfont_size=9, selector=dict(type='bar'))
             
-            st.plotly_chart(fig, use_container_width=True, config={'responsive': True})
+            # [수정됨] 모바일 터치 오동작 방지 설정 (Zoom 비활성화)
+            st.plotly_chart(
+                fig, 
+                use_container_width=True, 
+                config={
+                    'responsive': True, 
+                    'scrollZoom': False,      # 스크롤/터치로 인한 확대 방지
+                    'displayModeBar': False,  # 상단 도구모음 숨김 (실수 클릭 방지)
+                    'staticPlot': False       # 툴팁(상세정보) 기능은 유지
+                }
+            )
             
         except Exception as e:
             st.error(f"차트 생성 중 오류: {e}")
