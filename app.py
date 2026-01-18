@@ -179,10 +179,75 @@ with tab2:
             worksheet.append_row(sheet_data)
             st.success("✅ 저장이 완료되었습니다!"); time.sleep(1); st.rerun()
 
-# [탭 3] 기존 로직 유지 (Rev 2026-01-16 기반 수정/삭제)
+# [탭 3] 관리 및 수정 (전체 로직 업데이트)
 with tab3:
-    st.info("💡 공정 수정 및 삭제 탭입니다.")
-    # (수정/삭제 로직을 여기에 그대로 유지하시면 됩니다.)
+    st.subheader("⚙️ 기존 공정 수정 및 삭제")
+    
+    # 최신 데이터를 다시 읽어와서 선택 리스트 생성
+    df_current, _ = get_pms_data()
+    
+    if not df_current.empty:
+        # 데이터 식별을 위한 선택용 문자열 생성
+        df_current['selection'] = df_current['구분'].astype(str) + " (" + df_current['시작일'].astype(str) + ")"
+        
+        # 수정/삭제할 항목 선택
+        target_item = st.selectbox("수정 또는 삭제할 항목을 선택하세요", df_current['selection'].tolist())
+        
+        # 선택된 항목의 인덱스 및 기존 데이터 추출
+        selected_idx = df_current[df_current['selection'] == target_item].index[0]
+        row_data = df_current.iloc[selected_idx]
+        
+        # 수정 폼 구성
+        with st.form("edit_form"):
+            st.info(f"📍 선택된 공정: {row_data['구분']}")
+            
+            e_c1, e_c2, e_c3 = st.columns(3)
+            up_start = e_c1.date_input("시작일 수정", pd.to_datetime(row_data['시작일']).date())
+            up_end = e_c2.date_input("종료일 수정", pd.to_datetime(row_data['종료일']).date())
+            
+            # 대분류 리스트 정의 및 기존 값 인덱스 찾기
+            dae_list = ["인허가", "설계/조사", "계약", "토목공사", "건축공사", "송전선로", "변전설비", "전기공사", "MILESTONE"]
+            try:
+                dae_idx = dae_list.index(row_data['대분류'])
+            except:
+                dae_idx = 0
+            up_dae = e_c3.selectbox("대분류 수정", dae_list, index=dae_idx)
+            
+            e_c4, e_c5, e_c6 = st.columns(3)
+            up_gubun = e_c4.text_input("공정명 수정", value=row_data['구분'])
+            
+            status_list = ["예정", "진행중", "완료", "지연"]
+            try:
+                status_idx = status_list.index(row_data['진행상태'])
+            except:
+                status_idx = 0
+            up_status = e_c5.selectbox("진행상태 수정", status_list, index=status_idx)
+            
+            # 진행률 수정 (숫자 입력)
+            up_percent = e_c6.number_input("진행률 수정 (%)", 0, 100, int(row_data.get('진행률', 0)))
+            
+            up_pic = st.text_input("담당자/협력사 수정", value=row_data.get('담당자', ""))
+            up_note = st.text_area("비고 수정", value=row_data['비고'])
+            
+            # 수정 및 삭제 버튼
+            b1, b2 = st.columns(2)
+            
+            if b1.form_submit_button("내용 업데이트 🆙", use_container_width=True):
+                # 구글 시트 업데이트 (A~H열 순서 준수)
+                update_values = [
+                    str(up_start), str(up_end), up_dae, up_gubun, 
+                    up_status, up_note, up_percent, up_pic
+                ]
+                # gspread는 1-based index이며 헤더가 1행이므로 selected_idx + 2
+                worksheet.update(f"A{selected_idx + 2}:H{selected_idx + 2}", [update_values])
+                st.success(f"✅ '{up_gubun}' 공정이 업데이트되었습니다!"); time.sleep(1); st.rerun()
+                
+            if b2.form_submit_button("항목 삭제하기 🗑️", use_container_width=True):
+                # 구글 시트 행 삭제
+                worksheet.delete_rows(selected_idx + 2)
+                st.error(f"🗑️ '{row_data['구분']}' 공정이 삭제되었습니다!"); time.sleep(1); st.rerun()
+    else:
+        st.write("관리할 데이터가 없습니다.")
 
 
 
