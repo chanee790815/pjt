@@ -1,13 +1,14 @@
 ## [PMS Revision History]
 ## 수정 일자: 2026-01-18
-## 버전: Rev. 2026-01-18.11
+## 버전: Rev. 2026-01-18.12
 ## 업데이트 요약:
-## 1. 스크롤 범위 제한(Guardrails) 적용:
-##    - 차트가 프로젝트 기간(2025~2028 등)을 벗어나 너무 과거/미래로 이동하는 현상 차단
-##    - 전체 데이터의 최소/최대 날짜를 계산하여 앞뒤 3개월까지만 스크롤 허용
-## 2. 엑셀식 틀 고정 모드 강화:
-##    - 상하좌우 이동은 자유롭되, 엉뚱한 공간으로 이탈하지 않도록 X축/Y축 범위 제한 설정
-## 3. 기존 기능 유지: 모바일 축소 모드, D-Day 대시보드, 최신순 정렬 등
+## 1. 차트 확대/축소(Zoom) 원천 차단:
+##    - 터치 실수로 날짜가 '일/시간' 단위로 쪼개지는 현상 방지
+##    - X축 눈금 간격(dtick)을 "M1"(1개월)로 강제 고정하여 항상 '26-01' 형태 유지
+## 2. 스크롤 안전장치 강화:
+##    - 이동(Pan)만 가능하도록 dragmode를 'pan'으로 고정
+##    - 프로젝트 기간 앞뒤 30일까지만 이동 가능하도록 '가드레일(min/max allowed)' 타이트하게 설정
+## 3. 기존 기능 통합: 엑셀식 틀 고정, 모바일 축소 모드, D-Day, 최신순 정렬 등
 
 import streamlit as st
 import pandas as pd
@@ -54,7 +55,7 @@ def get_pms_data():
     return pd.DataFrame(), None
 
 # --- 메인 화면 상단 ---
-st.title("🏗️ 당진 적서리 태양광 PMS (Rev. 2026-01-18.11)")
+st.title("🏗️ 당진 적서리 태양광 PMS (Rev. 2026-01-18.12)")
 
 df_raw, worksheet = get_pms_data()
 if worksheet is None:
@@ -81,13 +82,12 @@ if '담당자' not in df.columns: df['담당자'] = "미정"
 if "전체" not in selected_cat:
     df = df[df['대분류'].isin(selected_cat)]
 
-# [핵심] 스크롤 제한을 위한 날짜 범위 계산
+# [안전장치] 이동 범위 제한 (프로젝트 기간 + 30일 여유)
 if not df.empty:
     min_date = df['시작일'].min()
     max_date = df['종료일'].max()
-    # 앞뒤로 90일(3개월) 정도의 여유만 둠
-    limit_min = min_date - datetime.timedelta(days=90)
-    limit_max = max_date + datetime.timedelta(days=90)
+    limit_min = min_date - datetime.timedelta(days=30)
+    limit_max = max_date + datetime.timedelta(days=30)
 else:
     limit_min = datetime.datetime.now()
     limit_max = datetime.datetime.now()
@@ -118,7 +118,7 @@ with tab1:
         label_visibility="collapsed"
     )
     
-    st.caption(f"현재 모드: **{view_option}** - {'좌우로 밀어도 공정 기간 밖으로 나가지 않습니다.' if '틀 고정' in view_option else '브라우저 스크롤을 사용하세요.'}")
+    st.caption(f"현재 모드: **{view_option}** - {'상하좌우 드래그로 이동 (확대/축소 잠금됨)' if '틀 고정' in view_option else '브라우저 스크롤 사용'}")
 
     if not df.empty:
         try:
@@ -159,13 +159,15 @@ with tab1:
                 plot_bgcolor="white",
                 xaxis=dict(
                     side="top", showgrid=True, gridcolor="#E5E5E5", 
-                    dtick="M1", tickformat="%y-%m", ticks="outside", 
+                    # [핵심] 줌 잠금 장치
+                    dtick="M1",              # 1개월 단위 강제 고정 (확대해도 쪼개지지 않음)
+                    tickformat="%y-%m",      # 날짜 형식 고정
+                    ticks="outside", 
                     tickfont=dict(size=10),
-                    fixedrange=False,
-                    # [핵심] 스크롤 범위 제한 (Guardrails)
-                    range=[limit_min, limit_max], # 초기 로딩 시 보여줄 범위
-                    minallowed=limit_min,         # 왼쪽 끝 한계선
-                    maxallowed=limit_max          # 오른쪽 끝 한계선
+                    fixedrange=False,        # 이동(Pan)은 허용
+                    range=[limit_min, limit_max], # 초기 범위
+                    minallowed=limit_min,    # 좌측 이동 한계
+                    maxallowed=limit_max     # 우측 이동 한계
                 ),
                 yaxis=dict(
                     autorange=True if range_y is None else False,
@@ -177,12 +179,12 @@ with tab1:
                     tickmode='array',
                     tickvals=y_order,
                     ticktext=y_labels_display,
-                    fixedrange=False
+                    fixedrange=False # 이동 허용
                 ),
                 height=final_height,
                 margin=dict(t=80, l=10, r=10, b=20),
                 legend=dict(orientation="h", yanchor="bottom", y=-0.1, xanchor="center", x=0.5),
-                dragmode="pan"
+                dragmode="pan" # 기본 동작을 '이동'으로 고정
             )
             fig.update_yaxes(ticksuffix=" ")
             fig.update_traces(textposition='inside', textfont_size=10, selector=dict(type='bar'))
@@ -192,8 +194,9 @@ with tab1:
                 use_container_width=True, 
                 config={
                     'responsive': True, 
-                    'scrollZoom': False, 
-                    'displayModeBar': False 
+                    'scrollZoom': False,        # 휠/핀치 줌 비활성화
+                    'doubleClick': 'reset',     # 더블클릭 시 초기 상태로 복구
+                    'displayModeBar': False     # 메뉴바 숨김
                 }
             )
             
