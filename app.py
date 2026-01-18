@@ -1,14 +1,14 @@
 ## [PMS Revision History]
 ## 수정 일자: 2026-01-18
-## 버전: Rev. 2026-01-18.14
+## 버전: Rev. 2026-01-18.14 (Rollback)
 ## 업데이트 요약:
-## 1. PC 클릭 오동작 방지(Click-Safe Mode):
-##    - [범례 잠금] 하단 범례(Legend)를 클릭해도 데이터가 숨겨지지 않도록 설정 (itemclick=False)
-##    - [더블클릭 방어] 차트 바탕 더블클릭 시 엉뚱한 곳으로 튀는 현상 방지
-##    - [도구모음 제거] 상단 ModeBar의 불필요한 버튼(Zoom, Select, Lasso)을 모두 제거하여 '이동'만 허용
-## 2. 엑셀식 틀 고정 안정화:
-##    - 드래그(Pan) 외의 다른 동작이 개입하지 못하도록 강제 설정
-## 3. 기존 기능 통합: 리셋 버튼, 모바일 축소, 스크롤 제한 등
+## 1. 줌(Zoom) 잠금 및 날짜 고정 해제 (복구):
+##    - '월 단위 고정' 등 강제적인 설정을 제거하여 차트 조작감을 부드럽게 원상복구
+##    - 터치나 마우스로 자연스럽게 이동 가능
+## 2. 안전 기능 유지:
+##    - [스크롤 가드레일] 프로젝트 기간을 벗어나 너무 멀리 이동하지 않도록 제한
+##    - [엑셀식 틀 고정] 상단 날짜와 좌측 공정명이 스크롤 시에도 따라오도록 유지
+## 3. 편의 기능 포함: 모바일 축소 모드, D-Day 대시보드, 클릭 오동작 방지(범례 잠금) 등
 
 import streamlit as st
 import pandas as pd
@@ -82,7 +82,7 @@ if '담당자' not in df.columns: df['담당자'] = "미정"
 if "전체" not in selected_cat:
     df = df[df['대분류'].isin(selected_cat)]
 
-# [안전장치] 이동 범위 제한
+# [안전장치] 이동 범위 제한 (Guardrails) - 유지
 if not df.empty:
     min_date = df['시작일'].min()
     max_date = df['종료일'].max()
@@ -120,10 +120,10 @@ with tab1:
             label_visibility="collapsed"
         )
     with col_ctrl2:
-        if st.button("🔄 차트 위치/비율 초기화", use_container_width=True):
+        if st.button("🔄 차트 리셋", use_container_width=True):
             st.rerun()
 
-    st.caption(f"현재 모드: **{view_option}** - 차트 내부를 드래그하여 이동하세요. (클릭해도 데이터가 숨겨지지 않습니다)")
+    st.caption(f"현재 모드: **{view_option}**")
 
     if not df.empty:
         try:
@@ -167,6 +167,7 @@ with tab1:
                     dtick="M1", tickformat="%y-%m", ticks="outside", 
                     tickfont=dict(size=10),
                     fixedrange=False,
+                    # 스크롤 가드레일 (안정성)
                     range=[limit_min, limit_max],
                     minallowed=limit_min,
                     maxallowed=limit_max
@@ -185,28 +186,22 @@ with tab1:
                 ),
                 height=final_height,
                 margin=dict(t=80, l=10, r=10, b=20),
-                # [핵심] 범례 클릭 잠금 (itemclick=False)
                 legend=dict(
                     orientation="h", yanchor="bottom", y=-0.1, xanchor="center", x=0.5,
-                    itemclick=False,        # 클릭해도 숨겨지지 않음
-                    itemdoubleclick=False   # 더블클릭해도 숨겨지지 않음
+                    itemclick=False, itemdoubleclick=False # 클릭 실수 방지
                 ),
-                dragmode="pan",
-                clickmode="event" # 클릭 시 선택(Highlight) 효과 방지
+                dragmode="pan" # 기본 드래그 이동
             )
             fig.update_yaxes(ticksuffix=" ")
             fig.update_traces(textposition='inside', textfont_size=10, selector=dict(type='bar'))
             
-            # [핵심] 오동작 방지 Config
             st.plotly_chart(
                 fig, 
                 use_container_width=True, 
                 config={
                     'responsive': True, 
-                    'scrollZoom': False,
-                    'doubleClick': 'reset',
-                    'displayModeBar': False, # 상단 도구모음 제거 (실수 방지)
-                    'modeBarButtonsToRemove': ['zoom', 'pan', 'select', 'lasso2d', 'zoomIn2d', 'zoomOut2d', 'autoScale2d', 'resetScale2d']
+                    'scrollZoom': False, # 휠 줌은 막지만 터치 조작감은 복구
+                    'displayModeBar': False 
                 }
             )
             
