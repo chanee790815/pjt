@@ -1,15 +1,13 @@
 ## [PMS Revision History]
 ## 수정 일자: 2026-01-18
-## 버전: Rev. 2026-01-18.10
+## 버전: Rev. 2026-01-18.11
 ## 업데이트 요약:
-## 1. 엑셀식 틀 고정(Freeze Panes) 기능 구현:
-##    - '보기 모드' 옵션 추가 (전체 스크롤 vs 틀 고정)
-##    - [틀 고정 모드]: 차트 높이를 화면 크기에 맞게 고정(500px)하고, 내부 데이터만 스크롤되도록 설정. 
-##      -> 스크롤 내려도 상단 날짜(X축)와 좌측 공정명(Y축)이 사라지지 않음.
-## 2. 초기 화면 최적화:
-##    - 틀 고정 모드 진입 시, 가장 최신(상단) 공정 10~15개가 먼저 보이도록 자동 포커스 설정
-## 3. 기존 최적화 유지:
-##    - 모바일 축소 모드(5글자 제한), Zoom 비활성화, 최신순 정렬 등
+## 1. 스크롤 범위 제한(Guardrails) 적용:
+##    - 차트가 프로젝트 기간(2025~2028 등)을 벗어나 너무 과거/미래로 이동하는 현상 차단
+##    - 전체 데이터의 최소/최대 날짜를 계산하여 앞뒤 3개월까지만 스크롤 허용
+## 2. 엑셀식 틀 고정 모드 강화:
+##    - 상하좌우 이동은 자유롭되, 엉뚱한 공간으로 이탈하지 않도록 X축/Y축 범위 제한 설정
+## 3. 기존 기능 유지: 모바일 축소 모드, D-Day 대시보드, 최신순 정렬 등
 
 import streamlit as st
 import pandas as pd
@@ -56,7 +54,7 @@ def get_pms_data():
     return pd.DataFrame(), None
 
 # --- 메인 화면 상단 ---
-st.title("🏗️ 당진 적서리 태양광 PMS (Rev. 2026-01-18.10)")
+st.title("🏗️ 당진 적서리 태양광 PMS (Rev. 2026-01-18.11)")
 
 df_raw, worksheet = get_pms_data()
 if worksheet is None:
@@ -65,7 +63,6 @@ if worksheet is None:
 
 # --- 사이드바 설정 ---
 st.sidebar.header("⚙️ 화면 설정")
-# 모바일 축소 모드 (글자수 제한)
 is_mobile_mode = st.sidebar.toggle("📱 모바일 공정명 축소 (5글자)", value=False)
 
 st.sidebar.divider()
@@ -84,6 +81,17 @@ if '담당자' not in df.columns: df['담당자'] = "미정"
 if "전체" not in selected_cat:
     df = df[df['대분류'].isin(selected_cat)]
 
+# [핵심] 스크롤 제한을 위한 날짜 범위 계산
+if not df.empty:
+    min_date = df['시작일'].min()
+    max_date = df['종료일'].max()
+    # 앞뒤로 90일(3개월) 정도의 여유만 둠
+    limit_min = min_date - datetime.timedelta(days=90)
+    limit_max = max_date + datetime.timedelta(days=90)
+else:
+    limit_min = datetime.datetime.now()
+    limit_max = datetime.datetime.now()
+
 # --- D-Day 카운터 ---
 st.subheader("🚩 핵심 마일스톤 현황")
 ms_only = df_raw[df_raw['대분류'] == 'MILESTONE'].copy()
@@ -101,26 +109,23 @@ if not ms_only.empty:
 # --- 탭 구성 ---
 tab1, tab2, tab3 = st.tabs(["📊 통합 공정표", "📝 일정 등록", "⚙️ 관리 및 수정"])
 
-# [탭 1] 공정표 조회 (틀 고정 로직 적용)
+# [탭 1] 공정표 조회
 with tab1:
-    # 보기 모드 선택 (라디오 버튼)
     view_option = st.radio(
         "👁️ 보기 모드 선택", 
         ["🪟 엑셀식 틀 고정 (추천)", "📄 전체 길게 보기 (스크롤)"], 
         horizontal=True,
-        label_visibility="collapsed" # 공간 절약을 위해 라벨 숨김
+        label_visibility="collapsed"
     )
     
-    st.caption(f"현재 모드: **{view_option}** - {'차트 내부를 드래그하여 상하좌우로 이동하세요.' if '틀 고정' in view_option else '브라우저 스크롤을 사용하세요.'}")
+    st.caption(f"현재 모드: **{view_option}** - {'좌우로 밀어도 공정 기간 밖으로 나가지 않습니다.' if '틀 고정' in view_option else '브라우저 스크롤을 사용하세요.'}")
 
     if not df.empty:
         try:
-            # 시작일 기준 내림차순 정렬
             df_sorted = df.sort_values(by="시작일", ascending=False).reset_index(drop=True)
             main_df = df_sorted[df_sorted['대분류'] != 'MILESTONE'].copy()
             y_order = main_df['구분'].unique().tolist()[::-1]
             
-            # 글자수 제한 로직
             if is_mobile_mode:
                 y_labels_display = [ (label[:5] + '..') if len(label) > 5 else label for label in y_order ]
                 font_size_axis = 11
@@ -140,25 +145,15 @@ with tab1:
             today_dt = datetime.datetime.now()
             fig.add_vline(x=today_dt.timestamp() * 1000, line_width=2, line_dash="dash", line_color="red")
 
-            # [핵심] 보기 모드에 따른 높이 및 범위 설정
             if "틀 고정" in view_option:
-                # 1. 고정 높이 설정 (모바일 화면 고려 500px)
                 final_height = 500
-                
-                # 2. 초기 보여줄 범위 계산 (상위 12개 항목만 먼저 보여줌 -> 줌인 효과)
-                # Plotly Y축은 아래(0)에서 위(N)로 그려지거나 그 반대임. 
-                # 데이터가 많을 때, 전체를 한 번에 그리면 글씨가 깨알같아지므로 범위를 제한함.
-                # timeline은 보통 위에서부터 그립니다.
                 if len(y_order) > 12:
-                    # 전체 개수에서 상위 12개 범위만 자름
-                    # y_order의 마지막 요소들이 차트의 상단에 위치함 (reversed 했으므로)
                     range_y = [len(y_order) - 12.5, len(y_order) - 0.5]
                 else:
                     range_y = None
             else:
-                # 전체 길게 보기 모드
                 final_height = max(500, len(main_df) * 40)
-                range_y = None # 전체 다 보여줌
+                range_y = None
 
             fig.update_layout(
                 plot_bgcolor="white",
@@ -166,11 +161,15 @@ with tab1:
                     side="top", showgrid=True, gridcolor="#E5E5E5", 
                     dtick="M1", tickformat="%y-%m", ticks="outside", 
                     tickfont=dict(size=10),
-                    fixedrange=False # X축 스크롤 허용
+                    fixedrange=False,
+                    # [핵심] 스크롤 범위 제한 (Guardrails)
+                    range=[limit_min, limit_max], # 초기 로딩 시 보여줄 범위
+                    minallowed=limit_min,         # 왼쪽 끝 한계선
+                    maxallowed=limit_max          # 오른쪽 끝 한계선
                 ),
                 yaxis=dict(
-                    autorange=True if range_y is None else False, # 범위 지정 시 자동범위 끄기
-                    range=range_y, # 틀 고정 시 계산된 범위 적용
+                    autorange=True if range_y is None else False,
+                    range=range_y,
                     showgrid=True, gridcolor="#F0F0F0", 
                     title="", 
                     tickfont=dict(size=font_size_axis),
@@ -178,12 +177,12 @@ with tab1:
                     tickmode='array',
                     tickvals=y_order,
                     ticktext=y_labels_display,
-                    fixedrange=False # Y축 스크롤 허용
+                    fixedrange=False
                 ),
                 height=final_height,
                 margin=dict(t=80, l=10, r=10, b=20),
                 legend=dict(orientation="h", yanchor="bottom", y=-0.1, xanchor="center", x=0.5),
-                dragmode="pan" # [중요] 기본 동작을 '드래그 이동'으로 설정
+                dragmode="pan"
             )
             fig.update_yaxes(ticksuffix=" ")
             fig.update_traces(textposition='inside', textfont_size=10, selector=dict(type='bar'))
@@ -193,7 +192,7 @@ with tab1:
                 use_container_width=True, 
                 config={
                     'responsive': True, 
-                    'scrollZoom': False, # 핀치 줌 방지 (흰 화면 방지)
+                    'scrollZoom': False, 
                     'displayModeBar': False 
                 }
             )
