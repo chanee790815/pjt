@@ -91,7 +91,7 @@ with tab1:
     if not df.empty:
         try:
             # 시작일 오름차순 정렬 후 Y축 역순 배치 (사용자 요청 반영)
-            df_sorted = df.sort_values(by="시작일", ascending=True).reset_index(drop=True)
+            df_sorted = df.sort_values(by="시작일", ascending=False).reset_index(drop=True)
             main_df = df_sorted[df_sorted['대분류'] != 'MILESTONE'].copy()
             y_order = main_df['구분'].unique().tolist()[::-1]
 
@@ -192,6 +192,7 @@ with tab3:
             if submit_delete:
                 worksheet.delete_rows(selected_idx + 2)
                 st.error("🗑️ 삭제 완료!"); time.sleep(1); st.rerun()
+
 
 
 
