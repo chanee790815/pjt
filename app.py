@@ -92,7 +92,7 @@ with tab1:
     if not df.empty:
         try:
             # 시작일 오름차순 정렬 (PDF 순서대로)
-            df = df.sort_values(by="시작일", ascending=True).reset_index(drop=True)
+            df = df.sort_values(by="시작일", ascending=False).reset_index(drop=True)
             main_df = df[df['대분류'] != 'MILESTONE'].copy()
             y_order = main_df['구분'].unique().tolist()[::-1]
 
@@ -127,7 +127,7 @@ with tab1:
                     ticks="outside"
                 ),
                 yaxis=dict(
-                    autorange=False, 
+                    autorange=True, 
                     showgrid=True, 
                     gridcolor="#F0F0F0", 
                     # [요청 1 반영] 왼쪽 정렬 및 테두리 느낌을 위한 여백 설정
@@ -183,6 +183,7 @@ with tab2:
 with tab3:
     st.info("💡 공정 수정 및 삭제 탭입니다.")
     # (수정/삭제 로직을 여기에 그대로 유지하시면 됩니다.)
+
 
 
 
