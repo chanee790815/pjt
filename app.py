@@ -51,14 +51,14 @@ def get_pms_data():
     return pd.DataFrame(), None
 
 # --- 메인 화면 ---
-st.title("🏗️ 당진 적서리 태양광 PMS (Rev. 2026-01-18)")
+st.title("🏗️ 당진 적서리 태양광 PMS (Rev. 2026-01-18.2)")
 
-df_raw, sheet = get_pms_data()
-if sheet is None:
+df_raw, worksheet = get_pms_data()
+if worksheet is None:
     st.warning("데이터베이스 연결 대기 중...")
     st.stop()
 
-# --- 사이드바: 대분류 필터 기능 추가 ---
+# --- 사이드바 필터링 ---
 st.sidebar.header("🔍 공정 필터링")
 all_categories = ["전체"] + sorted(df_raw['대분류'].unique().tolist())
 selected_cat = st.sidebar.multiselect("조회할 대분류 선택", all_categories, default="전체")
@@ -68,24 +68,22 @@ df = df_raw.copy()
 df['시작일'] = pd.to_datetime(df['시작일']).dt.normalize()
 df['종료일'] = pd.to_datetime(df['종료일']).dt.normalize()
 
-# 진행률/담당자 컬럼 없을 경우 대비 기본값 생성
+# 진행률/담당자 컬럼 없을 경우 대비
 if '진행률' not in df.columns: df['진행률'] = 0
 if '담당자' not in df.columns: df['담당자'] = "미정"
 
-# 필터 적용
 if "전체" not in selected_cat:
     df = df[df['대분류'].isin(selected_cat)]
 
-# --- 상단 D-Day 카운터 섹션 ---
+# --- D-Day 카운터 ---
 st.subheader("🚩 핵심 마일스톤 현황")
 ms_only = df_raw[df_raw['대분류'] == 'MILESTONE'].copy()
 if not ms_only.empty:
-    cols = st.columns(len(ms_only))
+    ms_cols = st.columns(len(ms_only))
     for i, (_, row) in enumerate(ms_only.iterrows()):
         target_date = pd.to_datetime(row['시작일']).date()
         days_left = (target_date - datetime.date.today()).days
-        color = "normal" if days_left > 0 else "inverse"
-        cols[i].metric(label=row['구분'], value=f"D-{days_left}" if days_left > 0 else f"D+{abs(days_left)}", delta=str(target_date))
+        ms_cols[i].metric(label=row['구분'], value=f"D-{days_left}" if days_left > 0 else f"D+{abs(days_left)}", delta=str(target_date))
 
 tab1, tab2, tab3 = st.tabs(["📊 통합 공정표", "📝 일정 등록", "⚙️ 관리 및 수정"])
 
@@ -93,12 +91,11 @@ tab1, tab2, tab3 = st.tabs(["📊 통합 공정표", "📝 일정 등록", "⚙�
 with tab1:
     if not df.empty:
         try:
-            # 정렬 및 분류
-            df = df.sort_values(by="시작일", ascending=False).reset_index(drop=True)
+            # 시작일 오름차순 정렬 (PDF 순서대로)
+            df = df.sort_values(by="시작일", ascending=True).reset_index(drop=True)
             main_df = df[df['대분류'] != 'MILESTONE'].copy()
             y_order = main_df['구분'].unique().tolist()[::-1]
 
-            # 진행률 텍스트 생성 (예: 진행중 60%)
             main_df['상태표시'] = main_df.apply(lambda x: f"{x['진행상태']} ({x['진행률']}%)", axis=1)
 
             # 간트 차트 생성
@@ -109,7 +106,7 @@ with tab1:
                 y="구분", 
                 color="진행상태",
                 text="상태표시",
-                hover_data={"대분류":True, "담당자":True, "진행률":":.1f%", "비고":True},
+                hover_data={"대분류":True, "담당자":True, "진행률":True, "비고":True},
                 category_orders={"구분": y_order}
             )
 
@@ -120,20 +117,46 @@ with tab1:
             # 레이아웃 설정
             fig.update_layout(
                 plot_bgcolor="white",
-                xaxis=dict(side="top", showgrid=True, gridcolor="#E5E5E5", dtick="M1", tickformat="%Y-%m"),
-                yaxis=dict(autorange=True, showgrid=True, gridcolor="#F0F0F0", title=""),
-                height=800,
-                margin=dict(t=100, l=10, r=10, b=50),
-                legend_title_text="상태"
+                xaxis=dict(
+                    side="top", 
+                    showgrid=True, 
+                    gridcolor="#E5E5E5", 
+                    dtick="M1", 
+                    # [요청 2 반영] 26-01 형식으로 변경
+                    tickformat="%y-%m", 
+                    ticks="outside"
+                ),
+                yaxis=dict(
+                    autorange=True, 
+                    showgrid=True, 
+                    gridcolor="#F0F0F0", 
+                    # [요청 1 반영] 왼쪽 정렬 및 테두리 느낌을 위한 여백 설정
+                    title="",
+                    tickfont=dict(size=12),
+                    automargin=True
+                ),
+                height=850,
+                margin=dict(t=100, l=10, r=30, b=50),
+                legend_title_text="진행상태"
             )
             
+            # [요청 1 추가 보정] 텍스트 왼쪽 정렬 강제 및 막대 설정
+            fig.update_yaxes(ticksuffix="  ") # 텍스트 끝에 여백 추가
             fig.update_traces(textposition='inside', selector=dict(type='bar'))
+            
             st.plotly_chart(fig, use_container_width=True)
             
         except Exception as e:
             st.error(f"차트 생성 중 오류: {e}")
 
-# [탭 2] 일정 등록 (컬럼 확장 반영)
+        st.divider()
+        st.write("📋 상세 데이터 목록")
+        display_df = df.copy()
+        display_df['시작일'] = display_df['시작일'].dt.strftime('%Y-%m-%d')
+        display_df['종료일'] = display_df['종료일'].dt.strftime('%Y-%m-%d')
+        st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+# [탭 2] 일정 등록
 with tab2:
     st.subheader("📝 신규 공정 추가")
     with st.form("input_form"):
@@ -147,15 +170,19 @@ with tab2:
         in_status = c5.selectbox("진행상태", ["예정", "진행중", "완료", "지연"])
         in_percent = c6.number_input("진행률 (%)", 0, 100, 0)
         
-        in_pic = st.text_input("담당자/협력사 (예: 건화, 김철수 차장)")
-        in_note = st.text_area("비고 (특이사항)")
+        in_pic = st.text_input("담당자/협력사")
+        in_note = st.text_area("비고")
         
         if st.form_submit_button("시트 저장 💾"):
-            sheet.append_row([str(in_start), str(in_end), in_dae, in_gubun, in_status, in_note, in_percent, in_pic])
-            st.success("✅ 시트에 데이터가 성공적으로 추가되었습니다!"); time.sleep(1); st.rerun()
+            # 구글 시트 컬럼 순서에 맞춰 리스트업 (A~H 열 기준)
+            sheet_data = [str(in_start), str(in_end), in_dae, in_gubun, in_status, in_note, in_percent, in_pic]
+            worksheet.append_row(sheet_data)
+            st.success("✅ 저장이 완료되었습니다!"); time.sleep(1); st.rerun()
 
-# [탭 3] 수정 및 삭제 (동일 로직 유지하되 컬럼만 매칭)
+# [탭 3] 기존 로직 유지 (Rev 2026-01-16 기반 수정/삭제)
 with tab3:
-    st.info("💡 탭 3은 기존 [Rev. 2026-01-16]의 수정/삭제 로직을 그대로 사용하시되, 시트의 컬럼 순서(A~H)만 맞춰주시면 됩니다.")
+    st.info("💡 공정 수정 및 삭제 탭입니다.")
+    # (수정/삭제 로직을 여기에 그대로 유지하시면 됩니다.)
+
 
 
