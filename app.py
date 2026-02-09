@@ -1,10 +1,10 @@
 ## [PMS Revision History]
-## 버전: Rev. 0.8.3 (Data Load Fail-safe & UI Feedback)
+## 버전: Rev. 0.8.4 (KPI Dashboard Integration)
 ## 업데이트 요약:
-## 1. 🛡️ 화면 증발 방지: 데이터 로딩 실패 시 빈 화면 대신 "데이터 로딩 중" 또는 "API 지연 안내" 메시지 표시
-## 2. 🔄 수동 새로고침 추가: 사이드바에 캐시를 강제로 비우고 데이터를 다시 불러오는 버튼 배치
-## 3. ⚡ API 부하 분산: 요약 데이터 추출 시 발생하는 API 호출 간격을 미세하게 조정하여 구글 차단 회피
-## 4. 📱 UI 유지: 모바일 최적화 및 기존 0.8.2의 내비게이션 로직 완벽 유지
+## 1. 🎯 KPI 관리 추가: 메인 대시보드에 '경영지표(KPI)' 탭을 신설하여 PM팀 핵심 성과 지표 관리 기능 통합
+## 2. 📊 데이터 시각화: KPI 항목별 가중치 및 목표 대비 실적을 차트와 테이블로 구현
+## 3. 🛡️ 안정성 강화: 데이터 로드 실패 대응 로직 및 API 호출 최적화(캐싱) 유지
+## 4. 📱 모바일 최적화: 반응형 UI 및 차트 터치 간섭 방지 설정 유지
 
 import streamlit as st
 import pandas as pd
@@ -13,9 +13,10 @@ import gspread
 from google.oauth2.service_account import Credentials
 import time
 import plotly.express as px
+import plotly.graph_objects as go
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v0.8.3", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v0.8.4", page_icon="🏗️", layout="wide")
 
 # --- [UI] 모바일 대응 커스텀 CSS ---
 st.markdown("""
@@ -50,6 +51,12 @@ st.markdown("""
         border-color: #ff4b4b;
         color: #ff4b4b;
         box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    /* KPI 테이블 스타일 */
+    .kpi-table {
+        font-size: 0.9rem;
+        width: 100%;
+        border-collapse: collapse;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -106,29 +113,37 @@ def get_spreadsheet(_client):
     except Exception as e:
         raise e
 
-@st.cache_data(ttl=300) # 캐시 유지 시간을 5분으로 늘려 부하 감소
+@st.cache_data(ttl=300)
 def fetch_dashboard_summary(_spreadsheet_id, _client_email):
-    """프로젝트 목록과 요약 정보를 일괄 로드"""
+    """프로젝트 목록, 요약 정보 및 KPI 데이터를 일괄 로드"""
     try:
         temp_client = get_client()
         sh = temp_client.open('pms_db')
-        forbidden = ['weekly_history', 'conflict', 'Sheet1']
+        forbidden = ['weekly_history', 'conflict', 'Sheet1', 'KPI']
         all_worksheets = sh.worksheets()
         
         pjt_sheets = [ws for ws in all_worksheets if not any(k in ws.title for k in forbidden)]
         pjt_names = [ws.title for ws in pjt_sheets]
         
+        # 1. 히스토리 로드
         try:
             hist_ws = sh.worksheet('weekly_history')
             hist_data = pd.DataFrame(hist_ws.get_all_records())
         except:
             hist_data = pd.DataFrame(columns=["날짜", "프로젝트명", "주요현황", "작성자"])
 
+        # 2. KPI 데이터 로드 (신규 추가)
+        try:
+            kpi_ws = sh.worksheet('KPI')
+            kpi_data = pd.DataFrame(kpi_ws.get_all_records())
+        except:
+            kpi_data = pd.DataFrame()
+
+        # 3. 프로젝트 요약 생성
         summary = []
         for ws in pjt_sheets:
             try:
-                # API 호출 간 부하를 줄이기 위한 미세 지연
-                time.sleep(0.1)
+                time.sleep(0.05)
                 data = ws.get_all_records()
                 p_df = pd.DataFrame(data)
                 prog = 0
@@ -142,10 +157,9 @@ def fetch_dashboard_summary(_spreadsheet_id, _client_email):
                 
                 summary.append({"프로젝트명": ws.title, "진척률": prog, "최신현황": note})
             except: 
-                # 실패한 프로젝트는 0%로라도 표시하여 화면이 깨지는 것 방지
                 summary.append({"프로젝트명": ws.title, "진척률": 0, "최신현황": "데이터 로딩 지연 중..."})
             
-        return pjt_names, summary, hist_data
+        return pjt_names, summary, hist_data, kpi_data
     except Exception as e:
         raise e
 
@@ -162,9 +176,8 @@ if client:
     try:
         sh = get_spreadsheet(client)
         
-        # 데이터 로딩 표시
         with st.spinner('데이터를 불러오고 있습니다...'):
-            pjt_names, summary_list, full_hist_data = fetch_dashboard_summary(sh.id, st.secrets["gcp_service_account"]["client_email"])
+            pjt_names, summary_list, full_hist_data, kpi_df = fetch_dashboard_summary(sh.id, st.secrets["gcp_service_account"]["client_email"])
         
         menu_options = ["🏠 전체 대시보드"] + pjt_names
         
@@ -186,7 +199,6 @@ if client:
             st.session_state["selected_project"] = selected_menu
             st.rerun()
 
-        # 새로고침 버튼 추가
         if st.sidebar.button("🔄 데이터 새로고침"):
             st.cache_data.clear()
             st.rerun()
@@ -208,29 +220,59 @@ if client:
         # CASE 1: 전체 대시보드
         # ---------------------------------------------------------
         if st.session_state["selected_project"] == "🏠 전체 대시보드":
-            st.title("📊 프로젝트 통합 대시보드")
+            st.title("📊 통합 대시보드 및 경영지표")
             
-            if summary_list:
-                st.divider()
-                for idx, row in enumerate(summary_list):
-                    with st.container():
-                        if st.button(f"📂 {row['프로젝트명']}", key=f"pjt_btn_{idx}", use_container_width=True):
-                            st.session_state["selected_project"] = row['프로젝트명']
-                            st.rerun()
-                        
-                        c1, c2 = st.columns([4, 6])
-                        c1.markdown(f"**진척률: {row['진척률']}%**")
-                        c2.progress(float(row['진척률'] / 100))
-                        st.info(f"{row['최신현황']}")
+            # 메인 대시보드 탭 구성
+            main_t1, main_t2 = st.tabs(["🏗️ 프로젝트 현황", "🎯 경영지표(KPI)"])
+
+            with main_t1:
+                if summary_list:
                     st.write("")
-                
-                st.divider()
-                sum_df = pd.DataFrame(summary_list)
-                fig_main = px.bar(sum_df, x="프로젝트명", y="진척률", color="진척률", text_auto=True, title="프로젝트별 진도율 비교")
-                st.plotly_chart(fig_main, use_container_width=True, config={'staticPlot': True})
-            else:
-                # 데이터가 없을 경우 안내 (이미지 698ad3 방지)
-                st.warning("현재 표시할 프로젝트 데이터가 없습니다. 구글 시트에 프로젝트 시트가 있는지 확인하시거나 '데이터 새로고침'을 눌러주세요.")
+                    for idx, row in enumerate(summary_list):
+                        with st.container():
+                            if st.button(f"📂 {row['프로젝트명']}", key=f"pjt_btn_{idx}", use_container_width=True):
+                                st.session_state["selected_project"] = row['프로젝트명']
+                                st.rerun()
+                            c1, c2 = st.columns([4, 6])
+                            c1.markdown(f"**진척률: {row['진척률']}%**")
+                            c2.progress(float(row['진척률'] / 100))
+                            st.info(f"{row['최신현황']}")
+                        st.write("")
+                    
+                    st.divider()
+                    sum_df = pd.DataFrame(summary_list)
+                    fig_main = px.bar(sum_df, x="프로젝트명", y="진척률", color="진척률", text_auto=True, title="프로젝트별 진도율")
+                    st.plotly_chart(fig_main, use_container_width=True, config={'staticPlot': True})
+                else:
+                    st.warning("표시할 프로젝트 데이터가 없습니다.")
+
+            with main_t2:
+                st.subheader("📈 PM팀 핵심 성과 지표 (KPI)")
+                if not kpi_df.empty:
+                    # KPI 데이터 그리드 출력
+                    st.dataframe(kpi_df, use_container_width=True, hide_index=True)
+                    
+                    # KPI 시각화 (가중치 대비 달성률)
+                    if 'KPI 항목' in kpi_df.columns and '가중치(%)' in kpi_df.columns:
+                        fig_kpi = px.pie(kpi_df, values='가중치(%)', names='KPI 항목', hole=.3, title="KPI 항목별 가중치 구성")
+                        st.plotly_chart(fig_kpi, use_container_width=True, config={'staticPlot': True})
+                else:
+                    st.info("💡 **KPI 관리 안내**")
+                    st.write("""
+                    구글 시트(`pms_db`)에 **KPI**라는 이름의 시트를 만들고 아래 컬럼을 추가하시면 지표 관리가 시작됩니다.
+                    - **KPI 구분 / KPI 항목 / 정의/산식 / 평가기준 / 목표치 / 실적 / 달성률(%) / 가중치(%)**
+                    """)
+                    
+                    # 샘플 데이터 미리보기 (이미지 기반)
+                    sample_kpi = [
+                        ["EPC매출액", "연간 매출금액", "712.36억원", "40%"],
+                        ["실행이익률", "프로젝트 실행원가율", "88.00% 이하", "20%"],
+                        ["설계지원", "프로젝트 설계지원", "60건", "10%"],
+                        ["공정준수율", "준공율", "100%", "2.5%"],
+                        ["안전환경", "안전관리", "사고 0건", "10%"],
+                    ]
+                    sample_df = pd.DataFrame(sample_kpi, columns=["KPI 구분", "항목", "목표치", "가중치"])
+                    st.table(sample_df)
 
         # ---------------------------------------------------------
         # CASE 2: 프로젝트 상세 관리
