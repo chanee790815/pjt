@@ -1,9 +1,9 @@
 ## [PMS Revision History]
-## 버전: Rev. 0.4.1 (신규 추가 기능 안정화)
+## 버전: Rev. 0.4.2
 ## 업데이트 요약:
-## 1. 프로젝트 신규 추가 기능 복구 및 사이드바 배치
-## 2. 데이터 취합 안정성 강화: 빈 시트가 있어도 대시보드 오류 없이 작동
-## 3. 삭제 기능 유지: 주간 현황 관리 탭 하단에서 프로젝트 삭제 가능
+## 1. 🏷️ 프로젝트 명칭 변경 기능 추가: 개별 프로젝트 관리 탭에서 시트 이름 수정 가능
+## 2. 안정성 강화: 명칭 변경 시 사이드바 메뉴 및 데이터 즉시 동기화
+## 3. 예외 처리: 중복된 이름이나 빈 이름으로 변경 방지 로직 포함
 
 import streamlit as st
 import pandas as pd
@@ -14,7 +14,7 @@ import time
 import plotly.express as px
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v0.4.1", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v0.4.2", page_icon="🏗️", layout="wide")
 
 # --- 구글 시트 연결 함수 ---
 @st.cache_resource
@@ -32,12 +32,21 @@ def get_client():
         st.error(f"🚨 인증 오류: {e}")
         return None
 
-# --- [기능] 프로젝트 추가/삭제 로직 ---
+# --- [기능] 프로젝트 추가/삭제/이름변경 로직 ---
 def create_new_project(sh, name):
     try:
         if name in [s.title for s in sh.worksheets()]: return False, "이미 존재하는 프로젝트명입니다."
         ws = sh.add_worksheet(title=name, rows="100", cols="20")
         ws.append_row(["시작일", "종료일", "대분류", "구분", "진행상태", "비고", "진행률", "담당자"])
+        return True, "성공"
+    except Exception as e: return False, str(e)
+
+def rename_project(sh, old_name, new_name):
+    try:
+        if not new_name: return False, "새 이름을 입력해 주세요."
+        if new_name in [s.title for s in sh.worksheets()]: return False, "이미 사용 중인 이름입니다."
+        ws = sh.worksheet(old_name)
+        ws.update_title(new_name)
         return True, "성공"
     except Exception as e: return False, str(e)
 
@@ -70,7 +79,7 @@ if client:
         st.sidebar.info(f"접속 중: **{selected}**")
 
         # ---------------------------------------------------------
-        # CASE 1: 전체 대시보드 (안정성 최우선)
+        # CASE 1: 전체 대시보드
         # ---------------------------------------------------------
         if selected == "🏠 전체 대시보드":
             st.title("📊 프로젝트 통합 대시보드")
@@ -107,7 +116,7 @@ if client:
                 st.dataframe(sum_df[["프로젝트명", "진척률(%)", "주간 주요 현황"]], use_container_width=True, hide_index=True)
                 st.plotly_chart(px.bar(sum_df, x="프로젝트명", y="진척률(%)", color="진척률(%)", text_auto=True), use_container_width=True)
             else:
-                st.info("데이터가 없습니다.")
+                st.info("분석할 데이터가 없습니다.")
 
         # ---------------------------------------------------------
         # CASE 2: 개별 프로젝트 관리
@@ -116,7 +125,7 @@ if client:
             target_ws = sh.worksheet(selected)
             df_raw = pd.DataFrame(target_ws.get_all_records())
             st.title(f"🏗️ {selected}")
-            t1, t2, t3 = st.tabs(["📊 공정표", "📝 일정 등록", "⚙️ 현황 관리"])
+            t1, t2, t3 = st.tabs(["📊 공정표", "📝 일정 등록", "⚙️ 현황 및 관리"])
             
             with t1:
                 if not df_raw.empty:
@@ -128,7 +137,7 @@ if client:
                         st.plotly_chart(px.timeline(chart_df, x_start="시작일", x_end="종료일", y="구분", color="진행상태"), use_container_width=True)
                     st.dataframe(df_raw, use_container_width=True)
                 else:
-                    st.info("💡 등록된 공정이 없습니다. 일정 등록을 먼저 진행해 주세요.")
+                    st.info("💡 등록된 공정이 없습니다.")
 
             with t2:
                 with st.form("reg_form"):
@@ -140,20 +149,45 @@ if client:
                         st.success("저장 완료!"); time.sleep(1); st.rerun()
 
             with t3:
+                # 1. 주간 현황 업데이트
                 st.subheader("📢 주간 현황 업데이트")
                 curr = df_raw.iloc[0]['비고'] if not df_raw.empty and '비고' in df_raw.columns else ""
                 with st.form("week_form"):
                     new_txt = st.text_input("메인 장표용 주간 이슈", value=curr)
-                    if st.form_submit_button("반영하기"):
+                    if st.form_submit_button("현황 반영하기"):
                         target_ws.update_acell("F2", new_txt)
                         st.success("업데이트 완료!"); time.sleep(1); st.rerun()
                 
                 st.divider()
-                if st.button("🗑️ 이 프로젝트 시트 삭제"):
-                    if len(all_sheets) > 1:
-                        sh.del_worksheet(target_ws)
-                        st.warning("삭제되었습니다."); time.sleep(1); st.rerun()
-                    else: st.error("마지막 시트는 삭제할 수 없습니다.")
+
+                # 2. 프로젝트 명칭 변경 및 삭제 섹션
+                st.subheader("🛠️ 프로젝트 설정")
+                
+                col_rename, col_delete = st.columns(2)
+                
+                with col_rename:
+                    st.write("**[🏷️ 명칭 변경]**")
+                    with st.form("rename_form"):
+                        new_name_input = st.text_input("변경할 새 이름", value=selected)
+                        if st.form_submit_button("이름 수정"):
+                            if new_name_input != selected:
+                                ok, msg = rename_project(sh, selected, new_name_input)
+                                if ok:
+                                    st.success(f"'{new_name_input}'으로 변경되었습니다.")
+                                    time.sleep(1); st.rerun()
+                                else: st.error(msg)
+                            else: st.warning("현재와 동일한 이름입니다.")
+
+                with col_delete:
+                    st.write("**[🗑️ 프로젝트 삭제]**")
+                    confirm_del = st.checkbox(f"'{selected}' 프로젝트 영구 삭제")
+                    if st.button("해당 시트 삭제", type="primary"):
+                        if confirm_del:
+                            if len(all_sheets) > 1:
+                                sh.del_worksheet(target_ws)
+                                st.warning("삭제되었습니다."); time.sleep(1); st.rerun()
+                            else: st.error("마지막 시트는 삭제할 수 없습니다.")
+                        else: st.info("삭제하려면 위 체크박스를 선택하세요.")
 
     except Exception as e:
         st.error(f"데이터 로드 중 오류 발생: {e}")
