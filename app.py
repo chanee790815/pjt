@@ -156,6 +156,7 @@ if check_password():
                         df = df_raw.copy()
                         df['시작일'] = pd.to_datetime(df['시작일'], errors='coerce')
                         df['종료일'] = pd.to_datetime(df['종료일'], errors='coerce')
+                        df = df.sort_values(by='시작일', ascending=True) # 시작일 빠른 순 정렬
                         chart_df = df[df['대분류'] != 'MILESTONE'].dropna(subset=['시작일', '종료일'])
                         if not chart_df.empty:
                             st.plotly_chart(px.timeline(chart_df, x_start="시작일", x_end="종료일", y="구분", color="진행상태"), use_container_width=True)
@@ -210,3 +211,4 @@ if check_password():
 
         except Exception as e:
             st.error(f"데이터 통신 오류: {e}")
+
