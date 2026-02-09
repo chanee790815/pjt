@@ -1,10 +1,10 @@
 ## [PMS Revision History]
-## 버전: Rev. 0.8.0 (Stable Navigation & State Sync)
+## 버전: Rev. 0.8.1 (Perfect Navigation Sync Fix)
 ## 업데이트 요약:
-## 1. 🔄 내비게이션 로직 단일화: 버튼 클릭 시 사이드바 위젯 키(nav_menu)만 수정하여 세션 상태 충돌 근본적 해결
-## 2. 🛡️ API 안정성 강화: 스프레드시트 객체 및 데이터 로딩 캐싱 최적화로 Quota Error 방지 로직 유지
-## 3. 📱 UI 최적화: 모바일 대응 CSS 및 차트 고정(Static Mode) 설정 완벽 유지
-## 4. 🔒 보안 유지: 다중 계정 로그인 및 로그아웃 기능 안정화
+## 1. 🔄 내비게이션 완벽 동기화: 사이드바 셀렉트박스의 인덱스를 세션 상태와 명확히 매핑하여 대시보드 버튼 클릭 시 즉시 화면 전환 보장
+## 2. 🛡️ API 안정성 및 캐싱: 스프레드시트 객체 및 데이터 로딩 캐싱 최적화 유지 (Quota Error 방지)
+## 3. 📱 UI/UX 최적화: 모바일 대응 CSS 최적화 및 차트 터치 간섭 방지(Static Mode) 유지
+## 4. 🔒 보안 시스템: 멀티 계정 로그인 및 로그아웃 기능 안정화
 
 import streamlit as st
 import pandas as pd
@@ -15,7 +15,7 @@ import time
 import plotly.express as px
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v0.8.0", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v0.8.1", page_icon="🏗️", layout="wide")
 
 # --- [UI] 모바일 대응 커스텀 CSS ---
 st.markdown("""
@@ -77,7 +77,6 @@ def check_password():
     return False
 
 def logout():
-    # 모든 세션 상태 초기화 후 리런
     for key in st.session_state.keys():
         del st.session_state[key]
     st.rerun()
@@ -160,22 +159,34 @@ if client:
         sh = get_spreadsheet(client)
         pjt_names, summary_list, full_hist_data = fetch_dashboard_summary(sh.id, st.secrets["gcp_service_account"]["client_email"])
         
-        # 1. 사이드바 메뉴 구성
+        # 🎯 내비게이션 상태 동기화 로직
         menu_options = ["🏠 전체 대시보드"] + pjt_names
         
-        # 초기 선택값 설정
-        if "nav_menu" not in st.session_state:
-            st.session_state["nav_menu"] = "🏠 전체 대시보드"
+        # 세션 상태 초기화 (메뉴 추적용)
+        if "current_nav" not in st.session_state:
+            st.session_state["current_nav"] = "🏠 전체 대시보드"
 
+        # 사이드바 구성
         st.sidebar.title("📁 PMO 센터")
         st.sidebar.write(f"👤 접속자: **{st.session_state['user_id']}** 님")
         
-        # 사이드바 메뉴 위젯 (key를 통해 세션 상태와 직접 동기화)
+        # 현재 선택된 메뉴의 인덱스 찾기
+        try:
+            curr_idx = menu_options.index(st.session_state["current_nav"])
+        except ValueError:
+            curr_idx = 0
+
+        # 사이드바 메뉴 선택 위젯
         selected_menu = st.sidebar.selectbox(
             "🎯 메뉴 선택", 
             menu_options, 
-            key="nav_menu"
+            index=curr_idx
         )
+        
+        # 위젯을 통한 수동 변경 시 상태 업데이트
+        if selected_menu != st.session_state["current_nav"]:
+            st.session_state["current_nav"] = selected_menu
+            st.rerun()
 
         with st.sidebar.expander("➕ 프로젝트 추가"):
             new_name = st.text_input("새 프로젝트 명칭")
@@ -193,17 +204,17 @@ if client:
         # ---------------------------------------------------------
         # CASE 1: 전체 대시보드
         # ---------------------------------------------------------
-        if selected_menu == "🏠 전체 대시보드":
+        if st.session_state["current_nav"] == "🏠 전체 대시보드":
             st.title("📊 프로젝트 통합 대시보드")
             
             if summary_list:
                 st.divider()
                 for idx, row in enumerate(summary_list):
                     with st.container():
-                        # 버튼 클릭 시 위젯의 세션 상태(nav_menu)를 직접 변경하여 페이지 전환
+                        # [핵심 수정] 버튼 클릭 시 상태 업데이트 후 리런하여 사이드바와 동기화
                         if st.button(f"📂 {row['프로젝트명']}", key=f"pjt_btn_{idx}", use_container_width=True):
-                            st.session_state["nav_menu"] = row['프로젝트명']
-                            st.rerun()
+                            st.session_state["current_nav"] = row['프로젝트명']
+                            st.rerun() # 이 호출로 인해 사이드바의 index가 업데이트됩니다.
                         
                         c1, c2 = st.columns([4, 6])
                         c1.markdown(f"**진척률: {row['진척률']}%**")
@@ -220,7 +231,7 @@ if client:
         # CASE 2: 프로젝트 상세 관리
         # ---------------------------------------------------------
         else:
-            p_name = selected_menu
+            p_name = st.session_state["current_nav"]
             data_all = get_ws_data(st.secrets["gcp_service_account"]["client_email"], p_name)
             df_raw = pd.DataFrame(data_all) if data_all else pd.DataFrame(columns=["시작일", "종료일", "대분류", "구분", "진행상태", "비고", "진행률", "담당자"])
             
