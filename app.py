@@ -1,9 +1,9 @@
 ## [PMS Revision History]
-## 버전: Rev. 0.8.5 (KPI Layout Synchronization)
+## 버전: Rev. 0.8.6 (Independent KPI Page)
 ## 업데이트 요약:
-## 1. 🎯 KPI 레이아웃 동기화: 제공된 이미지의 컬럼 순서 및 7대 지표 항목(매출, 이익, 설계, 공정, 안전, 기술, 채권) 완벽 반영
-## 2. 📊 실적 시각화: KPI 항목별 목표 대비 달성률을 시각화하는 바 차트 추가
-## 3. 🛡️ 안정성 유지: API Quota 에러 방지를 위한 리소스 캐싱 및 데이터 로드 실패 대응 로직 유지
+## 1. 🎯 KPI 독립 페이지화: 기존 대시보드 탭에서 분리하여 사이드바 전용 메뉴로 독립 구현
+## 2. 📂 메뉴 체계 개편: [전체 대시보드], [경영지표(KPI)], [개별 프로젝트] 3단계 내비게이션 구축
+## 3. 🛡️ API 안정성 및 캐싱: 스프레드시트 리소스 및 요약 데이터 캐싱 로직 유지 (Quota 보호)
 ## 4. 📱 모바일 최적화: 반응형 UI 및 차트 고정 설정(Static Mode) 유지
 
 import streamlit as st
@@ -16,7 +16,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v0.8.5", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v0.8.6", page_icon="🏗️", layout="wide")
 
 # --- [UI] 모바일 대응 커스텀 CSS ---
 st.markdown("""
@@ -170,10 +170,11 @@ if client:
     try:
         sh = get_spreadsheet(client)
         
-        with st.spinner('데이터를 불러오고 있습니다...'):
+        with st.spinner('데이터 로딩 중...'):
             pjt_names, summary_list, full_hist_data, kpi_df = fetch_dashboard_summary(sh.id, st.secrets["gcp_service_account"]["client_email"])
         
-        menu_options = ["🏠 전체 대시보드"] + pjt_names
+        # 🎯 독립 메뉴 체계 구축
+        menu_options = ["🏠 전체 대시보드", "🎯 경영지표(KPI)"] + pjt_names
         
         if "selected_project" not in st.session_state:
             st.session_state["selected_project"] = "🏠 전체 대시보드"
@@ -211,77 +212,73 @@ if client:
             logout()
 
         # ---------------------------------------------------------
-        # CASE 1: 전체 대시보드
+        # CASE 1: 전체 대시보드 (현황 중심)
         # ---------------------------------------------------------
         if st.session_state["selected_project"] == "🏠 전체 대시보드":
-            st.title("📊 통합 대시보드 및 경영지표")
+            st.title("📊 프로젝트 통합 대시보드")
             
-            main_t1, main_t2 = st.tabs(["🏗️ 프로젝트 현황", "🎯 경영지표(KPI)"])
-
-            with main_t1:
-                if summary_list:
+            if summary_list:
+                st.write("")
+                for idx, row in enumerate(summary_list):
+                    with st.container():
+                        if st.button(f"📂 {row['프로젝트명']}", key=f"pjt_btn_{idx}", use_container_width=True):
+                            st.session_state["selected_project"] = row['프로젝트명']
+                            st.rerun()
+                        c1, c2 = st.columns([4, 6])
+                        c1.markdown(f"**진척률: {row['진척률']}%**")
+                        c2.progress(float(row['진척률'] / 100))
+                        st.info(f"{row['최신현황']}")
                     st.write("")
-                    for idx, row in enumerate(summary_list):
-                        with st.container():
-                            if st.button(f"📂 {row['프로젝트명']}", key=f"pjt_btn_{idx}", use_container_width=True):
-                                st.session_state["selected_project"] = row['프로젝트명']
-                                st.rerun()
-                            c1, c2 = st.columns([4, 6])
-                            c1.markdown(f"**진척률: {row['진척률']}%**")
-                            c2.progress(float(row['진척률'] / 100))
-                            st.info(f"{row['최신현황']}")
-                        st.write("")
-                    
-                    st.divider()
-                    sum_df = pd.DataFrame(summary_list)
-                    fig_main = px.bar(sum_df, x="프로젝트명", y="진척률", color="진척률", text_auto=True, title="프로젝트별 진도율")
-                    st.plotly_chart(fig_main, use_container_width=True, config={'staticPlot': True})
-                else:
-                    st.warning("표시할 프로젝트 데이터가 없습니다.")
-
-            with main_t2:
-                st.subheader("📈 PM팀 경영지표 (KPI)")
-                if not kpi_df.empty:
-                    # 이미지 순서대로 컬럼 정렬 및 출력
-                    cols_order = ['KPI 구분', 'KPI 항목', '정의/산식', '평가기준', '목표치', '실적', '달성률(%)', '가중치(%)']
-                    # 실제 존재하는 컬럼만 필터링
-                    display_cols = [c for c in cols_order if c in kpi_df.columns]
-                    st.dataframe(kpi_df[display_cols], use_container_width=True, hide_index=True)
-                    
-                    st.write("")
-                    chart_col1, chart_col2 = st.columns(2)
-                    
-                    with chart_col1:
-                        if 'KPI 항목' in kpi_df.columns and '가중치(%)' in kpi_df.columns:
-                            fig_kpi_pie = px.pie(kpi_df, values='가중치(%)', names='KPI 항목', hole=.4, title="항목별 가중치 분포")
-                            st.plotly_chart(fig_kpi_pie, use_container_width=True, config={'staticPlot': True})
-                    
-                    with chart_col2:
-                        if 'KPI 항목' in kpi_df.columns and '달성률(%)' in kpi_df.columns:
-                            # 달성률 숫자 변환
-                            kpi_df['달성률_num'] = pd.to_numeric(kpi_df['달성률(%)'].astype(str).str.replace('%',''), errors='coerce').fillna(0)
-                            fig_kpi_bar = px.bar(kpi_df, x='KPI 항목', y='달성률_num', text_auto=True, title="지표별 달성률(%)", color='달성률_num', color_continuous_scale='RdYlGn')
-                            st.plotly_chart(fig_kpi_bar, use_container_width=True, config={'staticPlot': True})
-                else:
-                    st.info("💡 **KPI 데이터 연동 방법**")
-                    st.write("""
-                    구글 시트(`pms_db`)에 **KPI** 시트를 만들고 아래 순서대로 데이터를 입력하세요.
-                    1. **KPI 구분**: EPC매출액, 실행이익률, 설계지원 등
-                    2. **KPI 항목**: 연간 매출금액, 프로젝트 실행원가율 등
-                    3. **정의/산식** / **평가기준** / **목표치** / **실적** / **달성률(%)** / **가중치(%)**
-                    """)
-                    
-                    # 이미지 기반 샘플 데이터 구성
-                    sample_data = {
-                        "KPI 구분": ["EPC매출액", "실행이익률", "설계지원", "공정준수율", "안전환경관리점수", "기술표준화", "매출채권"],
-                        "KPI 항목": ["연간 매출금액", "프로젝트 실행원가율", "프로젝트 설계지원", "준공율", "안전관리", "원가절감", "매출채권"],
-                        "목표치": ["712.36억원", "88.00%이하", "60건", "100%", "0.00", "5건", "0.00"],
-                        "가중치(%)": [40, 20, 10, 2.5, 10, 2.5, 5]
-                    }
-                    st.table(pd.DataFrame(sample_data))
+                
+                st.divider()
+                sum_df = pd.DataFrame(summary_list)
+                fig_main = px.bar(sum_df, x="프로젝트명", y="진척률", color="진척률", text_auto=True, title="프로젝트별 진도율 현황")
+                st.plotly_chart(fig_main, use_container_width=True, config={'staticPlot': True})
+            else:
+                st.warning("표시할 프로젝트 데이터가 없습니다.")
 
         # ---------------------------------------------------------
-        # CASE 2: 프로젝트 상세 관리
+        # CASE 2: 경영지표(KPI) 전용 페이지 (이미지 반영)
+        # ---------------------------------------------------------
+        elif st.session_state["selected_project"] == "🎯 경영지표(KPI)":
+            st.title("📈 PM팀 경영지표 (KPI)")
+            
+            if not kpi_df.empty:
+                # 컬럼 순서 고정 (이미지 순서)
+                cols_order = ['KPI 구분', 'KPI 항목', '정의/산식', '평가기준', '목표치', '실적', '달성률(%)', '가중치(%)']
+                display_cols = [c for c in cols_order if c in kpi_df.columns]
+                
+                # 표 상단 요약 카드
+                k_c1, k_c2, k_c3 = st.columns(3)
+                total_weight = pd.to_numeric(kpi_df['가중치(%)'], errors='coerce').sum()
+                k_c1.metric("지표 수", f"{len(kpi_df)} 개")
+                k_c2.metric("전체 가중치 합", f"{total_weight}%")
+                
+                st.write("")
+                # 메인 KPI 테이블
+                st.dataframe(kpi_df[display_cols], use_container_width=True, hide_index=True)
+                
+                st.divider()
+                st.subheader("📊 지표 분석 리포트")
+                chart_col1, chart_col2 = st.columns(2)
+                
+                with chart_col1:
+                    if 'KPI 항목' in kpi_df.columns and '가중치(%)' in kpi_df.columns:
+                        fig_kpi_pie = px.pie(kpi_df, values='가중치(%)', names='KPI 항목', hole=.4, title="전체 성과 가중치 배분")
+                        st.plotly_chart(fig_kpi_pie, use_container_width=True, config={'staticPlot': True})
+                
+                with chart_col2:
+                    if 'KPI 항목' in kpi_df.columns and '달성률(%)' in kpi_df.columns:
+                        kpi_df['달성률_val'] = pd.to_numeric(kpi_df['달성률(%)'].astype(str).str.replace('%',''), errors='coerce').fillna(0)
+                        fig_kpi_bar = px.bar(kpi_df, x='KPI 항목', y='달성률_val', text_auto=True, title="목표 달성률 현황 (%)", 
+                                           color='달성률_val', color_continuous_scale='Viridis')
+                        st.plotly_chart(fig_kpi_bar, use_container_width=True, config={'staticPlot': True})
+            else:
+                st.error("KPI 데이터를 불러올 수 없습니다. 구글 시트의 'KPI' 워크시트를 확인해 주세요.")
+                st.info("💡 KPI 시트에 [KPI 구분, KPI 항목, 정의/산식, 평가기준, 목표치, 실적, 달성률(%), 가중치(%)] 헤더를 구성하세요.")
+
+        # ---------------------------------------------------------
+        # CASE 3: 프로젝트 상세 관리
         # ---------------------------------------------------------
         else:
             p_name = st.session_state["selected_project"]
