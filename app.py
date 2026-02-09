@@ -1,9 +1,9 @@
 ## [PMS Revision History]
-## 버전: Rev. 0.6.4 (Table-style Editing)
+## 버전: Rev. 0.6.6 (New Project Creation)
 ## 업데이트 요약:
-## 1. 📝 데이터 테이블 기반 편집: 표 하단에서 각 행의 정보를 즉시 수정할 수 있는 폼 추가
-## 2. ⚡ 일괄 업데이트: 상태, 비고, 진행률을 한 눈에 확인하며 실시간 반영
-## 3. 🛡️ API 보호 로직 유지: 대량 수정 시에도 안정적인 API 호출 간격 유지
+## 1. ➕ 프로젝트 신규 생성 기능: 사이드바에서 새 시트를 생성하고 표준 헤더 자동 설정
+## 2. 📝 데이터 테이블 편집 & 히스토리: 기존 v0.6.4의 핵심 관리 기능 유지
+## 3. 🛡️ 안정성 강화: 중복된 프로젝트 이름 생성 방지 로직 포함
 
 import streamlit as st
 import pandas as pd
@@ -14,7 +14,7 @@ import time
 import plotly.express as px
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v0.6.4", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v0.6.6", page_icon="🏗️", layout="wide")
 
 # --- [인증] 멀티 계정 체크 ---
 def check_password():
@@ -51,9 +51,27 @@ def get_client():
     except Exception as e:
         st.error(f"🚨 연결 오류: {e}"); return None
 
+# --- [기능] 신규 프로젝트 시트 생성 함수 ---
+def create_new_project_sheet(sh, name):
+    try:
+        # 이미 존재하는 시트인지 확인
+        existing_sheets = [s.title for s in sh.worksheets()]
+        if name in existing_sheets:
+            return False, "이미 존재하는 프로젝트 이름입니다."
+        
+        # 새 시트 추가 (기본 100행 20열)
+        new_ws = sh.add_worksheet(title=name, rows="100", cols="20")
+        # 표준 헤더 입력
+        header = ["시작일", "종료일", "대분류", "구분", "진행상태", "비고", "진행률", "담당자"]
+        new_ws.append_row(header)
+        return True, "성공"
+    except Exception as e:
+        return False, str(e)
+
 client = get_client()
 if client:
     sh = client.open('pms_db')
+    # 관리용 시트 제외 프로젝트 리스트업
     all_ws = [ws for ws in sh.worksheets() if not ws.title.startswith('weekly_history')]
     pjt_names = [s.title for s in all_ws]
     
@@ -66,12 +84,32 @@ if client:
     if "selected_menu" not in st.session_state:
         st.session_state["selected_menu"] = "🏠 전체 대시보드"
 
+    # --- [사이드바 구성] ---
     st.sidebar.title("📁 PMO 프로젝트 센터")
     st.sidebar.write(f"👤 접속자: **{st.session_state['user_id']}**")
     
+    # 1. 프로젝트 선택 메뉴
     menu = ["🏠 전체 대시보드"] + pjt_names
     selected = st.sidebar.selectbox("🎯 메뉴 선택", menu, index=menu.index(st.session_state["selected_menu"]), key="nav_menu")
     st.session_state["selected_menu"] = selected
+
+    st.sidebar.divider()
+
+    # 2. 프로젝트 신규 생성 기능
+    with st.sidebar.expander("➕ 프로젝트 신규 생성", expanded=False):
+        new_name = st.text_input("새 프로젝트 명칭", placeholder="예: 당진 솔라빌리지")
+        if st.button("프로젝트 시트 생성"):
+            if new_name:
+                with st.spinner("구글 시트 생성 중..."):
+                    success, msg = create_new_project_sheet(sh, new_name)
+                    if success:
+                        st.sidebar.success(f"'{new_name}' 생성 완료!")
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.sidebar.error(msg)
+            else:
+                st.sidebar.warning("이름을 입력해 주세요.")
 
     # ---------------------------------------------------------
     # CASE 1: 전체 대시보드
@@ -107,7 +145,7 @@ if client:
             st.plotly_chart(px.bar(pd.DataFrame(summary), x="프로젝트명", y="진척률", color="진척률", text_auto=True), use_container_width=True)
 
     # ---------------------------------------------------------
-    # CASE 2: 상세 관리 (표 형식 업데이트 기능 추가)
+    # CASE 2: 상세 관리 (기존 v0.6.4 기능 유지)
     # ---------------------------------------------------------
     else:
         p_name = st.session_state["selected_menu"]
@@ -124,7 +162,6 @@ if client:
                 df['종료일'] = pd.to_datetime(df['종료일'], errors='coerce')
                 df = df.sort_values(by='시작일', ascending=True)
                 
-                # 간트 차트
                 chart_df = df[df['대분류']!='MILESTONE'].dropna(subset=['시작일', '종료일'])
                 if not chart_df.empty:
                     fig = px.timeline(chart_df, x_start="시작일", x_end="종료일", y="구분", color="진행상태")
@@ -132,13 +169,10 @@ if client:
                     fig.update_xaxes(side="top", dtick="M1", tickformat="%Y-%m")
                     st.plotly_chart(fig, use_container_width=True)
                 
-                # [이미지 d0482의 요청 반영] 표에서 직접 수정할 공정 선택
                 st.subheader("📋 공정 리스트 및 빠른 수정")
-                st.write("아래 표에서 공정을 확인하고, 필요한 공정의 정보를 업데이트하세요.")
                 st.dataframe(df_raw, use_container_width=True)
                 
                 with st.expander("🔍 특정 공정 정보 빠르게 수정하기"):
-                    # 행 번호를 선택하여 수정하는 방식 도입
                     edit_idx = st.selectbox("수정할 공정의 행(Index) 번호를 선택하세요", df_raw.index)
                     selected_row = df_raw.iloc[edit_idx]
                     
@@ -155,7 +189,6 @@ if client:
                             st.success("데이터가 업데이트되었습니다."); time.sleep(1); st.rerun()
 
         with t3:
-            # 주간 현황 누적 및 기존 개별 수정 UI 유지
             st.subheader("📢 주간 현황 누적 업데이트")
             curr_note = df_raw.iloc[0]['비고'] if not df_raw.empty else ""
             with st.form("up_form"):
