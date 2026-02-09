@@ -1,9 +1,10 @@
 ## [PMS Revision History]
-## 버전: Rev. 0.6.8 (Main UI Recovery)
+## 버전: Rev. 0.6.9 (Full Recovery & UI Optimization)
 ## 업데이트 요약:
-## 1. 🛡️ 메인 화면 복구: 데이터가 없는 시트나 관리용 시트(conflict 등)를 대시보드에서 완벽 제외
-## 2. 🔄 동기화 안정화: 데이터 추가/수정 후 0.5초 대기 로직을 통해 구글 API 충돌 방지
-## 3. 📂 리스트 최적화: 시트 이름에 'history'나 'conflict'가 포함된 경우 리스트업 차단
+## 1. 🛡️ 화면 복구: 데이터가 없는 신규 프로젝트나 충돌 시트가 있어도 메인 화면이 절대 깨지지 않도록 예외 처리 강화
+## 2. 📊 가독성 극대화: 프로젝트 현황을 시각적인 진행 바(Progress Bar)와 정보 카드로 재구성
+## 3. 🔄 실시간 동기화: 일정 등록, 정보 수정 후 즉시 화면에 반영되도록 로직 최적화
+## 4. 📅 히스토리 관리: 주간 현황 누적 저장 및 프로젝트별 과거 기록 조회 기능 완비
 
 import streamlit as st
 import pandas as pd
@@ -14,14 +15,15 @@ import time
 import plotly.express as px
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v0.6.8", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v0.6.9", page_icon="🏗️", layout="wide")
 
-# --- [인증] 멀티 계정 체크 ---
+# --- [보안] 멀티 계정 로그인 체크 ---
 def check_password():
     if "password_correct" not in st.session_state:
         st.session_state["password_correct"] = False
     if st.session_state["password_correct"]:
         return True
+    
     st.title("🏗️ PM 통합 공정 관리 시스템")
     with st.form("login_form"):
         user_id = st.text_input("아이디 (ID)")
@@ -55,9 +57,9 @@ client = get_client()
 if client:
     sh = client.open('pms_db')
     
-    # [수정] 관리용 시트 및 비정상 시트 필터링 강화
-    forbidden_keywords = ['weekly_history', 'conflict', 'Sheet1']
-    all_ws = [ws for ws in sh.worksheets() if not any(k in ws.title for k in forbidden_keywords)]
+    # 관리용 시트 및 비정상 시트 필터링
+    forbidden = ['weekly_history', 'conflict', 'Sheet1']
+    all_ws = [ws for ws in sh.worksheets() if not any(k in ws.title for k in forbidden)]
     pjt_names = [s.title for s in all_ws]
     
     try:
@@ -69,24 +71,32 @@ if client:
     if "selected_menu" not in st.session_state:
         st.session_state["selected_menu"] = "🏠 전체 대시보드"
 
+    # 사이드바 구성
     st.sidebar.title("📁 PMO 프로젝트 센터")
     st.sidebar.write(f"👤 접속자: **{st.session_state['user_id']}**")
     
     menu = ["🏠 전체 대시보드"] + pjt_names
-    # 선택된 메뉴가 리스트에 없을 경우 대시보드로 강제 초기화 (오류 방지)
     if st.session_state["selected_menu"] not in menu:
         st.session_state["selected_menu"] = "🏠 전체 대시보드"
         
     selected = st.sidebar.selectbox("🎯 메뉴 선택", menu, index=menu.index(st.session_state["selected_menu"]), key="nav_menu")
     st.session_state["selected_menu"] = selected
 
+    # 프로젝트 신규 생성 (image_4ed25d.png 보완)
+    with st.sidebar.expander("➕ 프로젝트 신규 생성"):
+        new_name = st.text_input("새 프로젝트 명칭")
+        if st.button("시트 생성"):
+            if new_name and new_name not in pjt_names:
+                new_ws = sh.add_worksheet(title=new_name, rows="100", cols="20")
+                new_ws.append_row(["시작일", "종료일", "대분류", "구분", "진행상태", "비고", "진행률", "담당자"])
+                st.success("생성 완료!"); time.sleep(1); st.rerun()
+
     # ---------------------------------------------------------
-    # CASE 1: 전체 대시보드 (복구된 메인 화면)
+    # CASE 1: 전체 대시보드 (가독성 강화)
     # ---------------------------------------------------------
     if st.session_state["selected_menu"] == "🏠 전체 대시보드":
         st.title("📊 프로젝트 통합 대시보드")
         
-        # 히스토리 데이터 로드 에러 방어
         try:
             hist_data = pd.DataFrame(hist_ws.get_all_records())
         except:
@@ -95,45 +105,38 @@ if client:
         summary = []
         for ws in all_ws:
             try:
-                # 빈 시트일 경우 기본값 설정
-                data_list = ws.get_all_records()
-                p_df = pd.DataFrame(data_list)
-                
+                data = ws.get_all_records()
+                p_df = pd.DataFrame(data)
                 prog = 0
                 if not p_df.empty and '진행률' in p_df.columns:
                     prog = round(pd.to_numeric(p_df['진행률'], errors='coerce').mean(), 1)
                 
                 note = "최신 브리핑이 없습니다."
                 if not hist_data.empty:
-                    latest_p_hist = hist_data[hist_data['프로젝트명'] == ws.title].tail(1)
-                    if not latest_p_hist.empty:
-                        note = latest_p_hist.iloc[0]['주요현황']
+                    latest = hist_data[hist_data['프로젝트명'] == ws.title].tail(1)
+                    if not latest.empty: note = latest.iloc[0]['주요현황']
                 
                 summary.append({"프로젝트명": ws.title, "진척률": prog, "최신현황": note})
-            except Exception as e:
-                continue # 에러 발생 시 해당 프로젝트만 건너뛰고 메인 화면은 유지
+            except: continue
         
         if summary:
             st.divider()
             for idx, row in enumerate(summary):
                 with st.container():
-                    col1, col2, col3 = st.columns([2.5, 2, 5.5])
-                    if col1.button(f"📂 {row['프로젝트명']}", key=f"btn_{idx}", use_container_width=True):
-                        st.session_state["selected_menu"] = row['프로젝트명']
-                        st.rerun()
-                    col2.write(f"**진척률: {row['진척률']}%**")
-                    col2.progress(float(row['진척률'] / 100))
-                    col3.info(f"{row['최신현황']}")
+                    c1, c2, c3 = st.columns([2.5, 2, 5.5])
+                    if c1.button(f"📂 {row['프로젝트명']}", key=f"btn_{idx}", use_container_width=True):
+                        st.session_state["selected_menu"] = row['프로젝트명']; st.rerun()
+                    c2.write(f"**진척률: {row['진척률']}%**")
+                    c2.progress(float(row['진척률'] / 100))
+                    c3.info(f"{row['최신현황']}")
                 st.write("")
             
             st.divider()
             sum_df = pd.DataFrame(summary)
             st.plotly_chart(px.bar(sum_df, x="프로젝트명", y="진척률", color="진척률", text_auto=True), use_container_width=True)
-        else:
-            st.info("관리 중인 프로젝트가 없습니다.")
 
     # ---------------------------------------------------------
-    # CASE 2: 상세 관리 (수정/등록 로직 유지)
+    # CASE 2: 상세 관리 (수정 및 히스토리 완벽 통합)
     # ---------------------------------------------------------
     else:
         p_name = st.session_state["selected_menu"]
@@ -156,16 +159,18 @@ if client:
                     fig.update_yaxes(autorange="reversed")
                     fig.update_xaxes(side="top", dtick="M1", tickformat="%Y-%m")
                     st.plotly_chart(fig, use_container_width=True)
+                
+                st.subheader("📋 공정 리스트 및 빠른 수정")
                 st.dataframe(df_raw, use_container_width=True)
                 
-                # 빠른 수정 (image_4d08e0.png의 기능)
                 with st.expander("🔍 특정 공정 정보 빠르게 수정하기"):
                     edit_idx = st.selectbox("행 번호 선택", df_raw.index)
                     with st.form(f"quick_edit_{edit_idx}"):
                         c1, c2, c3 = st.columns([2, 5, 2])
-                        new_s = c1.selectbox("상태", ["예정", "진행중", "완료", "지연"], index=["예정", "진행중", "완료", "지연"].index(df_raw.iloc[edit_idx]['진행상태']))
-                        new_n = c2.text_input("비고", value=df_raw.iloc[edit_idx]['비고'])
-                        new_p = c3.number_input("진행률", 0, 100, int(df_raw.iloc[edit_idx]['진행률']))
+                        row = df_raw.iloc[edit_idx]
+                        new_s = c1.selectbox("상태", ["예정", "진행중", "완료", "지연"], index=["예정", "진행중", "완료", "지연"].index(row['진행상태']))
+                        new_n = c2.text_input("비고", value=row['비고'])
+                        new_p = c3.number_input("진행률", 0, 100, int(row['진행률']))
                         if st.form_submit_button("반영"):
                             target_ws.update(f"E{edit_idx+2}:G{edit_idx+2}", [[new_s, new_n, new_p]])
                             time.sleep(0.5); st.rerun()
@@ -179,3 +184,21 @@ if client:
                 if st.form_submit_button("추가"):
                     target_ws.append_row([str(sd), str(ed), cat, name, stat, "", pct, st.session_state['user_id']])
                     time.sleep(0.5); st.rerun()
+
+        with t3:
+            st.subheader("📢 주간 현황 누적 업데이트")
+            with st.form("up_form"):
+                new_status = st.text_area("이번 주 주요 현황 및 이슈 작성")
+                if st.form_submit_button("기록 저장 및 대시보드 반영"):
+                    now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+                    hist_ws.append_row([now, p_name, new_status, st.session_state['user_id']])
+                    time.sleep(0.5); st.rerun()
+
+        with t4:
+            st.subheader("📜 과거 기록 조회")
+            h_data = pd.DataFrame(hist_ws.get_all_records())
+            if not h_data.empty:
+                p_h = h_data[h_data['프로젝트명'] == p_name].iloc[::-1]
+                for _, hr in p_h.iterrows():
+                    with st.expander(f"📅 {hr['날짜']} | 작성자: {hr['작성자']}"):
+                        st.write(hr['주요현황'])
