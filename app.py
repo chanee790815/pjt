@@ -1,10 +1,10 @@
 ## [PMS Revision History]
-## 버전: Rev. 0.7.9 (API Quota & Resource Optimization)
+## 버전: Rev. 0.8.0 (Stable Navigation & State Sync)
 ## 업데이트 요약:
-## 1. 🛡️ 리소스 캐싱 강화: sh = client.open('pms_db')를 st.cache_resource로 보호하여 반복 클릭 시 발생하는 API 할당량 초과 에러 방지
-## 2. 🚀 상세 데이터 캐싱: 개별 프로젝트 상세 데이터 로드 시에도 st.cache_data를 적용하여 전환 속도 향상 및 트래픽 절감
-## 3. ⚡ 구조 최적화: 시트 객체를 한 번만 로드하고 재사용하는 구조로 변경하여 전반적인 앱 안정성 확보
-## 4. 📱 UI 유지: 모바일 최적화 및 기존 0.7.8의 내비게이션 기능 유지
+## 1. 🔄 내비게이션 로직 단일화: 버튼 클릭 시 사이드바 위젯 키(nav_menu)만 수정하여 세션 상태 충돌 근본적 해결
+## 2. 🛡️ API 안정성 강화: 스프레드시트 객체 및 데이터 로딩 캐싱 최적화로 Quota Error 방지 로직 유지
+## 3. 📱 UI 최적화: 모바일 대응 CSS 및 차트 고정(Static Mode) 설정 완벽 유지
+## 4. 🔒 보안 유지: 다중 계정 로그인 및 로그아웃 기능 안정화
 
 import streamlit as st
 import pandas as pd
@@ -15,7 +15,7 @@ import time
 import plotly.express as px
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v0.7.9", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v0.8.0", page_icon="🏗️", layout="wide")
 
 # --- [UI] 모바일 대응 커스텀 CSS ---
 st.markdown("""
@@ -77,11 +77,9 @@ def check_password():
     return False
 
 def logout():
-    st.session_state["password_correct"] = False
-    st.session_state["user_id"] = None
-    st.session_state["selected_menu"] = "🏠 전체 대시보드"
-    if "nav_menu" in st.session_state:
-        del st.session_state["nav_menu"]
+    # 모든 세션 상태 초기화 후 리런
+    for key in st.session_state.keys():
+        del st.session_state[key]
     st.rerun()
 
 if not check_password():
@@ -104,21 +102,15 @@ def get_client():
 
 @st.cache_resource
 def get_spreadsheet(_client):
-    """스프레드시트 객체 자체를 캐싱하여 open() 호출 횟수 최소화"""
     try:
         return _client.open('pms_db')
     except Exception as e:
         raise e
 
-# 프로젝트 목록 및 요약 데이터를 캐싱 (데이터 기반 캐싱)
 @st.cache_data(ttl=120)
 def fetch_dashboard_summary(_spreadsheet_id, _client_email):
-    """
-    sh 객체를 직접 인자로 받지 않고 id 기반으로 캐싱하여 
-    전체 프로젝트 리스트와 요약 정보만 가져옴
-    """
+    """프로젝트 목록과 요약 정보를 일괄 로드하여 API 호출 절감"""
     try:
-        # 캐싱을 위해 클라이언트를 다시 생성하거나 캐시된 리소스를 활용
         temp_client = get_client()
         sh = temp_client.open('pms_db')
         forbidden = ['weekly_history', 'conflict', 'Sheet1']
@@ -144,7 +136,7 @@ def fetch_dashboard_summary(_spreadsheet_id, _client_email):
                 
                 note = "최신 브리핑 데이터가 없습니다."
                 if not hist_data.empty:
-                    latest = hist_data[filtered_hist_by_pjt(hist_data, ws.title)]
+                    latest = hist_data[hist_data['프로젝트명'] == ws.title].tail(1)
                     if not latest.empty: note = latest.iloc[0]['주요현황']
                 
                 summary.append({"프로젝트명": ws.title, "진척률": prog, "최신현황": note})
@@ -154,12 +146,8 @@ def fetch_dashboard_summary(_spreadsheet_id, _client_email):
     except Exception as e:
         raise e
 
-def filtered_hist_by_pjt(df, pjt_name):
-    return df['프로젝트명'] == pjt_name
-
 @st.cache_data(ttl=60)
 def get_ws_data(_client_email, pjt_name):
-    """상세 페이지 데이터 캐싱"""
     temp_client = get_client()
     sh = temp_client.open('pms_db')
     ws = sh.worksheet(pjt_name)
@@ -169,31 +157,25 @@ client = get_client()
 
 if client:
     try:
-        # 스프레드시트 객체 로드 (캐시 적용)
         sh = get_spreadsheet(client)
-        
-        # 요약 정보 로드 (캐시 적용)
         pjt_names, summary_list, full_hist_data = fetch_dashboard_summary(sh.id, st.secrets["gcp_service_account"]["client_email"])
         
-        if "selected_menu" not in st.session_state:
-            st.session_state["selected_menu"] = "🏠 전체 대시보드"
+        # 1. 사이드바 메뉴 구성
+        menu_options = ["🏠 전체 대시보드"] + pjt_names
+        
+        # 초기 선택값 설정
+        if "nav_menu" not in st.session_state:
+            st.session_state["nav_menu"] = "🏠 전체 대시보드"
 
-        # 사이드바 구성
         st.sidebar.title("📁 PMO 센터")
         st.sidebar.write(f"👤 접속자: **{st.session_state['user_id']}** 님")
         
-        menu = ["🏠 전체 대시보드"] + pjt_names
-        
-        if st.session_state["selected_menu"] not in menu:
-            st.session_state["selected_menu"] = "🏠 전체 대시보드"
-            
-        selected = st.sidebar.selectbox(
+        # 사이드바 메뉴 위젯 (key를 통해 세션 상태와 직접 동기화)
+        selected_menu = st.sidebar.selectbox(
             "🎯 메뉴 선택", 
-            menu, 
-            index=menu.index(st.session_state["selected_menu"]), 
+            menu_options, 
             key="nav_menu"
         )
-        st.session_state["selected_menu"] = selected
 
         with st.sidebar.expander("➕ 프로젝트 추가"):
             new_name = st.text_input("새 프로젝트 명칭")
@@ -201,7 +183,7 @@ if client:
                 if new_name and new_name not in pjt_names:
                     new_ws = sh.add_worksheet(title=new_name, rows="100", cols="20")
                     new_ws.append_row(["시작일", "종료일", "대분류", "구분", "진행상태", "비고", "진행률", "담당자"])
-                    st.cache_data.clear() # 새 프로젝트 생성 시 캐시 강제 삭제
+                    st.cache_data.clear()
                     st.success(f"'{new_name}' 생성 완료!"); time.sleep(1); st.rerun()
 
         st.sidebar.markdown("---")
@@ -211,15 +193,15 @@ if client:
         # ---------------------------------------------------------
         # CASE 1: 전체 대시보드
         # ---------------------------------------------------------
-        if st.session_state["selected_menu"] == "🏠 전체 대시보드":
+        if selected_menu == "🏠 전체 대시보드":
             st.title("📊 프로젝트 통합 대시보드")
             
             if summary_list:
                 st.divider()
                 for idx, row in enumerate(summary_list):
                     with st.container():
-                        if st.button(f"📂 {row['프로젝트명']}", key=f"btn_{idx}", use_container_width=True):
-                            st.session_state["selected_menu"] = row['프로젝트명']
+                        # 버튼 클릭 시 위젯의 세션 상태(nav_menu)를 직접 변경하여 페이지 전환
+                        if st.button(f"📂 {row['프로젝트명']}", key=f"pjt_btn_{idx}", use_container_width=True):
                             st.session_state["nav_menu"] = row['프로젝트명']
                             st.rerun()
                         
@@ -238,8 +220,7 @@ if client:
         # CASE 2: 프로젝트 상세 관리
         # ---------------------------------------------------------
         else:
-            p_name = st.session_state["selected_menu"]
-            # 상세 데이터 캐싱 적용
+            p_name = selected_menu
             data_all = get_ws_data(st.secrets["gcp_service_account"]["client_email"], p_name)
             df_raw = pd.DataFrame(data_all) if data_all else pd.DataFrame(columns=["시작일", "종료일", "대분류", "구분", "진행상태", "비고", "진행률", "담당자"])
             
@@ -274,7 +255,7 @@ if client:
                             if st.form_submit_button("시트에 반영"):
                                 target_ws = sh.worksheet(p_name)
                                 target_ws.update(f"E{edit_idx+2}:G{edit_idx+2}", [[new_s, new_n, new_p]])
-                                st.cache_data.clear() # 수정 시 전체 캐시 갱신
+                                st.cache_data.clear()
                                 st.toast("업데이트 성공!"); time.sleep(0.5); st.rerun()
 
             with t2:
