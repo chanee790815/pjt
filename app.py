@@ -1,10 +1,10 @@
 ## [PMS Revision History]
-## 버전: Rev. 0.8.2 (Robust Navigation Logic)
+## 버전: Rev. 0.8.3 (Data Load Fail-safe & UI Feedback)
 ## 업데이트 요약:
-## 1. 🛠️ 내비게이션 로직 재설계: 사이드바 위젯과 대시보드 버튼이 단일 상태 변수(selected_project)를 공유하도록 하여 내비게이션 오류 완벽 차단
-## 2. 🛡️ API 안정성 유지: 스프레드시트 객체 및 데이터 로드 시 캐싱(cache_resource, cache_data)을 적용하여 연속 클릭 에러 방지
-## 3. 📱 모바일 최적화: 모바일 화면에서의 폰트 크기 및 차트 고정 설정(Static Mode) 유지
-## 4. 🔒 보안 및 계정: 다중 사용자 계정 체계 및 로그아웃 기능 안정화
+## 1. 🛡️ 화면 증발 방지: 데이터 로딩 실패 시 빈 화면 대신 "데이터 로딩 중" 또는 "API 지연 안내" 메시지 표시
+## 2. 🔄 수동 새로고침 추가: 사이드바에 캐시를 강제로 비우고 데이터를 다시 불러오는 버튼 배치
+## 3. ⚡ API 부하 분산: 요약 데이터 추출 시 발생하는 API 호출 간격을 미세하게 조정하여 구글 차단 회피
+## 4. 📱 UI 유지: 모바일 최적화 및 기존 0.8.2의 내비게이션 로직 완벽 유지
 
 import streamlit as st
 import pandas as pd
@@ -15,7 +15,7 @@ import time
 import plotly.express as px
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v0.8.2", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v0.8.3", page_icon="🏗️", layout="wide")
 
 # --- [UI] 모바일 대응 커스텀 CSS ---
 st.markdown("""
@@ -77,7 +77,6 @@ def check_password():
     return False
 
 def logout():
-    # 모든 세션 초기화
     for key in list(st.session_state.keys()):
         del st.session_state[key]
     st.rerun()
@@ -107,9 +106,9 @@ def get_spreadsheet(_client):
     except Exception as e:
         raise e
 
-@st.cache_data(ttl=120)
+@st.cache_data(ttl=300) # 캐시 유지 시간을 5분으로 늘려 부하 감소
 def fetch_dashboard_summary(_spreadsheet_id, _client_email):
-    """프로젝트 목록과 요약 정보를 일괄 로드하여 API 호출 절감"""
+    """프로젝트 목록과 요약 정보를 일괄 로드"""
     try:
         temp_client = get_client()
         sh = temp_client.open('pms_db')
@@ -128,6 +127,8 @@ def fetch_dashboard_summary(_spreadsheet_id, _client_email):
         summary = []
         for ws in pjt_sheets:
             try:
+                # API 호출 간 부하를 줄이기 위한 미세 지연
+                time.sleep(0.1)
                 data = ws.get_all_records()
                 p_df = pd.DataFrame(data)
                 prog = 0
@@ -140,7 +141,9 @@ def fetch_dashboard_summary(_spreadsheet_id, _client_email):
                     if not latest.empty: note = latest.iloc[0]['주요현황']
                 
                 summary.append({"프로젝트명": ws.title, "진척률": prog, "최신현황": note})
-            except: continue
+            except: 
+                # 실패한 프로젝트는 0%로라도 표시하여 화면이 깨지는 것 방지
+                summary.append({"프로젝트명": ws.title, "진척률": 0, "최신현황": "데이터 로딩 지연 중..."})
             
         return pjt_names, summary, hist_data
     except Exception as e:
@@ -157,15 +160,14 @@ client = get_client()
 
 if client:
     try:
-        # 스프레드시트 리소스 로드
         sh = get_spreadsheet(client)
-        # 요약 정보 로드 (2분 캐싱)
-        pjt_names, summary_list, full_hist_data = fetch_dashboard_summary(sh.id, st.secrets["gcp_service_account"]["client_email"])
         
-        # 🎯 내비게이션 소스 오브 트루스 (Source of Truth)
+        # 데이터 로딩 표시
+        with st.spinner('데이터를 불러오고 있습니다...'):
+            pjt_names, summary_list, full_hist_data = fetch_dashboard_summary(sh.id, st.secrets["gcp_service_account"]["client_email"])
+        
         menu_options = ["🏠 전체 대시보드"] + pjt_names
         
-        # 세션 상태에 현재 선택된 프로젝트 저장
         if "selected_project" not in st.session_state:
             st.session_state["selected_project"] = "🏠 전체 대시보드"
 
@@ -173,23 +175,20 @@ if client:
         st.sidebar.title("📁 PMO 센터")
         st.sidebar.write(f"👤 접속자: **{st.session_state['user_id']}** 님")
         
-        # 현재 세션 상태를 기반으로 인덱스 계산
         try:
             current_index = menu_options.index(st.session_state["selected_project"])
         except ValueError:
             current_index = 0
 
-        # 사이드바 메뉴 선택 위젯
-        # 주의: key를 사용하지 않고 index와 세션 상태 업데이트 로직으로 제어
-        selected_menu = st.sidebar.selectbox(
-            "🎯 메뉴 선택", 
-            menu_options, 
-            index=current_index
-        )
+        selected_menu = st.sidebar.selectbox("🎯 메뉴 선택", menu_options, index=current_index)
         
-        # 위젯을 통한 수동 변경 발생 시 세션 상태 업데이트 및 리런
         if selected_menu != st.session_state["selected_project"]:
             st.session_state["selected_project"] = selected_menu
+            st.rerun()
+
+        # 새로고침 버튼 추가
+        if st.sidebar.button("🔄 데이터 새로고침"):
+            st.cache_data.clear()
             st.rerun()
 
         with st.sidebar.expander("➕ 프로젝트 추가"):
@@ -206,7 +205,7 @@ if client:
             logout()
 
         # ---------------------------------------------------------
-        # CASE 1: 전체 대시보드 (메인 화면)
+        # CASE 1: 전체 대시보드
         # ---------------------------------------------------------
         if st.session_state["selected_project"] == "🏠 전체 대시보드":
             st.title("📊 프로젝트 통합 대시보드")
@@ -215,8 +214,6 @@ if client:
                 st.divider()
                 for idx, row in enumerate(summary_list):
                     with st.container():
-                        # [핵심 로직] 버튼 클릭 시 세션 상태를 바꾸고 즉시 리런
-                        # 리런 시 상단의 selected_menu가 바뀐 세션 상태 인덱스를 참조하여 사이드바와 동기화됨
                         if st.button(f"📂 {row['프로젝트명']}", key=f"pjt_btn_{idx}", use_container_width=True):
                             st.session_state["selected_project"] = row['프로젝트명']
                             st.rerun()
@@ -231,13 +228,15 @@ if client:
                 sum_df = pd.DataFrame(summary_list)
                 fig_main = px.bar(sum_df, x="프로젝트명", y="진척률", color="진척률", text_auto=True, title="프로젝트별 진도율 비교")
                 st.plotly_chart(fig_main, use_container_width=True, config={'staticPlot': True})
+            else:
+                # 데이터가 없을 경우 안내 (이미지 698ad3 방지)
+                st.warning("현재 표시할 프로젝트 데이터가 없습니다. 구글 시트에 프로젝트 시트가 있는지 확인하시거나 '데이터 새로고침'을 눌러주세요.")
 
         # ---------------------------------------------------------
-        # CASE 2: 프로젝트 상세 관리 페이지
+        # CASE 2: 프로젝트 상세 관리
         # ---------------------------------------------------------
         else:
             p_name = st.session_state["selected_project"]
-            # 상세 데이터 로드 (60초 캐싱)
             data_all = get_ws_data(st.secrets["gcp_service_account"]["client_email"], p_name)
             df_raw = pd.DataFrame(data_all) if data_all else pd.DataFrame(columns=["시작일", "종료일", "대분류", "구분", "진행상태", "비고", "진행률", "담당자"])
             
