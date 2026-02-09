@@ -1,9 +1,9 @@
 ## [PMS Revision History]
-## 버전: Rev. 0.6.0 (History Tracking)
+## 버전: Rev. 0.6.1 (UI/UX Optimization)
 ## 업데이트 요약:
-## 1. 📅 주간 현황 히스토리: '현황 업데이트' 시 별도 시트에 날짜별로 누적 저장
-## 2. 🔍 과거 데이터 조회: 프로젝트 상세 페이지에서 과거 기록을 최신순으로 리스트업
-## 3. 🚀 내비게이션 최적화: 대시보드 클릭 이동 및 세션 동기화 유지
+## 1. 📂 시트 필터링: 'weekly_history' 등 관리용 시트를 대시보드 리스트에서 자동 제외
+## 2. 🎨 가독성 강화: 프로젝트 현황을 가로형 카드와 진행률 바(Progress Bar)로 시각화
+## 3. 🚀 내비게이션: 클릭 이동 기능을 유지하면서 UI 디자인 대폭 개선
 
 import streamlit as st
 import pandas as pd
@@ -14,9 +14,9 @@ import time
 import plotly.express as px
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v0.6.0", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v0.6.1", page_icon="🏗️", layout="wide")
 
-# --- [보안] 로그인 체크 ---
+# --- [인증] 멀티 계정 체크 ---
 def check_password():
     if "password_correct" not in st.session_state:
         st.session_state["password_correct"] = False
@@ -55,17 +55,16 @@ client = get_client()
 if client:
     sh = client.open('pms_db')
     
-    # 히스토리용 시트 확인 및 생성
+    # [수정] 관리용 시트(history 등)는 리스트에서 제외
+    all_ws = [ws for ws in sh.worksheets() if not ws.title.startswith('weekly_history')]
+    pjt_names = [s.title for s in all_ws]
+    
     try:
         hist_ws = sh.worksheet('weekly_history')
     except:
         hist_ws = sh.add_worksheet(title='weekly_history', rows="1000", cols="5")
         hist_ws.append_row(["날짜", "프로젝트명", "주요현황", "작성자"])
 
-    all_ws = [ws for ws in sh.worksheets() if ws.title != 'weekly_history']
-    pjt_names = [s.title for s in all_ws]
-    
-    # [내비게이션]
     if "selected_menu" not in st.session_state:
         st.session_state["selected_menu"] = "🏠 전체 대시보드"
 
@@ -77,82 +76,95 @@ if client:
     st.session_state["selected_menu"] = selected
 
     # ---------------------------------------------------------
-    # CASE 1: 전체 대시보드 (최신 현황 표시)
+    # CASE 1: 전체 대시보드 (가독성 강화 디자인)
     # ---------------------------------------------------------
     if st.session_state["selected_menu"] == "🏠 전체 대시보드":
         st.title("📊 프로젝트 통합 대시보드")
         
-        # 히스토리에서 프로젝트별 최신 데이터 가져오기
         hist_data = pd.DataFrame(hist_ws.get_all_records())
-        
         summary = []
         for ws in all_ws:
             try:
-                p_name = ws.title
-                # 공정 데이터로 진척률 계산
                 p_df = pd.DataFrame(ws.get_all_records())
                 prog = round(pd.to_numeric(p_df['진행률'], errors='coerce').mean(), 1) if not p_df.empty else 0
                 
-                # 히스토리 시트에서 해당 프로젝트의 가장 최근 비고 찾기
+                note = "최신 브리핑 데이터가 없습니다."
                 if not hist_data.empty:
-                    latest_p_hist = hist_data[hist_data['프로젝트명'] == p_name].tail(1)
-                    latest_note = latest_p_hist.iloc[0]['주요현황'] if not latest_p_hist.empty else "업데이트 없음"
-                else:
-                    latest_note = "데이터 없음"
+                    latest_p_hist = hist_data[hist_data['프로젝트명'] == ws.title].tail(1)
+                    if not latest_p_hist.empty:
+                        note = latest_p_hist.iloc[0]['주요현황']
                 
-                summary.append({"프로젝트명": p_name, "진척률": prog, "최신현황": latest_note})
+                summary.append({"프로젝트명": ws.title, "진척률": prog, "최신현황": note})
             except: continue
         
         if summary:
-            sum_df = pd.DataFrame(summary)
-            for idx, row in sum_df.iterrows():
-                c1, c2, c3 = st.columns([2, 1, 4])
-                if c1.button(f"📂 {row['프로젝트명']}", key=f"p_{idx}", use_container_width=True):
-                    st.session_state["selected_menu"] = row['프로젝트명']; st.rerun()
-                c2.metric("진척률", f"{row['진척률']}%")
-                c3.info(f"**최신 브리핑:** {row['최신현황']}")
             st.divider()
-            st.plotly_chart(px.bar(sum_df, x="프로젝트명", y="진척률", color="진척률", text_auto=True), use_container_width=True)
+            for idx, row in enumerate(summary):
+                # 가독성을 위한 카드 스타일 레이아웃
+                with st.container():
+                    col1, col2, col3 = st.columns([2.5, 2, 5.5])
+                    
+                    # 1열: 프로젝트명 (강조 버튼)
+                    if col1.button(f"📂 {row['프로젝트명']}", key=f"btn_{idx}", use_container_width=True):
+                        st.session_state["selected_menu"] = row['프로젝트명']
+                        st.rerun()
+                    
+                    # 2열: 진척률 바 시각화
+                    col2.write(f"**진척률: {row['진척률']}%**")
+                    col2.progress(row['진척률'] / 100)
+                    
+                    # 3열: 최신 브리핑 (텍스트 박스)
+                    col3.info(f"{row['최신현황']}")
+                st.write("") # 간격 조절
+            
+            st.divider()
+            # 전체 진척률 비교 차트
+            sum_df = pd.DataFrame(summary)
+            st.plotly_chart(px.bar(sum_df, x="프로젝트명", y="진척률", color="진척률", text_auto=True, title="프로젝트별 진척률 비교"), use_container_width=True)
+        else:
+            st.info("관리 중인 프로젝트가 없습니다.")
 
     # ---------------------------------------------------------
-    # CASE 2: 상세 관리 (과거 히스토리 조회 기능 추가)
+    # CASE 2: 상세 관리 (기존 로직 유지 및 최적화)
     # ---------------------------------------------------------
     else:
         p_name = st.session_state["selected_menu"]
         target_ws = sh.worksheet(p_name)
         st.title(f"🏗️ {p_name} 상세 관리")
         
-        t1, t2, t3, t4 = st.tabs(["📊 공정표", "📝 일정등록", "📢 현황업데이트", "기록조회"])
+        t1, t2, t3, t4 = st.tabs(["📊 통합 공정표", "📝 일정등록", "📢 현황업데이트", "📜 과거기록조회"])
 
         with t1:
             df = pd.DataFrame(target_ws.get_all_records())
             if not df.empty:
-                df['시작일'] = pd.to_datetime(df['시작일'])
-                df['종료일'] = pd.to_datetime(df['종료일'])
-                fig = px.timeline(df[df['대분류']!='MILESTONE'], x_start="시작일", x_end="종료일", y="구분", color="진행상태")
-                fig.update_yaxes(autorange="reversed")
-                st.plotly_chart(fig, use_container_width=True)
+                df['시작일'] = pd.to_datetime(df['시작일'], errors='coerce')
+                df['종료일'] = pd.to_datetime(df['종료일'], errors='coerce')
+                df = df.sort_values(by='시작일', ascending=True)
+                
+                # 간트 차트 상단 날짜 표시 유지
+                chart_df = df[df['대분류']!='MILESTONE'].dropna(subset=['시작일', '종료일'])
+                if not chart_df.empty:
+                    fig = px.timeline(chart_df, x_start="시작일", x_end="종료일", y="구분", color="진행상태")
+                    fig.update_yaxes(autorange="reversed")
+                    fig.update_xaxes(side="top", dtick="M1", tickformat="%Y-%m")
+                    st.plotly_chart(fig, use_container_width=True)
+                st.dataframe(df, use_container_width=True)
 
         with t3:
-            st.subheader("📢 주간 주요 현황 기록 (누적 저장)")
-            with st.form("hist_form"):
-                new_status = st.text_area("이번 주 주요 현황 및 이슈 작성")
-                if st.form_submit_button("히스토리 저장 및 대시보드 반영"):
+            st.subheader("📢 주간 현황 누적 업데이트")
+            with st.form("up_form"):
+                new_status = st.text_area("이번 주 주요 현황 및 이슈 작성", placeholder="업무 수행중, 주요 이슈사항 없음")
+                if st.form_submit_button("기록 저장 및 대시보드 반영"):
                     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-                    # 히스토리 시트에 누적 저장
                     hist_ws.append_row([now, p_name, new_status, st.session_state['user_id']])
-                    # 대시보드용 개별 시트 첫 행 비고도 업데이트 (호환성)
-                    target_ws.update_acell("F2", new_status)
-                    st.success("히스토리에 기록되었습니다."); time.sleep(1); st.rerun()
+                    target_ws.update_acell("F2", new_status) # 이전 버전 호환용
+                    st.success("히스토리에 저장되었습니다."); time.sleep(1); st.rerun()
 
         with t4:
-            st.subheader(f"📜 {p_name} 과거 현황 기록")
+            st.subheader("📜 과거 리포트 기록")
             h_data = pd.DataFrame(hist_ws.get_all_records())
             if not h_data.empty:
-                p_h_data = h_data[h_data['프로젝트명'] == p_name].sort_index(ascending=False)
-                if not p_h_data.empty:
-                    for _, h_row in p_h_data.iterrows():
-                        with st.expander(f"📅 {h_row['날짜']} | 작성자: {h_row['작성자']}"):
-                            st.write(h_row['주요현황'])
-                else: st.info("기록된 과거 데이터가 없습니다.")
-            else: st.info("전체 히스토리가 비어 있습니다.")
+                p_h = h_data[h_data['프로젝트명'] == p_name].iloc[::-1] # 최신순 정렬
+                for _, hr in p_h.iterrows():
+                    with st.expander(f"📅 {hr['날짜']} | 작성자: {hr['작성자']}"):
+                        st.write(hr['주요현황'])
