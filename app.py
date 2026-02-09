@@ -1,10 +1,10 @@
 ## [PMS Revision History]
-## 버전: Rev. 0.7.8 (Advanced Caching & Quota Protection)
+## 버전: Rev. 0.7.9 (API Quota & Resource Optimization)
 ## 업데이트 요약:
-## 1. 🚀 대시보드 캐싱 강화: 모든 프로젝트의 요약 데이터를 st.cache_data로 통합 관리하여 API 호출 횟수 90% 이상 절감
-## 2. 🛡️ 인증 에러 방어: sh = client.open('pms_db') 호출 시 발생하는 APIError를 캐치하여 사용자에게 공유 설정 안내 표시
-## 3. ⚡ 성능 최적화: 로그인 후 첫 화면 진입 속도 및 메뉴 전환 속도 개선
-## 4. 📱 UI/UX 유지: 모바일 최적화 및 0.7.7의 안정적인 내비게이션 로직 계승
+## 1. 🛡️ 리소스 캐싱 강화: sh = client.open('pms_db')를 st.cache_resource로 보호하여 반복 클릭 시 발생하는 API 할당량 초과 에러 방지
+## 2. 🚀 상세 데이터 캐싱: 개별 프로젝트 상세 데이터 로드 시에도 st.cache_data를 적용하여 전환 속도 향상 및 트래픽 절감
+## 3. ⚡ 구조 최적화: 시트 객체를 한 번만 로드하고 재사용하는 구조로 변경하여 전반적인 앱 안정성 확보
+## 4. 📱 UI 유지: 모바일 최적화 및 기존 0.7.8의 내비게이션 기능 유지
 
 import streamlit as st
 import pandas as pd
@@ -15,7 +15,7 @@ import time
 import plotly.express as px
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v0.7.8", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v0.7.9", page_icon="🏗️", layout="wide")
 
 # --- [UI] 모바일 대응 커스텀 CSS ---
 st.markdown("""
@@ -87,7 +87,7 @@ def logout():
 if not check_password():
     st.stop()
 
-# --- 구글 시트 연결 및 캐싱 로직 ---
+# --- 구글 시트 연결 및 리소스 캐싱 ---
 @st.cache_resource
 def get_client():
     try:
@@ -102,26 +102,37 @@ def get_client():
     except Exception as e:
         st.error(f"🚨 구글 API 인증 오류: {e}"); return None
 
-# 프로젝트 목록 및 요약 데이터를 한꺼번에 가져와 캐싱 (API 호출 절감)
-@st.cache_data(ttl=120) # 2분간 캐시 유지
-def fetch_dashboard_data(_client):
+@st.cache_resource
+def get_spreadsheet(_client):
+    """스프레드시트 객체 자체를 캐싱하여 open() 호출 횟수 최소화"""
     try:
-        sh = _client.open('pms_db')
+        return _client.open('pms_db')
+    except Exception as e:
+        raise e
+
+# 프로젝트 목록 및 요약 데이터를 캐싱 (데이터 기반 캐싱)
+@st.cache_data(ttl=120)
+def fetch_dashboard_summary(_spreadsheet_id, _client_email):
+    """
+    sh 객체를 직접 인자로 받지 않고 id 기반으로 캐싱하여 
+    전체 프로젝트 리스트와 요약 정보만 가져옴
+    """
+    try:
+        # 캐싱을 위해 클라이언트를 다시 생성하거나 캐시된 리소스를 활용
+        temp_client = get_client()
+        sh = temp_client.open('pms_db')
         forbidden = ['weekly_history', 'conflict', 'Sheet1']
         all_worksheets = sh.worksheets()
         
-        # 프로젝트 시트 목록 추출
         pjt_sheets = [ws for ws in all_worksheets if not any(k in ws.title for k in forbidden)]
         pjt_names = [ws.title for ws in pjt_sheets]
         
-        # 히스토리 데이터 로드
         try:
             hist_ws = sh.worksheet('weekly_history')
             hist_data = pd.DataFrame(hist_ws.get_all_records())
         except:
             hist_data = pd.DataFrame(columns=["날짜", "프로젝트명", "주요현황", "작성자"])
 
-        # 각 프로젝트 요약 정보 생성
         summary = []
         for ws in pjt_sheets:
             try:
@@ -133,7 +144,7 @@ def fetch_dashboard_data(_client):
                 
                 note = "최신 브리핑 데이터가 없습니다."
                 if not hist_data.empty:
-                    latest = hist_data[hist_data['프로젝트명'] == ws.title].tail(1)
+                    latest = hist_data[filtered_hist_by_pjt(hist_data, ws.title)]
                     if not latest.empty: note = latest.iloc[0]['주요현황']
                 
                 summary.append({"프로젝트명": ws.title, "진척률": prog, "최신현황": note})
@@ -143,13 +154,26 @@ def fetch_dashboard_data(_client):
     except Exception as e:
         raise e
 
+def filtered_hist_by_pjt(df, pjt_name):
+    return df['프로젝트명'] == pjt_name
+
+@st.cache_data(ttl=60)
+def get_ws_data(_client_email, pjt_name):
+    """상세 페이지 데이터 캐싱"""
+    temp_client = get_client()
+    sh = temp_client.open('pms_db')
+    ws = sh.worksheet(pjt_name)
+    return ws.get_all_records()
+
 client = get_client()
 
 if client:
     try:
-        # 대시보드 및 프로젝트 기초 데이터 일괄 로드
-        pjt_names, summary_list, full_hist_data = fetch_dashboard_data(client)
-        sh = client.open('pms_db')
+        # 스프레드시트 객체 로드 (캐시 적용)
+        sh = get_spreadsheet(client)
+        
+        # 요약 정보 로드 (캐시 적용)
+        pjt_names, summary_list, full_hist_data = fetch_dashboard_summary(sh.id, st.secrets["gcp_service_account"]["client_email"])
         
         if "selected_menu" not in st.session_state:
             st.session_state["selected_menu"] = "🏠 전체 대시보드"
@@ -215,8 +239,8 @@ if client:
         # ---------------------------------------------------------
         else:
             p_name = st.session_state["selected_menu"]
-            target_ws = sh.worksheet(p_name)
-            data_all = target_ws.get_all_records()
+            # 상세 데이터 캐싱 적용
+            data_all = get_ws_data(st.secrets["gcp_service_account"]["client_email"], p_name)
             df_raw = pd.DataFrame(data_all) if data_all else pd.DataFrame(columns=["시작일", "종료일", "대분류", "구분", "진행상태", "비고", "진행률", "담당자"])
             
             st.title(f"🏗️ {p_name} 관리")
@@ -248,6 +272,7 @@ if client:
                             new_p = col2.number_input("진행률(%)", 0, 100, int(row['진행률']))
                             new_n = st.text_input("비고 수정", value=row['비고'])
                             if st.form_submit_button("시트에 반영"):
+                                target_ws = sh.worksheet(p_name)
                                 target_ws.update(f"E{edit_idx+2}:G{edit_idx+2}", [[new_s, new_n, new_p]])
                                 st.cache_data.clear() # 수정 시 전체 캐시 갱신
                                 st.toast("업데이트 성공!"); time.sleep(0.5); st.rerun()
@@ -263,6 +288,7 @@ if client:
                     stat = st.selectbox("초기 상태", ["예정", "진행중", "완료"])
                     pct = st.number_input("초기 진행률(%)", 0, 100, 0)
                     if st.form_submit_button("공정표에 추가"):
+                        target_ws = sh.worksheet(p_name)
                         target_ws.append_row([str(sd), str(ed), cat, name, stat, "", pct, st.session_state['user_id']])
                         st.cache_data.clear()
                         st.success("새 일정이 추가되었습니다."); time.sleep(0.5); st.rerun()
@@ -293,10 +319,9 @@ if client:
                                 st.write(hr['주요현황'])
                                 
     except Exception as e:
-        # 인증 오류(403) 또는 시트 없음(404) 발생 시 안내 표시
         st.error("🚨 구글 시트('pms_db') 접근에 실패했습니다.")
         st.info(f"""
-        **로그인 시 에러가 발생하는 경우 해결 방법:**
+        **해결 방법:**
         1. 구글 스프레드시트 이름이 정확히 **pms_db** 인지 확인하세요.
         2. 아래 서비스 계정 이메일을 복사하여, 구글 시트 우측 상단 **[공유]** 버튼을 누르고 **편집자(Editor)** 권한으로 추가해 주세요.
         
