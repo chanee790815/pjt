@@ -1,10 +1,10 @@
 ## [PMS Revision History]
-## 버전: Rev. 0.8.1 (Perfect Navigation Sync Fix)
+## 버전: Rev. 0.8.2 (Robust Navigation Logic)
 ## 업데이트 요약:
-## 1. 🔄 내비게이션 완벽 동기화: 사이드바 셀렉트박스의 인덱스를 세션 상태와 명확히 매핑하여 대시보드 버튼 클릭 시 즉시 화면 전환 보장
-## 2. 🛡️ API 안정성 및 캐싱: 스프레드시트 객체 및 데이터 로딩 캐싱 최적화 유지 (Quota Error 방지)
-## 3. 📱 UI/UX 최적화: 모바일 대응 CSS 최적화 및 차트 터치 간섭 방지(Static Mode) 유지
-## 4. 🔒 보안 시스템: 멀티 계정 로그인 및 로그아웃 기능 안정화
+## 1. 🛠️ 내비게이션 로직 재설계: 사이드바 위젯과 대시보드 버튼이 단일 상태 변수(selected_project)를 공유하도록 하여 내비게이션 오류 완벽 차단
+## 2. 🛡️ API 안정성 유지: 스프레드시트 객체 및 데이터 로드 시 캐싱(cache_resource, cache_data)을 적용하여 연속 클릭 에러 방지
+## 3. 📱 모바일 최적화: 모바일 화면에서의 폰트 크기 및 차트 고정 설정(Static Mode) 유지
+## 4. 🔒 보안 및 계정: 다중 사용자 계정 체계 및 로그아웃 기능 안정화
 
 import streamlit as st
 import pandas as pd
@@ -15,7 +15,7 @@ import time
 import plotly.express as px
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v0.8.1", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v0.8.2", page_icon="🏗️", layout="wide")
 
 # --- [UI] 모바일 대응 커스텀 CSS ---
 st.markdown("""
@@ -77,7 +77,8 @@ def check_password():
     return False
 
 def logout():
-    for key in st.session_state.keys():
+    # 모든 세션 초기화
+    for key in list(st.session_state.keys()):
         del st.session_state[key]
     st.rerun()
 
@@ -156,36 +157,39 @@ client = get_client()
 
 if client:
     try:
+        # 스프레드시트 리소스 로드
         sh = get_spreadsheet(client)
+        # 요약 정보 로드 (2분 캐싱)
         pjt_names, summary_list, full_hist_data = fetch_dashboard_summary(sh.id, st.secrets["gcp_service_account"]["client_email"])
         
-        # 🎯 내비게이션 상태 동기화 로직
+        # 🎯 내비게이션 소스 오브 트루스 (Source of Truth)
         menu_options = ["🏠 전체 대시보드"] + pjt_names
         
-        # 세션 상태 초기화 (메뉴 추적용)
-        if "current_nav" not in st.session_state:
-            st.session_state["current_nav"] = "🏠 전체 대시보드"
+        # 세션 상태에 현재 선택된 프로젝트 저장
+        if "selected_project" not in st.session_state:
+            st.session_state["selected_project"] = "🏠 전체 대시보드"
 
         # 사이드바 구성
         st.sidebar.title("📁 PMO 센터")
         st.sidebar.write(f"👤 접속자: **{st.session_state['user_id']}** 님")
         
-        # 현재 선택된 메뉴의 인덱스 찾기
+        # 현재 세션 상태를 기반으로 인덱스 계산
         try:
-            curr_idx = menu_options.index(st.session_state["current_nav"])
+            current_index = menu_options.index(st.session_state["selected_project"])
         except ValueError:
-            curr_idx = 0
+            current_index = 0
 
         # 사이드바 메뉴 선택 위젯
+        # 주의: key를 사용하지 않고 index와 세션 상태 업데이트 로직으로 제어
         selected_menu = st.sidebar.selectbox(
             "🎯 메뉴 선택", 
             menu_options, 
-            index=curr_idx
+            index=current_index
         )
         
-        # 위젯을 통한 수동 변경 시 상태 업데이트
-        if selected_menu != st.session_state["current_nav"]:
-            st.session_state["current_nav"] = selected_menu
+        # 위젯을 통한 수동 변경 발생 시 세션 상태 업데이트 및 리런
+        if selected_menu != st.session_state["selected_project"]:
+            st.session_state["selected_project"] = selected_menu
             st.rerun()
 
         with st.sidebar.expander("➕ 프로젝트 추가"):
@@ -202,19 +206,20 @@ if client:
             logout()
 
         # ---------------------------------------------------------
-        # CASE 1: 전체 대시보드
+        # CASE 1: 전체 대시보드 (메인 화면)
         # ---------------------------------------------------------
-        if st.session_state["current_nav"] == "🏠 전체 대시보드":
+        if st.session_state["selected_project"] == "🏠 전체 대시보드":
             st.title("📊 프로젝트 통합 대시보드")
             
             if summary_list:
                 st.divider()
                 for idx, row in enumerate(summary_list):
                     with st.container():
-                        # [핵심 수정] 버튼 클릭 시 상태 업데이트 후 리런하여 사이드바와 동기화
+                        # [핵심 로직] 버튼 클릭 시 세션 상태를 바꾸고 즉시 리런
+                        # 리런 시 상단의 selected_menu가 바뀐 세션 상태 인덱스를 참조하여 사이드바와 동기화됨
                         if st.button(f"📂 {row['프로젝트명']}", key=f"pjt_btn_{idx}", use_container_width=True):
-                            st.session_state["current_nav"] = row['프로젝트명']
-                            st.rerun() # 이 호출로 인해 사이드바의 index가 업데이트됩니다.
+                            st.session_state["selected_project"] = row['프로젝트명']
+                            st.rerun()
                         
                         c1, c2 = st.columns([4, 6])
                         c1.markdown(f"**진척률: {row['진척률']}%**")
@@ -228,10 +233,11 @@ if client:
                 st.plotly_chart(fig_main, use_container_width=True, config={'staticPlot': True})
 
         # ---------------------------------------------------------
-        # CASE 2: 프로젝트 상세 관리
+        # CASE 2: 프로젝트 상세 관리 페이지
         # ---------------------------------------------------------
         else:
-            p_name = st.session_state["current_nav"]
+            p_name = st.session_state["selected_project"]
+            # 상세 데이터 로드 (60초 캐싱)
             data_all = get_ws_data(st.secrets["gcp_service_account"]["client_email"], p_name)
             df_raw = pd.DataFrame(data_all) if data_all else pd.DataFrame(columns=["시작일", "종료일", "대분류", "구분", "진행상태", "비고", "진행률", "담당자"])
             
@@ -264,10 +270,13 @@ if client:
                             new_p = col2.number_input("진행률(%)", 0, 100, int(row['진행률']))
                             new_n = st.text_input("비고 수정", value=row['비고'])
                             if st.form_submit_button("시트에 반영"):
-                                target_ws = sh.worksheet(p_name)
-                                target_ws.update(f"E{edit_idx+2}:G{edit_idx+2}", [[new_s, new_n, new_p]])
-                                st.cache_data.clear()
-                                st.toast("업데이트 성공!"); time.sleep(0.5); st.rerun()
+                                try:
+                                    target_ws = sh.worksheet(p_name)
+                                    target_ws.update(f"E{edit_idx+2}:G{edit_idx+2}", [[new_s, new_n, new_p]])
+                                    st.cache_data.clear()
+                                    st.toast("업데이트 성공!"); time.sleep(0.5); st.rerun()
+                                except:
+                                    st.error("데이터 업데이트 중 오류가 발생했습니다.")
 
             with t2:
                 st.subheader("📝 신규 일정 등록")
@@ -280,10 +289,13 @@ if client:
                     stat = st.selectbox("초기 상태", ["예정", "진행중", "완료"])
                     pct = st.number_input("초기 진행률(%)", 0, 100, 0)
                     if st.form_submit_button("공정표에 추가"):
-                        target_ws = sh.worksheet(p_name)
-                        target_ws.append_row([str(sd), str(ed), cat, name, stat, "", pct, st.session_state['user_id']])
-                        st.cache_data.clear()
-                        st.success("새 일정이 추가되었습니다."); time.sleep(0.5); st.rerun()
+                        try:
+                            target_ws = sh.worksheet(p_name)
+                            target_ws.append_row([str(sd), str(ed), cat, name, stat, "", pct, st.session_state['user_id']])
+                            st.cache_data.clear()
+                            st.success("새 일정이 추가되었습니다."); time.sleep(0.5); st.rerun()
+                        except:
+                            st.error("데이터 저장 중 오류가 발생했습니다.")
 
             with t3:
                 st.subheader("📢 주간 현황 보고 업데이트")
@@ -311,11 +323,11 @@ if client:
                                 st.write(hr['주요현황'])
                                 
     except Exception as e:
-        st.error("🚨 구글 시트('pms_db') 접근에 실패했습니다.")
+        st.error("🚨 시스템 초기화 중 오류가 발생했습니다.")
         st.info(f"""
-        **해결 방법:**
-        1. 구글 스프레드시트 이름이 정확히 **pms_db** 인지 확인하세요.
-        2. 아래 서비스 계정 이메일을 복사하여, 구글 시트 우측 상단 **[공유]** 버튼을 누르고 **편집자(Editor)** 권한으로 추가해 주세요.
+        **해결 가이드:**
+        1. 구글 스프레드시트 이름이 **pms_db** 인지 확인하세요.
+        2. 아래 서비스 계정 이메일을 복사하여, 구글 시트 우측 상단 **[공유]** 버튼을 통해 **편집자**로 추가해 주세요.
         
         **서비스 계정 이메일:**
         `{st.secrets["gcp_service_account"]["client_email"]}`
