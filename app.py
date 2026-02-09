@@ -1,9 +1,9 @@
 ## [PMS Revision History]
-## 버전: Rev. 0.7.0 (Mobile UI Optimization)
+## 버전: Rev. 0.7.1 (Advanced Mobile UI & Chart Locking)
 ## 업데이트 요약:
-## 1. 📱 반응형 타이틀: 모바일 기기 접속 시 제목 및 헤더 글꼴 크기 자동 축소 (CSS Media Query)
-## 2. 🧊 차트 상호작용 고정: 터치 시 차트가 확대/이동되어 스크롤을 방해하지 않도록 Static 모드 적용
-## 3. 🛡️ 보안 유지: 기존 0.6.9 버전의 데이터 복구 및 예외 처리 로직 완벽 유지
+## 1. 📱 타이틀 최적화: 모바일 화면에서 제목이 두 줄로 겹치지 않도록 폰트 크기 추가 조정 (1.6rem -> 1.4rem)
+## 2. 🧊 완전한 차트 고정: 모든 Plotly 차트에 인터랙션 제거(Static Mode)를 적용하여 모바일 스크롤 편의성 증대
+## 3. 🛡️ 안정성 유지: 비공개 저장소 권한 및 Secrets 연동 로직은 그대로 유지
 
 import streamlit as st
 import pandas as pd
@@ -14,33 +14,37 @@ import time
 import plotly.express as px
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v0.7.0", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v0.7.1", page_icon="🏗️", layout="wide")
 
 # --- [UI] 모바일 대응 커스텀 CSS ---
 st.markdown("""
     <style>
-    /* 모바일 글꼴 크기 조정 */
+    /* 모바일 글꼴 및 레이아웃 최적화 */
     @media (max-width: 640px) {
-        .main .block-container h1 {
-            font-size: 1.6rem !important;
+        .main .block-container {
             padding-top: 1rem !important;
+            padding-left: 0.5rem !important;
+            padding-right: 0.5rem !important;
+        }
+        .main .block-container h1 {
+            font-size: 1.4rem !important; /* 글씨 크기 추가 축소 */
+            line-height: 1.2 !important;
+            margin-bottom: 1rem !important;
         }
         .main .block-container h2 {
-            font-size: 1.3rem !important;
+            font-size: 1.2rem !important;
         }
-        .main .block-container h3 {
-            font-size: 1.1rem !important;
-        }
-        /* 탭 메뉴 글자 크기 */
+        /* 탭 메뉴 글자 크기 최적화 */
         .stTabs [data-baseweb="tab"] {
-            font-size: 14px !important;
-            padding-left: 10px !important;
-            padding-right: 10px !important;
+            font-size: 13px !important;
+            padding-left: 8px !important;
+            padding-right: 8px !important;
         }
     }
-    /* 버튼 상하 간격 조정 */
+    /* 버튼 스타일 통일 */
     .stButton button {
-        margin-bottom: 5px;
+        margin-bottom: 4px;
+        border-radius: 8px;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -52,7 +56,7 @@ def check_password():
     if st.session_state["password_correct"]:
         return True
     
-    st.title("🏗️ PM 통합 관리") # 모바일 대응을 위해 제목 단축
+    st.title("🏗️ PM 통합 관리") 
     with st.form("login_form"):
         user_id = st.text_input("아이디 (ID)")
         password = st.text_input("비밀번호 (PW)", type="password")
@@ -106,7 +110,7 @@ if client:
     if st.session_state["selected_menu"] not in menu:
         st.session_state["selected_menu"] = "🏠 전체 대시보드"
         
-    selected = st.sidebar.selectbox("🎯 메뉴", menu, index=menu.index(st.session_state["selected_menu"]), key="nav_menu")
+    selected = st.sidebar.selectbox("🎯 메뉴 선택", menu, index=menu.index(st.session_state["selected_menu"]), key="nav_menu")
     st.session_state["selected_menu"] = selected
 
     with st.sidebar.expander("➕ 프로젝트 추가"):
@@ -121,7 +125,7 @@ if client:
     # CASE 1: 전체 대시보드
     # ---------------------------------------------------------
     if st.session_state["selected_menu"] == "🏠 전체 대시보드":
-        st.title("📊 통합 대시보드")
+        st.title("📊 프로젝트 통합 대시보드")
         
         try:
             hist_data = pd.DataFrame(hist_ws.get_all_records())
@@ -149,7 +153,7 @@ if client:
             st.divider()
             for idx, row in enumerate(summary):
                 with st.container():
-                    c1, c2 = st.columns([3, 7])
+                    c1, c2 = st.columns([3.5, 6.5])
                     if c1.button(f"📂 {row['프로젝트명']}", key=f"btn_{idx}", use_container_width=True):
                         st.session_state["selected_menu"] = row['프로젝트명']; st.rerun()
                     c2.write(f"**진척률: {row['진척률']}%**")
@@ -159,7 +163,7 @@ if client:
             
             st.divider()
             sum_df = pd.DataFrame(summary)
-            # config={'staticPlot': True}를 추가하여 터치 인터랙션 방지
+            # 메인 차트: Static 모드로 터치 스크롤 방해 금지
             fig_main = px.bar(sum_df, x="프로젝트명", y="진척률", color="진척률", text_auto=True)
             st.plotly_chart(fig_main, use_container_width=True, config={'staticPlot': True})
 
@@ -186,11 +190,10 @@ if client:
                     fig_detail = px.timeline(chart_df, x_start="시작일", x_end="종료일", y="구분", color="진행상태")
                     fig_detail.update_yaxes(autorange="reversed")
                     fig_detail.update_xaxes(side="top", dtick="M1", tickformat="%Y-%m")
-                    # 상세 공정표도 모바일 스크롤을 위해 터치 인터랙션 고정
+                    # 상세 공정표: Static 모드 적용
                     st.plotly_chart(fig_detail, use_container_width=True, config={'staticPlot': True})
                 
                 st.subheader("📋 빠른 수정")
-                # 모바일에서는 데이터프레임을 작게 보여줌
                 st.dataframe(df_raw, use_container_width=True)
                 
                 with st.expander("🔍 정보 수정하기"):
