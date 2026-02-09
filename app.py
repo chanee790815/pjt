@@ -1,10 +1,10 @@
 ## [PMS Revision History]
-## 버전: Rev. 0.7.6 (Seamless Navigation Sync)
+## 버전: Rev. 0.7.7 (Performance & API Stability)
 ## 업데이트 요약:
-## 1. 🔄 내비게이션 완벽 동기화: 대시보드 프로젝트 버튼 클릭 시 사이드바 메뉴 선택과 동일하게 작동하도록 로직 개선
-## 2. 🔑 다중 계정 및 보안: admin, lec, park, seo, yoon 계정 및 로그아웃 기능 유지
-## 3. 📱 모바일 최적화: 타이틀 크기 최적화 및 차트 고정(Static Mode) 설정 유지
-## 4. 🛡️ 에러 핸들링: 구글 시트 접근 권한 문제 시 상세 가이드 노출 로직 유지
+## 1. 🚀 API 호출 최적화: 시트 목록 조회 로직에 st.cache_data 적용하여 연속 클릭 시 발생하는 API Quota Error 방지
+## 2. 🛡️ 초기화 로직 강화: 시스템 시트(weekly_history) 생성 및 확인 과정을 안정적인 함수 구조로 개편
+## 3. 🔄 내비게이션 유지: 대시보드 버튼 클릭 시 상세 페이지로 즉시 이동하는 기능 완벽 유지
+## 4. 📱 모바일 UI 및 보안: 기존의 모바일 최적화 및 다중 계정 로그인 로직 유지
 
 import streamlit as st
 import pandas as pd
@@ -15,7 +15,7 @@ import time
 import plotly.express as px
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v0.7.6", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v0.7.7", page_icon="🏗️", layout="wide")
 
 # --- [UI] 모바일 대응 커스텀 CSS ---
 st.markdown("""
@@ -79,7 +79,6 @@ def check_password():
 def logout():
     st.session_state["password_correct"] = False
     st.session_state["user_id"] = None
-    # 메뉴 상태도 초기화
     st.session_state["selected_menu"] = "🏠 전체 대시보드"
     if "nav_menu" in st.session_state:
         del st.session_state["nav_menu"]
@@ -88,7 +87,7 @@ def logout():
 if not check_password():
     st.stop()
 
-# --- 구글 시트 연결 ---
+# --- 구글 시트 연결 및 캐싱 로직 ---
 @st.cache_resource
 def get_client():
     try:
@@ -103,21 +102,37 @@ def get_client():
     except Exception as e:
         st.error(f"🚨 구글 API 인증 오류: {e}"); return None
 
+# 시트 목록을 불러오는 과정을 캐싱하여 연속 클릭 시 에러 방지 (1분 유지)
+@st.cache_data(ttl=60)
+def get_project_list(_client):
+    try:
+        sh = _client.open('pms_db')
+        forbidden = ['weekly_history', 'conflict', 'Sheet1']
+        all_ws = [ws.title for ws in sh.worksheets() if not any(k in ws.title for k in forbidden)]
+        return all_ws
+    except:
+        return []
+
 client = get_client()
 
 if client:
     try:
         sh = client.open('pms_db')
         
-        forbidden = ['weekly_history', 'conflict', 'Sheet1']
-        all_ws = [ws for ws in sh.worksheets() if not any(k in ws.title for k in forbidden)]
-        pjt_names = [s.title for s in all_ws]
+        # 캐싱된 프로젝트 리스트 사용
+        pjt_names = get_project_list(client)
         
+        # 시스템 시트(weekly_history) 초기화 로직 (안전한 에러 핸들링)
         try:
             hist_ws = sh.worksheet('weekly_history')
-        except:
+        except gspread.exceptions.WorksheetNotFound:
+            # 시트가 없는 경우에만 새로 생성
             hist_ws = sh.add_worksheet(title='weekly_history', rows="1000", cols="5")
             hist_ws.append_row(["날짜", "프로젝트명", "주요현황", "작성자"])
+        except Exception as e:
+            # 기타 API 오류 발생 시 캐시된 리소스를 사용하거나 경고 표시
+            st.warning("주간 기록을 불러오는 중 API 지연이 발생했습니다. 잠시 후 새로고침해 주세요.")
+            hist_ws = None
 
         if "selected_menu" not in st.session_state:
             st.session_state["selected_menu"] = "🏠 전체 대시보드"
@@ -131,7 +146,6 @@ if client:
         if st.session_state["selected_menu"] not in menu:
             st.session_state["selected_menu"] = "🏠 전체 대시보드"
             
-        # 사이드바 셀렉트박스 (key="nav_menu"로 상태 관리)
         selected = st.sidebar.selectbox(
             "🎯 메뉴 선택", 
             menu, 
@@ -146,6 +160,7 @@ if client:
                 if new_name and new_name not in pjt_names:
                     new_ws = sh.add_worksheet(title=new_name, rows="100", cols="20")
                     new_ws.append_row(["시작일", "종료일", "대분류", "구분", "진행상태", "비고", "진행률", "담당자"])
+                    st.cache_data.clear() # 새 프로젝트 생성 시 캐시 삭제
                     st.success(f"'{new_name}' 생성 완료!"); time.sleep(1); st.rerun()
 
         st.sidebar.markdown("---")
@@ -158,14 +173,17 @@ if client:
         if st.session_state["selected_menu"] == "🏠 전체 대시보드":
             st.title("📊 프로젝트 통합 대시보드")
             
-            try:
-                hist_data = pd.DataFrame(hist_ws.get_all_records())
-            except:
-                hist_data = pd.DataFrame(columns=["날짜", "프로젝트명", "주요현황", "작성자"])
+            # 히스토리 데이터 로드 (에러 방지용 빈 데이터프레임 처리)
+            hist_data = pd.DataFrame(columns=["날짜", "프로젝트명", "주요현황", "작성자"])
+            if hist_ws:
+                try:
+                    hist_data = pd.DataFrame(hist_ws.get_all_records())
+                except: pass
 
             summary = []
-            for ws in all_ws:
+            for name in pjt_names:
                 try:
+                    ws = sh.worksheet(name)
                     data = ws.get_all_records()
                     p_df = pd.DataFrame(data)
                     prog = 0
@@ -174,22 +192,20 @@ if client:
                     
                     note = "최신 브리핑 데이터가 없습니다."
                     if not hist_data.empty:
-                        latest = hist_data[hist_data['프로젝트명'] == ws.title].tail(1)
+                        latest = hist_data[hist_data['프로젝트명'] == name].tail(1)
                         if not latest.empty: note = latest.iloc[0]['주요현황']
                     
-                    summary.append({"프로젝트명": ws.title, "진척률": prog, "최신현황": note})
+                    summary.append({"프로젝트명": name, "진척률": prog, "최신현황": note})
                 except: continue
             
             if summary:
                 st.divider()
                 for idx, row in enumerate(summary):
                     with st.container():
-                        # [사용자 요청] 대시보드 버튼 클릭 시 사이드바 메뉴 선택과 동일하게 작동
                         if st.button(f"📂 {row['프로젝트명']}", key=f"btn_{idx}", use_container_width=True):
-                            # 세션 상태 및 사이드바 위젯 키를 동시에 업데이트
                             st.session_state["selected_menu"] = row['프로젝트명']
                             st.session_state["nav_menu"] = row['프로젝트명']
-                            st.rerun() # 즉시 해당 상세 페이지로 이동
+                            st.rerun()
                         
                         c1, c2 = st.columns([4, 6])
                         c1.markdown(f"**진척률: {row['진척률']}%**")
@@ -262,21 +278,27 @@ if client:
                 with st.form("update_report_form"):
                     new_status = st.text_area("이번 주 주요 활동 및 이슈 사항을 입력하세요.")
                     if st.form_submit_button("저장 및 대시보드 반영"):
-                        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-                        hist_ws.append_row([timestamp, p_name, new_status, st.session_state['user_id']])
-                        st.success("현황이 저장되었습니다."); time.sleep(0.5); st.rerun()
+                        if hist_ws:
+                            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+                            hist_ws.append_row([timestamp, p_name, new_status, st.session_state['user_id']])
+                            st.success("현황이 저장되었습니다."); time.sleep(0.5); st.rerun()
+                        else:
+                            st.error("히스토리 시트 연결에 실패했습니다. 잠시 후 시도해 주세요.")
 
             with t4:
                 st.subheader("📜 과거 기록 조회")
-                h_data = pd.DataFrame(hist_ws.get_all_records())
-                if not h_data.empty:
-                    filtered_h = h_data[h_data['프로젝트명'] == p_name].iloc[::-1]
-                    if filtered_h.empty:
-                        st.info("아직 기록된 히스토리가 없습니다.")
-                    else:
-                        for _, hr in filtered_h.iterrows():
-                            with st.expander(f"📅 {hr['날짜']} | 작성자: {hr['작성자']}"):
-                                st.write(hr['주요현황'])
+                if hist_ws:
+                    h_data = pd.DataFrame(hist_ws.get_all_records())
+                    if not h_data.empty:
+                        filtered_h = h_data[h_data['프로젝트명'] == p_name].iloc[::-1]
+                        if filtered_h.empty:
+                            st.info("아직 기록된 히스토리가 없습니다.")
+                        else:
+                            for _, hr in filtered_h.iterrows():
+                                with st.expander(f"📅 {hr['날짜']} | 작성자: {hr['작성자']}"):
+                                    st.write(hr['주요현황'])
+                else:
+                    st.info("과거 기록을 불러올 수 없습니다.")
                                 
     except Exception as e:
         st.error("🚨 구글 시트('pms_db')를 열 수 없습니다.")
