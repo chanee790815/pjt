@@ -1,9 +1,10 @@
 ## [PMS Revision History]
-## 버전: Rev. 0.7.1 (Advanced Mobile UI & Chart Locking)
+## 버전: Rev. 0.7.2 (Ultra Mobile UI Optimization)
 ## 업데이트 요약:
-## 1. 📱 타이틀 최적화: 모바일 화면에서 제목이 두 줄로 겹치지 않도록 폰트 크기 추가 조정 (1.6rem -> 1.4rem)
-## 2. 🧊 완전한 차트 고정: 모든 Plotly 차트에 인터랙션 제거(Static Mode)를 적용하여 모바일 스크롤 편의성 증대
-## 3. 🛡️ 안정성 유지: 비공개 저장소 권한 및 Secrets 연동 로직은 그대로 유지
+## 1. 📱 타이틀 미세 조정: 모바일에서 제목(h1)이 두 줄로 넘어가며 여백을 낭비하지 않도록 크기 추가 축소 (1.4rem -> 1.25rem)
+## 2. 📏 여백 최적화: 모바일 상단 패딩을 줄여 첫 화면에서 더 많은 프로젝트 리스트가 보이도록 개선
+## 3. 🧊 차트 고정 유지: Plotly 차트의 Static Mode를 유지하여 부드러운 스크롤 환경 제공
+## 4. 🛡️ 보안 유지: 비공개 저장소 및 Secrets 연동 로직 완벽 유지
 
 import streamlit as st
 import pandas as pd
@@ -14,37 +15,57 @@ import time
 import plotly.express as px
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v0.7.1", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v0.7.2", page_icon="🏗️", layout="wide")
 
 # --- [UI] 모바일 대응 커스텀 CSS ---
 st.markdown("""
     <style>
-    /* 모바일 글꼴 및 레이아웃 최적화 */
+    /* 전체 기본 폰트 최적화 */
+    html, body, [class*="css"] {
+        font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif;
+    }
+
+    /* 모바일 글꼴 및 레이아웃 최적화 (v0.7.2 추가 수정) */
     @media (max-width: 640px) {
         .main .block-container {
-            padding-top: 1rem !important;
-            padding-left: 0.5rem !important;
-            padding-right: 0.5rem !important;
+            padding-top: 0.5rem !important; /* 상단 여백 대폭 축소 */
+            padding-left: 0.7rem !important;
+            padding-right: 0.7rem !important;
         }
         .main .block-container h1 {
-            font-size: 1.4rem !important; /* 글씨 크기 추가 축소 */
-            line-height: 1.2 !important;
-            margin-bottom: 1rem !important;
+            font-size: 1.25rem !important; /* 제목 크기 최적화 */
+            line-height: 1.3 !important;
+            margin-bottom: 0.8rem !important;
+            letter-spacing: -0.02em;
         }
         .main .block-container h2 {
-            font-size: 1.2rem !important;
+            font-size: 1.1rem !important;
         }
-        /* 탭 메뉴 글자 크기 최적화 */
+        /* 탭 메뉴 글자 크기 및 간격 최적화 */
         .stTabs [data-baseweb="tab"] {
-            font-size: 13px !important;
-            padding-left: 8px !important;
-            padding-right: 8px !important;
+            font-size: 12px !important;
+            padding-left: 6px !important;
+            padding-right: 6px !important;
+            height: 35px !important;
+        }
+        /* 가젯 및 카드 내부 텍스트 크기 */
+        .stAlert {
+            padding: 0.5rem !important;
+            font-size: 0.85rem !important;
         }
     }
-    /* 버튼 스타일 통일 */
+    
+    /* 버튼 스타일 및 여백 통일 */
     .stButton button {
         margin-bottom: 4px;
         border-radius: 8px;
+        font-weight: 500;
+    }
+    
+    /* 사이드바 너비 최적화 */
+    [data-testid="stSidebar"] {
+        min-width: 200px !important;
+        max-width: 250px !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -153,7 +174,7 @@ if client:
             st.divider()
             for idx, row in enumerate(summary):
                 with st.container():
-                    c1, c2 = st.columns([3.5, 6.5])
+                    c1, c2 = st.columns([4, 6])
                     if c1.button(f"📂 {row['프로젝트명']}", key=f"btn_{idx}", use_container_width=True):
                         st.session_state["selected_menu"] = row['프로젝트명']; st.rerun()
                     c2.write(f"**진척률: {row['진척률']}%**")
@@ -163,7 +184,7 @@ if client:
             
             st.divider()
             sum_df = pd.DataFrame(summary)
-            # 메인 차트: Static 모드로 터치 스크롤 방해 금지
+            # 메인 차트: Static 모드 유지
             fig_main = px.bar(sum_df, x="프로젝트명", y="진척률", color="진척률", text_auto=True)
             st.plotly_chart(fig_main, use_container_width=True, config={'staticPlot': True})
 
@@ -190,7 +211,6 @@ if client:
                     fig_detail = px.timeline(chart_df, x_start="시작일", x_end="종료일", y="구분", color="진행상태")
                     fig_detail.update_yaxes(autorange="reversed")
                     fig_detail.update_xaxes(side="top", dtick="M1", tickformat="%Y-%m")
-                    # 상세 공정표: Static 모드 적용
                     st.plotly_chart(fig_detail, use_container_width=True, config={'staticPlot': True})
                 
                 st.subheader("📋 빠른 수정")
