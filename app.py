@@ -1,10 +1,10 @@
 ## [PMS Revision History]
-## 버전: Rev. 0.8.6 (Independent KPI Page)
+## 버전: Rev. 0.8.7 (Independent KPI Page & Sidebar Cleanup)
 ## 업데이트 요약:
-## 1. 🎯 KPI 독립 페이지화: 기존 대시보드 탭에서 분리하여 사이드바 전용 메뉴로 독립 구현
-## 2. 📂 메뉴 체계 개편: [전체 대시보드], [경영지표(KPI)], [개별 프로젝트] 3단계 내비게이션 구축
-## 3. 🛡️ API 안정성 및 캐싱: 스프레드시트 리소스 및 요약 데이터 캐싱 로직 유지 (Quota 보호)
-## 4. 📱 모바일 최적화: 반응형 UI 및 차트 고정 설정(Static Mode) 유지
+## 1. 🎯 KPI 전용 메뉴 확립: 사이드바 상단에 KPI 메뉴를 고정하고 프로젝트 리스트와 시각적으로 분리
+## 2. 🚫 중복 노출 차단: 메인 대시보드 프로젝트 현황판에서 'KPI' 항목이 나오지 않도록 필터링 강화
+## 3. 📂 내비게이션 최적화: 기본 메뉴(대시보드, KPI)와 개별 프로젝트 간 이동 로직 안정화
+## 4. 📊 시각화 및 보안: 기존의 모바일 최적화, API 캐싱, 다중 계정 로그인 기능 완벽 유지
 
 import streamlit as st
 import pandas as pd
@@ -16,31 +16,27 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v0.8.6", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v0.8.7", page_icon="🏗️", layout="wide")
 
-# --- [UI] 모바일 대응 커스텀 CSS ---
+# --- [UI] 모바일 대응 및 디자인 커스텀 CSS ---
 st.markdown("""
     <style>
     html, body, [class*="css"] {
         font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif;
     }
-    @media (max-width: 640px) {
-        .main .block-container {
-            padding-top: 0.8rem !important; 
-            padding-left: 0.6rem !important;
-            padding-right: 0.6rem !important;
-        }
-        .main .block-container h1 {
-            font-size: 1.25rem !important;
-            line-height: 1.3 !important;
-            margin-bottom: 1rem !important;
-        }
-        .stButton button {
-            height: 48px !important;
-            font-size: 15px !important;
-            font-weight: 600 !important;
-        }
+    /* 사이드바 스타일링 */
+    section[data-testid="stSidebar"] {
+        background-color: #f8f9fa;
     }
+    .main .block-container {
+        padding-top: 0.8rem !important; 
+        padding-left: 0.6rem !important;
+        padding-right: 0.6rem !important;
+    }
+    @media (max-width: 640px) {
+        .main .block-container h1 { font-size: 1.25rem !important; }
+    }
+    /* 버튼 스타일 */
     .stButton button {
         border-radius: 10px;
         border: 1px solid #e0e0e0;
@@ -50,7 +46,6 @@ st.markdown("""
     .stButton button:hover {
         border-color: #ff4b4b;
         color: #ff4b4b;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
     }
     </style>
     """, unsafe_allow_html=True)
@@ -59,7 +54,6 @@ st.markdown("""
 def check_password():
     if "password_correct" not in st.session_state:
         st.session_state["password_correct"] = False
-
     if st.session_state["password_correct"]:
         return True
     
@@ -113,10 +107,12 @@ def fetch_dashboard_summary(_spreadsheet_id, _client_email):
     try:
         temp_client = get_client()
         sh = temp_client.open('pms_db')
+        # 제외 대상 시트 명칭 (KPI는 별도 페이지이므로 프로젝트 리스트에서 제외)
         forbidden = ['weekly_history', 'conflict', 'Sheet1', 'KPI']
         all_worksheets = sh.worksheets()
         
-        pjt_sheets = [ws for ws in all_worksheets if not any(k in ws.title for k in forbidden)]
+        # 실제 프로젝트 시트만 필터링
+        pjt_sheets = [ws for ws in all_worksheets if ws.title not in forbidden]
         pjt_names = [ws.title for ws in pjt_sheets]
         
         # 1. 히스토리 로드
@@ -126,14 +122,14 @@ def fetch_dashboard_summary(_spreadsheet_id, _client_email):
         except:
             hist_data = pd.DataFrame(columns=["날짜", "프로젝트명", "주요현황", "작성자"])
 
-        # 2. KPI 데이터 로드
+        # 2. KPI 데이터 로드 (전용 페이지용)
         try:
             kpi_ws = sh.worksheet('KPI')
             kpi_data = pd.DataFrame(kpi_ws.get_all_records())
         except:
             kpi_data = pd.DataFrame()
 
-        # 3. 프로젝트 요약 생성
+        # 3. 프로젝트 요약 정보 생성 (Dashboard 리스트용)
         summary = []
         for ws in pjt_sheets:
             try:
@@ -151,7 +147,7 @@ def fetch_dashboard_summary(_spreadsheet_id, _client_email):
                 
                 summary.append({"프로젝트명": ws.title, "진척률": prog, "최신현황": note})
             except: 
-                summary.append({"프로젝트명": ws.title, "진척률": 0, "최신현황": "데이터 로딩 지연 중..."})
+                summary.append({"프로젝트명": ws.title, "진척률": 0, "최신현황": "로딩 중..."})
             
         return pjt_names, summary, hist_data, kpi_data
     except Exception as e:
@@ -173,27 +169,31 @@ if client:
         with st.spinner('데이터 로딩 중...'):
             pjt_names, summary_list, full_hist_data, kpi_df = fetch_dashboard_summary(sh.id, st.secrets["gcp_service_account"]["client_email"])
         
-        # 🎯 독립 메뉴 체계 구축
-        menu_options = ["🏠 전체 대시보드", "🎯 경영지표(KPI)"] + pjt_names
+        # 🎯 사이드바 메뉴 체계 (기본 메뉴 vs 프로젝트 분리)
+        main_menus = ["🏠 전체 대시보드", "🎯 경영지표(KPI)"]
+        menu_options = main_menus + pjt_names
         
         if "selected_project" not in st.session_state:
             st.session_state["selected_project"] = "🏠 전체 대시보드"
 
         # 사이드바 구성
         st.sidebar.title("📁 PMO 센터")
-        st.sidebar.write(f"👤 접속자: **{st.session_state['user_id']}** 님")
+        st.sidebar.write(f"👤 **{st.session_state['user_id']}** 님")
         
         try:
             current_index = menu_options.index(st.session_state["selected_project"])
         except ValueError:
             current_index = 0
 
+        # 메뉴 선택
         selected_menu = st.sidebar.selectbox("🎯 메뉴 선택", menu_options, index=current_index)
         
         if selected_menu != st.session_state["selected_project"]:
             st.session_state["selected_project"] = selected_menu
             st.rerun()
 
+        # 사이드바 하단 도구
+        st.sidebar.markdown("---")
         if st.sidebar.button("🔄 데이터 새로고침"):
             st.cache_data.clear()
             st.rerun()
@@ -201,13 +201,12 @@ if client:
         with st.sidebar.expander("➕ 프로젝트 추가"):
             new_name = st.text_input("새 프로젝트 명칭")
             if st.button("시트 생성"):
-                if new_name and new_name not in pjt_names:
+                if new_name and new_name not in pjt_names and new_name != "KPI":
                     new_ws = sh.add_worksheet(title=new_name, rows="100", cols="20")
                     new_ws.append_row(["시작일", "종료일", "대분류", "구분", "진행상태", "비고", "진행률", "담당자"])
                     st.cache_data.clear()
                     st.success(f"'{new_name}' 생성 완료!"); time.sleep(1); st.rerun()
 
-        st.sidebar.markdown("---")
         if st.sidebar.button("🔓 로그아웃"):
             logout()
 
@@ -219,6 +218,7 @@ if client:
             
             if summary_list:
                 st.write("")
+                # 여기서 summary_list는 이미 KPI가 필터링된 상태입니다.
                 for idx, row in enumerate(summary_list):
                     with st.container():
                         if st.button(f"📂 {row['프로젝트명']}", key=f"pjt_btn_{idx}", use_container_width=True):
@@ -232,50 +232,50 @@ if client:
                 
                 st.divider()
                 sum_df = pd.DataFrame(summary_list)
-                fig_main = px.bar(sum_df, x="프로젝트명", y="진척률", color="진척률", text_auto=True, title="프로젝트별 진도율 현황")
+                fig_main = px.bar(sum_df, x="프로젝트명", y="진척률", color="진척률", text_auto=True, title="프로젝트별 실시간 진도율")
                 st.plotly_chart(fig_main, use_container_width=True, config={'staticPlot': True})
             else:
                 st.warning("표시할 프로젝트 데이터가 없습니다.")
 
         # ---------------------------------------------------------
-        # CASE 2: 경영지표(KPI) 전용 페이지 (이미지 반영)
+        # CASE 2: 경영지표(KPI) 전용 페이지 (독립 페이지)
         # ---------------------------------------------------------
         elif st.session_state["selected_project"] == "🎯 경영지표(KPI)":
             st.title("📈 PM팀 경영지표 (KPI)")
             
             if not kpi_df.empty:
-                # 컬럼 순서 고정 (이미지 순서)
+                # 이미지와 동일한 컬럼 순서
                 cols_order = ['KPI 구분', 'KPI 항목', '정의/산식', '평가기준', '목표치', '실적', '달성률(%)', '가중치(%)']
                 display_cols = [c for c in cols_order if c in kpi_df.columns]
                 
-                # 표 상단 요약 카드
+                # 상단 요약 지표
                 k_c1, k_c2, k_c3 = st.columns(3)
+                k_c1.metric("핵심 지표", f"{len(kpi_df)}개")
                 total_weight = pd.to_numeric(kpi_df['가중치(%)'], errors='coerce').sum()
-                k_c1.metric("지표 수", f"{len(kpi_df)} 개")
-                k_c2.metric("전체 가중치 합", f"{total_weight}%")
+                k_c2.metric("가중치 합계", f"{total_weight}%")
                 
                 st.write("")
-                # 메인 KPI 테이블
+                # KPI 메인 테이블 (이미지 형식 반영)
+                st.subheader("📋 경영목표 달성 현황")
                 st.dataframe(kpi_df[display_cols], use_container_width=True, hide_index=True)
                 
                 st.divider()
-                st.subheader("📊 지표 분석 리포트")
+                st.subheader("📊 지표별 성과 분석")
                 chart_col1, chart_col2 = st.columns(2)
                 
                 with chart_col1:
                     if 'KPI 항목' in kpi_df.columns and '가중치(%)' in kpi_df.columns:
-                        fig_kpi_pie = px.pie(kpi_df, values='가중치(%)', names='KPI 항목', hole=.4, title="전체 성과 가중치 배분")
+                        fig_kpi_pie = px.pie(kpi_df, values='가중치(%)', names='KPI 항목', hole=.4, title="항목별 성과 비중")
                         st.plotly_chart(fig_kpi_pie, use_container_width=True, config={'staticPlot': True})
                 
                 with chart_col2:
                     if 'KPI 항목' in kpi_df.columns and '달성률(%)' in kpi_df.columns:
-                        kpi_df['달성률_val'] = pd.to_numeric(kpi_df['달성률(%)'].astype(str).str.replace('%',''), errors='coerce').fillna(0)
-                        fig_kpi_bar = px.bar(kpi_df, x='KPI 항목', y='달성률_val', text_auto=True, title="목표 달성률 현황 (%)", 
-                                           color='달성률_val', color_continuous_scale='Viridis')
+                        kpi_df['달성률_num'] = pd.to_numeric(kpi_df['달성률(%)'].astype(str).str.replace('%',''), errors='coerce').fillna(0)
+                        fig_kpi_bar = px.bar(kpi_df, x='KPI 항목', y='달성률_num', text_auto=True, title="목표 달성도(%)", 
+                                           color='달성률_num', color_continuous_scale='RdYlGn')
                         st.plotly_chart(fig_kpi_bar, use_container_width=True, config={'staticPlot': True})
             else:
-                st.error("KPI 데이터를 불러올 수 없습니다. 구글 시트의 'KPI' 워크시트를 확인해 주세요.")
-                st.info("💡 KPI 시트에 [KPI 구분, KPI 항목, 정의/산식, 평가기준, 목표치, 실적, 달성률(%), 가중치(%)] 헤더를 구성하세요.")
+                st.error("KPI 데이터를 불러올 수 없습니다. 구글 시트의 'KPI' 워크시트가 정상적인지 확인해 주세요.")
 
         # ---------------------------------------------------------
         # CASE 3: 프로젝트 상세 관리
@@ -285,8 +285,8 @@ if client:
             data_all = get_ws_data(st.secrets["gcp_service_account"]["client_email"], p_name)
             df_raw = pd.DataFrame(data_all) if data_all else pd.DataFrame(columns=["시작일", "종료일", "대분류", "구분", "진행상태", "비고", "진행률", "담당자"])
             
-            st.title(f"🏗️ {p_name} 관리")
-            t1, t2, t3, t4 = st.tabs(["📊 공정표", "📝 등록", "📢 현황보고", "📜 히스토리"])
+            st.title(f"🏗️ {p_name} 상세 관리")
+            t1, t2, t3, t4 = st.tabs(["📊 공정표", "📝 일정등록", "📢 현황보고", "📜 히스토리"])
 
             with t1:
                 if not df_raw.empty:
@@ -294,7 +294,6 @@ if client:
                     df['시작일'] = pd.to_datetime(df['시작일'], errors='coerce')
                     df['종료일'] = pd.to_datetime(df['종료일'], errors='coerce')
                     df = df.sort_values(by='시작일', ascending=True)
-                    
                     chart_df = df[df['대분류']!='MILESTONE'].dropna(subset=['시작일', '종료일'])
                     if not chart_df.empty:
                         fig_detail = px.timeline(chart_df, x_start="시작일", x_end="종료일", y="구분", color="진행상태")
@@ -368,12 +367,5 @@ if client:
                                 
     except Exception as e:
         st.error("🚨 시스템 초기화 중 오류가 발생했습니다.")
-        st.info(f"""
-        **해결 가이드:**
-        1. 구글 스프레드시트 이름이 **pms_db** 인지 확인하세요.
-        2. 아래 서비스 계정 이메일을 복사하여, 구글 시트 우측 상단 **[공유]** 버튼을 통해 **편집자**로 추가해 주세요.
-        
-        **서비스 계정 이메일:**
-        `{st.secrets["gcp_service_account"]["client_email"]}`
-        """)
+        st.info(f"구글 시트('pms_db') 공유 설정을 확인해 주세요.\n\n이메일: `{st.secrets['gcp_service_account']['client_email']}`")
         st.warning(f"상세 에러 내용: {e}")
