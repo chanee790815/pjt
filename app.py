@@ -1,10 +1,10 @@
 ## [PMS Revision History]
-## 버전: Rev. 0.7.5 (Multi-User Auth & Logout Optimization)
+## 버전: Rev. 0.7.6 (Seamless Navigation Sync)
 ## 업데이트 요약:
-## 1. 🔑 다중 계정 로그인: admin, lec, park, seo, yoon 등 제공된 모든 계정 연동 확인
-## 2. 🚪 로그아웃 기능: 사이드바 하단에 안전한 로그아웃 버튼 추가
-## 3. 🛡️ 권한 에러 가이드: APIError 발생 시 서비스 계정 이메일을 즉시 확인 가능하도록 노출
-## 4. 📱 모바일 최적화: 타이틀 크기 및 차트 고정 설정(Static Mode) 유지
+## 1. 🔄 내비게이션 완벽 동기화: 대시보드 프로젝트 버튼 클릭 시 사이드바 메뉴 선택과 동일하게 작동하도록 로직 개선
+## 2. 🔑 다중 계정 및 보안: admin, lec, park, seo, yoon 계정 및 로그아웃 기능 유지
+## 3. 📱 모바일 최적화: 타이틀 크기 최적화 및 차트 고정(Static Mode) 설정 유지
+## 4. 🛡️ 에러 핸들링: 구글 시트 접근 권한 문제 시 상세 가이드 노출 로직 유지
 
 import streamlit as st
 import pandas as pd
@@ -15,7 +15,7 @@ import time
 import plotly.express as px
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v0.7.5", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v0.7.6", page_icon="🏗️", layout="wide")
 
 # --- [UI] 모바일 대응 커스텀 CSS ---
 st.markdown("""
@@ -76,10 +76,13 @@ def check_password():
                 st.error("아이디 또는 비밀번호가 일치하지 않습니다.")
     return False
 
-# 로그아웃 함수
 def logout():
     st.session_state["password_correct"] = False
     st.session_state["user_id"] = None
+    # 메뉴 상태도 초기화
+    st.session_state["selected_menu"] = "🏠 전체 대시보드"
+    if "nav_menu" in st.session_state:
+        del st.session_state["nav_menu"]
     st.rerun()
 
 if not check_password():
@@ -104,10 +107,8 @@ client = get_client()
 
 if client:
     try:
-        # 구글 시트 열기
         sh = client.open('pms_db')
         
-        # 프로젝트 리스트 추출
         forbidden = ['weekly_history', 'conflict', 'Sheet1']
         all_ws = [ws for ws in sh.worksheets() if not any(k in ws.title for k in forbidden)]
         pjt_names = [s.title for s in all_ws]
@@ -126,13 +127,19 @@ if client:
         st.sidebar.write(f"👤 접속자: **{st.session_state['user_id']}** 님")
         
         menu = ["🏠 전체 대시보드"] + pjt_names
+        
         if st.session_state["selected_menu"] not in menu:
             st.session_state["selected_menu"] = "🏠 전체 대시보드"
             
-        selected = st.sidebar.selectbox("🎯 메뉴 선택", menu, index=menu.index(st.session_state["selected_menu"]), key="nav_menu")
+        # 사이드바 셀렉트박스 (key="nav_menu"로 상태 관리)
+        selected = st.sidebar.selectbox(
+            "🎯 메뉴 선택", 
+            menu, 
+            index=menu.index(st.session_state["selected_menu"]), 
+            key="nav_menu"
+        )
         st.session_state["selected_menu"] = selected
 
-        # 사이드바 추가 기능
         with st.sidebar.expander("➕ 프로젝트 추가"):
             new_name = st.text_input("새 프로젝트 명칭")
             if st.button("시트 생성"):
@@ -177,9 +184,12 @@ if client:
                 st.divider()
                 for idx, row in enumerate(summary):
                     with st.container():
+                        # [사용자 요청] 대시보드 버튼 클릭 시 사이드바 메뉴 선택과 동일하게 작동
                         if st.button(f"📂 {row['프로젝트명']}", key=f"btn_{idx}", use_container_width=True):
+                            # 세션 상태 및 사이드바 위젯 키를 동시에 업데이트
                             st.session_state["selected_menu"] = row['프로젝트명']
-                            st.rerun()
+                            st.session_state["nav_menu"] = row['프로젝트명']
+                            st.rerun() # 즉시 해당 상세 페이지로 이동
                         
                         c1, c2 = st.columns([4, 6])
                         c1.markdown(f"**진척률: {row['진척률']}%**")
@@ -269,7 +279,6 @@ if client:
                                 st.write(hr['주요현황'])
                                 
     except Exception as e:
-        # 권한 에러 처리 (제공해주신 이메일 정보를 바탕으로 안내)
         st.error("🚨 구글 시트('pms_db')를 열 수 없습니다.")
         st.info(f"""
         **해결 방법:**
