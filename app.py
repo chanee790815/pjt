@@ -165,4 +165,5 @@ if client:
                     u_pct = st.number_input("진행률 변경", 0, 100, int(row['진행률']))
                     u_note = st.text_area("비고 수정", value=row['비고'])
                     if st.form_submit_button("업데이트 완료"):
-                        ws.update(f"E
+                        ws.update(f"E{idx+2}:G{idx+2}", [[u_stat, u_note, u_pct]])
+                        st.success("수정되었습니다."); time.sleep(1); st.rerun()
