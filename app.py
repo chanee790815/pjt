@@ -1,9 +1,9 @@
 ## [PMS Revision History]
-## 버전: Rev. 0.4
+## 버전: Rev. 0.4.1 (신규 추가 기능 안정화)
 ## 업데이트 요약:
-## 1. ➕ 프로젝트 신규 추가 기능: 사이드바에서 새 프로젝트 시트 즉시 생성
-## 2. 주간 현황 동기화: 메인 대시보드와 개별 프로젝트 현황 업데이트 로직 최적화
-## 3. 안정성: 시트가 비어있거나 생성 직후 데이터가 없을 때의 예외 처리 강화
+## 1. 프로젝트 신규 추가 기능 복구 및 사이드바 배치
+## 2. 데이터 취합 안정성 강화: 빈 시트가 있어도 대시보드 오류 없이 작동
+## 3. 삭제 기능 유지: 주간 현황 관리 탭 하단에서 프로젝트 삭제 가능
 
 import streamlit as st
 import pandas as pd
@@ -14,12 +14,14 @@ import time
 import plotly.express as px
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v0.4", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v0.4.1", page_icon="🏗️", layout="wide")
 
 # --- 구글 시트 연결 함수 ---
 @st.cache_resource
 def get_client():
     try:
+        if "gcp_service_account" not in st.secrets:
+            return None
         key_dict = dict(st.secrets["gcp_service_account"])
         if "private_key" in key_dict:
             key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
@@ -27,131 +29,131 @@ def get_client():
         creds = Credentials.from_service_account_info(key_dict, scopes=scopes)
         return gspread.authorize(creds)
     except Exception as e:
-        st.error(f"🚨 구글 인증 실패: {e}"); return None
+        st.error(f"🚨 인증 오류: {e}")
+        return None
 
-# --- [기능] 새 프로젝트(시트) 생성 ---
+# --- [기능] 프로젝트 추가/삭제 로직 ---
 def create_new_project(sh, name):
     try:
-        existing_sheets = [s.title for s in sh.worksheets()]
-        if name in existing_sheets: return False, "이미 존재하는 이름입니다."
-        # 새 시트 생성 및 표준 헤더 입력
+        if name in [s.title for s in sh.worksheets()]: return False, "이미 존재하는 프로젝트명입니다."
         ws = sh.add_worksheet(title=name, rows="100", cols="20")
         ws.append_row(["시작일", "종료일", "대분류", "구분", "진행상태", "비고", "진행률", "담당자"])
         return True, "성공"
     except Exception as e: return False, str(e)
 
-# --- 메인 로직 시작 ---
+# --- 메인 실행 로직 ---
 client = get_client()
 if client:
-    sh = client.open('pms_db')
-    all_ws = sh.worksheets()
-    pjt_list = [s.title for s in all_ws]
-    
-    # [사이드바]
-    st.sidebar.title("📁 PMO 프로젝트 센터")
-    
-    # 1. 프로젝트 선택 메뉴
-    menu_options = ["🏠 전체 대시보드"] + pjt_list
-    selected_pjt = st.sidebar.selectbox("🎯 메뉴 선택", menu_options)
-    
-    st.sidebar.divider()
-
-    # 2. [핵심 추가] 프로젝트 신규 추가 기능
-    with st.sidebar.expander("➕ 프로젝트 신규 추가", expanded=False):
-        new_pjt_name = st.text_input("신규 프로젝트명 입력", placeholder="예: 당진 솔라 PJT")
-        if st.button("신규 프로젝트 생성"):
-            if new_pjt_name:
-                with st.spinner("구글 시트 생성 중..."):
-                    ok, msg = create_new_project(sh, new_pjt_name)
-                    if ok:
-                        st.success(f"'{new_pjt_name}' 생성 완료!")
-                        time.sleep(1)
-                        st.rerun()
-                    else: st.error(msg)
-            else: st.warning("이름을 입력해 주세요.")
-
-    st.sidebar.divider()
-    st.sidebar.info(f"접속 중: **{selected_pjt}**")
-
-    # ---------------------------------------------------------
-    # CASE 1: 전체 대시보드
-    # ---------------------------------------------------------
-    if selected_pjt == "🏠 전체 대시보드":
-        st.title("📊 프로젝트 통합 대시보드")
-        summary_list = []
+    try:
+        sh = client.open('pms_db')
+        all_sheets = sh.worksheets()
+        pjt_names = [s.title for s in all_sheets]
         
-        for ws in all_ws:
-            try:
-                data = ws.get_all_records()
-                df = pd.DataFrame(data)
-                p_name = ws.title
-                prog = 0
-                note = "현황 없음"
-                
-                if not df.empty:
-                    if '진행률' in df.columns:
-                        df['진행률'] = pd.to_numeric(df['진행률'], errors='coerce').fillna(0)
-                        prog = round(df['진행률'].mean(), 1)
-                    if '비고' in df.columns and len(df) > 0:
-                        note = df.iloc[0]['비고'] if df.iloc[0]['비고'] else "업데이트 예정"
-                
-                summary_list.append({"프로젝트명": p_name, "진척률(%)": prog, "주간 주요 현황": note})
-            except: continue
+        # [사이드바]
+        st.sidebar.title("📁 PMO 프로젝트 센터")
+        menu = ["🏠 전체 대시보드"] + pjt_names
+        selected = st.sidebar.selectbox("🎯 메뉴 선택", menu)
+        
+        st.sidebar.divider()
 
-        if summary_list:
-            sum_df = pd.DataFrame(summary_list)
-            m1, m2 = st.columns(2)
-            m1.metric("총 프로젝트", f"{len(pjt_list)}개")
-            m2.metric("평균 진척률", f"{round(sum_df['진척률(%)'].mean(), 1)}%")
+        # [신규 추가 기능]
+        with st.sidebar.expander("➕ 프로젝트 신규 추가"):
+            new_pjt = st.text_input("새 프로젝트명", key="add_pjt")
+            if st.button("시트 생성"):
+                if new_pjt:
+                    ok, msg = create_new_project(sh, new_pjt)
+                    if ok:
+                        st.success("생성 완료!"); time.sleep(1); st.rerun()
+                    else: st.error(msg)
+        
+        st.sidebar.divider()
+        st.sidebar.info(f"접속 중: **{selected}**")
+
+        # ---------------------------------------------------------
+        # CASE 1: 전체 대시보드 (안정성 최우선)
+        # ---------------------------------------------------------
+        if selected == "🏠 전체 대시보드":
+            st.title("📊 프로젝트 통합 대시보드")
+            summary_list = []
             
-            st.subheader("📋 프로젝트별 주간 브리핑")
-            st.dataframe(sum_df, use_container_width=True, hide_index=True)
-            st.plotly_chart(px.bar(sum_df, x="프로젝트명", y="진척률(%)", color="진척률(%)", text_auto=True), use_container_width=True)
+            with st.spinner('데이터를 집계 중입니다...'):
+                for ws in all_sheets:
+                    try:
+                        data = ws.get_all_records()
+                        temp_df = pd.DataFrame(data)
+                        p_name = ws.title
+                        prog, note, count = 0, "현황 없음", 0
+                        
+                        if not temp_df.empty:
+                            if '진행률' in temp_df.columns:
+                                temp_df['진행률'] = pd.to_numeric(temp_df['진행률'], errors='coerce').fillna(0)
+                                prog = round(temp_df['진행률'].mean(), 1)
+                            if '비고' in temp_df.columns:
+                                note = temp_df.iloc[0]['비고'] if temp_df.iloc[0]['비고'] else "업데이트 예정"
+                            count = len(temp_df)
+                            
+                        summary_list.append({"프로젝트명": p_name, "진척률(%)": prog, "주간 주요 현황": note, "공정수": count})
+                    except: continue
 
-    # ---------------------------------------------------------
-    # CASE 2: 개별 프로젝트 상세 관리
-    # ---------------------------------------------------------
-    else:
-        ws = sh.worksheet(selected_pjt)
-        df_raw = pd.DataFrame(ws.get_all_records())
-        st.title(f"🏗️ {selected_pjt} 상세 관리")
-
-        tab1, tab2, tab3 = st.tabs(["📊 통합 공정표", "📝 일정 등록", "⚙️ 주간 현황 및 수정"])
-
-        with tab1:
-            if not df_raw.empty:
-                df = df_raw.copy()
-                df['시작일'] = pd.to_datetime(df['시작일'], errors='coerce')
-                df['종료일'] = pd.to_datetime(df['종료일'], errors='coerce')
-                
-                # 차트 출력
-                chart_df = df[df['대분류'] != 'MILESTONE'].dropna(subset=['시작일', '종료일'])
-                if not chart_df.empty:
-                    st.plotly_chart(px.timeline(chart_df, x_start="시작일", x_end="종료일", y="구분", color="진행상태"), use_container_width=True)
-                st.dataframe(df_raw, use_container_width=True)
-            else:
-                st.info("💡 등록된 데이터가 없습니다. 일정 등록을 먼저 진행해 주세요.")
-
-        with tab2:
-            st.subheader("📝 신규 일정 등록")
-            with st.form("in_form"):
+            if summary_list:
+                sum_df = pd.DataFrame(summary_list)
                 c1, c2, c3 = st.columns(3)
-                sd = c1.date_input("시작일", datetime.date.today())
-                ed = c2.date_input("종료일", datetime.date.today() + datetime.timedelta(days=30))
-                cat = c3.selectbox("대분류", ["인허가", "설계", "토목공사", "전기공사", "MILESTONE"])
-                name = st.text_input("공정명")
-                stat = st.selectbox("상태", ["예정", "진행중", "완료", "지연"])
-                pct = st.number_input("진행률(%)", 0, 100, 0)
-                note = st.text_area("비고")
-                if st.form_submit_button("저장하기"):
-                    ws.append_row([str(sd), str(ed), cat, name, stat, note, pct, "PM팀"])
-                    st.success("저장 완료!"); time.sleep(1); st.rerun()
+                c1.metric("총 프로젝트", f"{len(pjt_names)}개")
+                c2.metric("평균 진척률", f"{round(sum_df['진척률(%)'].mean(), 1)}%")
+                c3.metric("최고 진척", sum_df.loc[sum_df['진척률(%)'].idxmax(), '프로젝트명'])
+                
+                st.divider()
+                st.subheader("📋 프로젝트별 주간 브리핑")
+                st.dataframe(sum_df[["프로젝트명", "진척률(%)", "주간 주요 현황"]], use_container_width=True, hide_index=True)
+                st.plotly_chart(px.bar(sum_df, x="프로젝트명", y="진척률(%)", color="진척률(%)", text_auto=True), use_container_width=True)
+            else:
+                st.info("데이터가 없습니다.")
 
-        with tab3:
-            st.subheader("📢 주간 현황 업데이트")
-            curr_note = df_raw.iloc[0]['비고'] if not df_raw.empty and '비고' in df_raw.columns else ""
-            with st.form("weekly_up"):
-                new_note = st.text_input("메인 장표용 주간 이슈", value=curr_note)
-                if st.form_submit_button("현황 반영"):
-                    ws.update_acell("F2", new_note)
-                    st.success("반영되었습니다!"); time.sleep(1); st.rerun()
+        # ---------------------------------------------------------
+        # CASE 2: 개별 프로젝트 관리
+        # ---------------------------------------------------------
+        else:
+            target_ws = sh.worksheet(selected)
+            df_raw = pd.DataFrame(target_ws.get_all_records())
+            st.title(f"🏗️ {selected}")
+            t1, t2, t3 = st.tabs(["📊 공정표", "📝 일정 등록", "⚙️ 현황 관리"])
+            
+            with t1:
+                if not df_raw.empty:
+                    df = df_raw.copy()
+                    df['시작일'] = pd.to_datetime(df['시작일'], errors='coerce')
+                    df['종료일'] = pd.to_datetime(df['종료일'], errors='coerce')
+                    chart_df = df[df['대분류'] != 'MILESTONE'].dropna(subset=['시작일', '종료일'])
+                    if not chart_df.empty:
+                        st.plotly_chart(px.timeline(chart_df, x_start="시작일", x_end="종료일", y="구분", color="진행상태"), use_container_width=True)
+                    st.dataframe(df_raw, use_container_width=True)
+                else:
+                    st.info("💡 등록된 공정이 없습니다. 일정 등록을 먼저 진행해 주세요.")
+
+            with t2:
+                with st.form("reg_form"):
+                    c1,c2,c3 = st.columns(3)
+                    sd=c1.date_input("시작일"); ed=c2.date_input("종료일"); cat=c3.selectbox("대분류", ["인허가", "설계", "토목공사", "전기공사", "MILESTONE"])
+                    name=st.text_input("공정명"); stat=st.selectbox("상태", ["예정","진행중","완료","지연"]); pct=st.number_input("진행률(%)",0,100,0); note=st.text_area("비고")
+                    if st.form_submit_button("저장하기"):
+                        target_ws.append_row([str(sd), str(ed), cat, name, stat, note, pct, "PM팀"])
+                        st.success("저장 완료!"); time.sleep(1); st.rerun()
+
+            with t3:
+                st.subheader("📢 주간 현황 업데이트")
+                curr = df_raw.iloc[0]['비고'] if not df_raw.empty and '비고' in df_raw.columns else ""
+                with st.form("week_form"):
+                    new_txt = st.text_input("메인 장표용 주간 이슈", value=curr)
+                    if st.form_submit_button("반영하기"):
+                        target_ws.update_acell("F2", new_txt)
+                        st.success("업데이트 완료!"); time.sleep(1); st.rerun()
+                
+                st.divider()
+                if st.button("🗑️ 이 프로젝트 시트 삭제"):
+                    if len(all_sheets) > 1:
+                        sh.del_worksheet(target_ws)
+                        st.warning("삭제되었습니다."); time.sleep(1); st.rerun()
+                    else: st.error("마지막 시트는 삭제할 수 없습니다.")
+
+    except Exception as e:
+        st.error(f"데이터 로드 중 오류 발생: {e}")
