@@ -8,7 +8,7 @@ import time
 import plotly.express as px
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v1.0.3", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v1.0.4", page_icon="🏗️", layout="wide")
 
 # --- [UI] 디자인 및 저작권 문구 ---
 st.markdown("""
@@ -17,13 +17,12 @@ st.markdown("""
     html, body, [class*="css"] { font-family: 'Pretendard', sans-serif; }
     section[data-testid="stSidebar"] { background-color: #f8f9fa; border-right: 1px solid #eee; }
     .footer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: #f1f1f1; color: #555; text-align: center; padding: 5px; font-size: 11px; z-index: 100; }
-    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; border: 1px solid #e0e0e0; }
     </style>
     <div class="footer">출처: 기상청 공공데이터포털 (ASOS 종관기상관측) | 본 데이터는 기상청에서 제공하는 공공데이터를 활용하였습니다.</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# [SECTION 1] 백엔드 로직
+# [SECTION 1] 백엔드 및 API 수집 로직
 # ---------------------------------------------------------
 
 def check_password():
@@ -49,85 +48,92 @@ def get_client():
     creds = Credentials.from_service_account_info(key_dict, scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
     return gspread.authorize(creds)
 
+def record_solar_batch_2020(sh, stn_id, stn_name):
+    """2020년부터 현재까지의 일자료를 수집하여 Solar_DB에 저장"""
+    try:
+        db_ws = sh.worksheet('Solar_DB')
+        SERVICE_KEY = 'ba10959184b37d5a2f94b2fe97ecb2f96589f7d8724ba17f85fdbc22d47fb7fe'
+        
+        # 2020년 1월 1일부터 어제까지 설정
+        start_dt = "20200101"
+        end_dt = (datetime.date.today() - datetime.timedelta(days=1)).strftime("%Y%m%d")
+        
+        # 기상청 일자료 조회 (최대 3000개 행 호출 - 5~6년치 커버)
+        url = f'http://apis.data.go.kr/1360000/AsosDalyInfoService/getWthrDataList?serviceKey={SERVICE_KEY}&numOfRows=3000&pageNo=1&dataType=JSON&dataCd=ASOS&dateCd=DAY&stnIds={stn_id}&startDt={start_dt}&endDt={end_dt}'
+        
+        res = requests.get(url).json()
+        items = res['response']['body']['items']['item']
+        
+        new_rows = []
+        for i in items:
+            icsr = float(i['sumIcsr']) if i.get('sumIcsr') else 0
+            gen_h = round(icsr / 3.6, 2)
+            new_rows.append([i['tm'], stn_name, gen_h, icsr])
+        
+        if new_rows:
+            db_ws.clear()
+            db_ws.append_row(["날짜", "지점", "발전시간", "일사량합계"])
+            db_ws.append_rows(new_rows)
+            return len(new_rows)
+    except: return 0
+
 # ---------------------------------------------------------
-# [SECTION 2] 일 발전량 조회 분석 화면 (핵심 업데이트)
+# [SECTION 2] 일 발전량 조회 분석 화면 (2020~ 조회 가능)
 # ---------------------------------------------------------
 
 def show_daily_solar(sh):
-    st.title("📅 일 발전량 연간 통계 분석")
+    st.title("📅 연도별 일 발전량 통계 (2020~)")
     
+    with st.expander("📥 과거 데이터 전체 동기화 (2020년~현재)"):
+        st.info("2020년부터의 데이터를 기상청 일자료 API로 일괄 수집합니다.")
+        stn = st.selectbox("수집 지점", [127, 108, 131, 159], format_func=lambda x: {127:"충주", 108:"서울", 131:"청주", 159:"부산"}[x])
+        if st.button("🚀 전체 데이터 동기화 시작"):
+            with st.spinner('동기화 중...'):
+                count = record_solar_batch_2020(sh, stn, {127:"충주", 108:"서울", 131:"청주", 159:"부산"}[stn])
+                if count > 0: st.success(f"✅ {count}일치 데이터 수집 완료!"); st.rerun()
+
     try:
-        # DB 로드
-        ws = sh.worksheet('Solar_DB')
-        df = pd.DataFrame(ws.get_all_records())
-        
+        df = pd.DataFrame(sh.worksheet('Solar_DB').get_all_records())
         if df.empty:
-            st.warning("수집된 데이터가 없습니다. 먼저 데이터를 동기화해주세요.")
+            st.warning("데이터가 없습니다. 위 동기화 버튼을 눌러주세요.")
             return
 
-        # 날짜 전처리
         df['날짜'] = pd.to_datetime(df['날짜'])
         df['연도'] = df['날짜'].dt.year
         df['월'] = df['날짜'].dt.month
         
-        # 1. 연도 선택 (화면 상단)
+        # 연도 선택 필터 (2020~2026)
         available_years = sorted(df['연도'].unique(), reverse=True)
-        sel_year = st.selectbox("📊 분석할 연도를 선택하세요", available_years)
+        sel_year = st.selectbox("📊 분석 연도 선택", available_years)
         
-        # 데이터 필터링 (선택한 연도)
         y_df = df[df['연도'] == sel_year]
-        
-        st.markdown("---")
-
-        # 2. 연간 평균 발전시간 표기 (상단 요약창)
         yearly_avg = round(y_df['발전시간'].mean(), 2)
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.metric(label=f"⭐ {sel_year}년 일 평균 발전시간", value=f"{yearly_avg} h")
-        with c2:
-            max_val = y_df['발전시간'].max()
-            st.metric(label="최대 발전시간 (일)", value=f"{max_val} h")
-        with c3:
-            total_days = len(y_df)
-            st.metric(label="데이터 분석 일수", value=f"{total_days} 일")
-
-        # 3. 월별 평균 발전시간 그래프 (하단)
-        m_avg = y_df.groupby('월')['발전시간'].mean().reset_index()
         
-        # 1월~12월 모든 달이 나오도록 보정
+        st.metric(label=f"✨ {sel_year}년 일 평균 발전시간", value=f"{yearly_avg} h")
+        
+        m_avg = y_df.groupby('월')['발전시간'].mean().reset_index()
         all_months = pd.DataFrame({'월': range(1, 13)})
         m_avg = pd.merge(all_months, m_avg, on='월', how='left').fillna(0)
         
-        st.subheader(f"📈 {sel_year}년 월별 평균 발전시간 추이")
-        fig = px.bar(m_avg, x='월', y='발전시간', 
-                     text_auto='.2f',
-                     labels={'발전시간': '평균 시간(h)', '월': '조회 월'},
-                     color='발전시간',
-                     color_continuous_scale='YlOrRd') # 발전량에 따른 색상 변화
-        
-        fig.update_layout(
-            xaxis=dict(tickmode='linear', tick0=1, dtick=1),
-            plot_bgcolor='rgba(0,0,0,0)',
-            height=500
-        )
-        st.plotly_chart(fig, use_container_width=True)
-
-        # 4. 하단 월별 데이터 표 추가
-        with st.expander("📋 월별 평균 데이터 수치 확인"):
-            m_avg.columns = ['월', '평균 발전시간(h)']
-            st.table(m_avg.set_index('월').T)
-
-    except Exception as e:
-        st.error(f"데이터 조회 중 오류 발생: {e}")
+        st.plotly_chart(px.bar(m_avg, x='월', y='발전시간', text_auto='.2f', title=f"{sel_year}년 월별 평균 발전시간", color_discrete_sequence=['#f1c40f']))
+        with st.expander("📝 상세 데이터 보기"):
+            st.dataframe(y_df.sort_values('날짜', ascending=False), use_container_width=True)
+    except: st.info("데이터를 동기화해 주세요.")
 
 # ---------------------------------------------------------
-# [SECTION 3] 메인 컨트롤러 및 메뉴 (기존 기능 유지)
+# [SECTION 3] 메인 컨트롤러 및 메뉴 구성
 # ---------------------------------------------------------
 
 def show_home(sh, pjt_list):
-    st.title("📊 프로젝트 통합 대시보드")
-    # ... (생략: 기존 v1.0.2와 동일한 대시보드 로직)
-    st.write(f"현재 관리 중인 {len(pjt_list)}개 현장의 최신 상태입니다.")
+    st.title("📊 통합 대시보드")
+    try:
+        hist_df = pd.DataFrame(sh.worksheet('weekly_history').get_all_records())
+        for p in pjt_list:
+            p_df = pd.DataFrame(sh.worksheet(p).get_all_records())
+            prog = round(pd.to_numeric(p_df['진행률'], errors='coerce').mean(), 1) if '진행률' in p_df.columns else 0
+            note = hist_df[hist_df['프로젝트명']==p].tail(1).iloc[0]['주요현황'] if not hist_df[hist_df['프로젝트명']==p].empty else "최신 기록 없음"
+            st.info(f"**{p}** (진척률: {prog}%) \n\n {note}")
+    except: st.write("진행 중인 프로젝트를 로드 중입니다.")
 
 if check_password():
     client = get_client(); sh = client.open('pms_db')
@@ -165,13 +171,12 @@ if check_password():
         for k in list(st.session_state.keys()): del st.session_state[k]
         st.rerun()
 
-    # 페이지 라우팅
     pg = st.session_state["page"]
     if pg == "home": show_home(sh, pjt_list)
     elif pg == "solar_day": show_daily_solar(sh)
     elif pg == "solar_hr":
         st.title("⏱️ 시간별 발전량 조회")
-        st.info("당일 시간대별 정밀 분석 화면입니다.")
+        st.info("당일 및 특정일의 정밀 시간대별 분석 화면입니다.")
     elif pg == "kpi":
         st.title("📉 경영지표 (KPI)")
         try: st.dataframe(pd.DataFrame(sh.worksheet('KPI').get_all_records()), use_container_width=True)
