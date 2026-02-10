@@ -1,11 +1,3 @@
-## [PMS Revision History]
-## 버전: Rev. 0.9.1 (Professional Construction Gantt Style)
-## 업데이트 요약:
-## 1. 🏗️ 공정표 양식 혁신: 사용자 요청 이미지(image_b01abc.png)를 반영하여 [대분류 | 작업내용 | 기간] 결합형 Y축 표 구현
-## 2. 📏 그리드 디자인: 배경 격자선을 강화하여 전통적인 건설 현장 공정표 느낌 극대화
-## 3. ⏱️ 작업 일수 산출: 시작/종료일 데이터를 기반으로 소요 기간(Days)을 자동 계산하여 표에 노출
-## 4. 🎯 KPI 독립 유지: 사이드바 하단 전용 링크를 통한 경영지표 관리 기능 및 모듈화 구조 유지
-
 import streamlit as st
 import pandas as pd
 import datetime
@@ -14,9 +6,10 @@ from google.oauth2.service_account import Credentials
 import time
 import plotly.express as px
 import plotly.graph_objects as go
+import requests
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v0.9.1", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v0.9.2", page_icon="🏗️", layout="wide")
 
 # --- [UI] 디자인 커스텀 CSS ---
 st.markdown("""
@@ -37,15 +30,14 @@ st.markdown("""
         font-weight: 500;
     }
     
-    /* KPI 전용 버튼 강조 (사이드바 하단) */
-    div.stButton > button[key="kpi_nav_link"] {
+    /* KPI 및 태양광 전용 버튼 강조 (사이드바 하단) */
+    div.stButton > button[key="kpi_nav_link"], div.stButton > button[key="solar_nav_link"] {
         border: 2px solid #ff4b4b !important;
         color: #ff4b4b !important;
         font-weight: 700 !important;
-        margin-top: 10px !important;
+        margin-top: 5px !important;
     }
     
-    /* 탭 디자인 슬림화 */
     .stTabs [data-baseweb="tab-list"] { gap: 10px; }
     .stTabs [data-baseweb="tab"] {
         padding: 8px 16px;
@@ -152,7 +144,6 @@ def get_ws_data(_client_email, pjt_name):
 # ---------------------------------------------------------
 
 def show_dashboard(summary_list):
-    """통합 대시보드 페이지"""
     st.title("📊 프로젝트 통합 대시보드")
     if not summary_list:
         st.warning("현재 진행 중인 프로젝트 데이터가 없습니다.")
@@ -173,10 +164,71 @@ def show_dashboard(summary_list):
     st.divider()
     sum_df = pd.DataFrame(summary_list)
     fig_main = px.bar(sum_df, x="프로젝트명", y="진척률", color="진척률", text_auto=True, title="프로젝트별 실시간 진도율")
-    st.plotly_chart(fig_main, use_container_width=True, config={'staticPlot': True})
+    st.plotly_chart(fig_main, use_container_width=True)
+
+def show_solar_analysis():
+    """태양광 발전시간 실시간 분석 페이지 (Rev 0.9.2)"""
+    st.title("☀️ 태양광 발전 환경 분석 (기상청 API 연동)")
+    
+    # 발급받으신 인증키 적용
+    SERVICE_KEY = 'ba10959184b37d5a2f94b2fe97ecb2f96589f7d8724ba17f85fdbc22d47fb7fe'
+    
+    col1, col2 = st.columns(2)
+    # 기본 조회 날짜를 어제로 설정 (실측 데이터 보정 시간 고려)
+    target_date = col1.date_input("조회 날짜 선택", datetime.date.today() - datetime.timedelta(days=1))
+    # 적서리 프로젝트 인근 충주(127) 지점을 기본값으로 추천
+    stn_id = col2.selectbox("관측 지점 선택", [127, 108, 131, 159], 
+                            format_func=lambda x: {127:"충주 (적서리 인근)", 108:"서울", 131:"청주", 159:"부산"}[x])
+
+    if st.button("실시간 일사량 데이터 불러오기"):
+        with st.spinner('기상청 API 통신 중...'):
+            date_str = target_date.strftime("%Y%m%d")
+            url = 'http://apis.data.go.kr/1360000/AsosHourlyInfoService/getWthrDataList'
+            params = {
+                'serviceKey': SERVICE_KEY,
+                'pageNo': '1', 'numOfRows': '24', 'dataType': 'JSON',
+                'dataCd': 'ASOS', 'dateCd': 'HR', 'stnIds': str(stn_id),
+                'startDt': date_str, 'startHh': '01', 'endDt': date_str, 'endHh': '23'
+            }
+            
+            try:
+                res = requests.get(url, params=params)
+                json_data = res.json()
+                
+                if json_data['response']['header']['resultCode'] == '00':
+                    items = json_data['response']['body']['items']['item']
+                    df_solar = pd.DataFrame(items)
+                    
+                    # 수치형 변환 및 전처리
+                    df_solar['icsr'] = pd.to_numeric(df_solar['icsr'], errors='coerce').fillna(0)
+                    df_solar['hour'] = pd.to_datetime(df_solar['tm']).dt.hour
+                    
+                    # 발전시간 계산 로직: 누적 일사량(MJ) / 3.6 = 발전시간(h)
+                    total_mj = df_solar['icsr'].sum()
+                    gen_hours = round(total_mj / 3.6, 2)
+                    
+                    # 대시보드 메트릭 표시
+                    m1, m2, m3 = st.columns(3)
+                    m1.metric("총 누적 일사량", f"{round(total_mj, 2)} MJ/㎡")
+                    m2.metric("☀️ 실측 발전시간", f"{gen_hours} h", help="누적 일사량 / 3.6")
+                    m3.metric("최대 일사 시점", f"{df_solar.loc[df_solar['icsr'].idxmax(), 'hour']}시")
+
+                    # 시간대별 일사량 그래프
+                    fig_solar = px.area(df_solar, x='hour', y='icsr', 
+                                        title=f"📅 {target_date} 지점별 일사량 추이",
+                                        labels={'hour': '시간(시)', 'icsr': '일사량(MJ/㎡)'},
+                                        color_discrete_sequence=['#f1c40f'])
+                    fig_solar.update_layout(plot_bgcolor='white', xaxis=dict(showgrid=True, gridcolor='#eee'))
+                    st.plotly_chart(fig_solar, use_container_width=True)
+                    
+                    with st.expander("API 원본 데이터 확인"):
+                        st.dataframe(df_solar[['tm', 'icsr', 'ts', 'rn']])
+                else:
+                    st.error(f"API 응답 에러: {json_data['response']['header']['resultMsg']}")
+            except Exception as e:
+                st.error(f"데이터 연동 실패: {e}")
 
 def show_kpi_page(kpi_df):
-    """경영지표(KPI) 페이지"""
     st.title("📈 PM팀 경영지표 (KPI)")
     if kpi_df.empty:
         st.error("구글 시트의 'KPI' 데이터를 읽어올 수 없습니다.")
@@ -200,15 +252,14 @@ def show_kpi_page(kpi_df):
     with chart_col1:
         if 'KPI 항목' in kpi_df.columns and '가중치(%)' in kpi_df.columns:
             fig_pie = px.pie(kpi_df, values='가중치(%)', names='KPI 항목', hole=.4, title="항목별 성과 비중")
-            st.plotly_chart(fig_pie, use_container_width=True, config={'staticPlot': True})
+            st.plotly_chart(fig_pie, use_container_width=True)
     with chart_col2:
         if 'KPI 항목' in kpi_df.columns and '달성률(%)' in kpi_df.columns:
             kpi_df['v'] = pd.to_numeric(kpi_df['달성률(%)'].astype(str).str.replace('%',''), errors='coerce').fillna(0)
             fig_bar = px.bar(kpi_df, x='KPI 항목', y='v', text_auto=True, title="목표 달성률(%)", color='v', color_continuous_scale='RdYlGn')
-            st.plotly_chart(fig_bar, use_container_width=True, config={'staticPlot': True})
+            st.plotly_chart(fig_bar, use_container_width=True)
 
 def show_project_detail(p_name, sh, full_hist_data):
-    """개별 프로젝트 상세 관리 페이지 (Professional Gantt Style)"""
     data_all = get_ws_data(st.secrets["gcp_service_account"]["client_email"], p_name)
     df_raw = pd.DataFrame(data_all) if data_all else pd.DataFrame(columns=["시작일", "종료일", "대분류", "구분", "진행상태", "비고", "진행률", "담당자"])
     
@@ -218,54 +269,28 @@ def show_project_detail(p_name, sh, full_hist_data):
     with t1:
         if not df_raw.empty and '시작일' in df_raw.columns:
             df = df_raw.copy()
-            # 날짜 형식 변환
             df['시작일'] = pd.to_datetime(df['시작일'], errors='coerce')
             df['종료일'] = pd.to_datetime(df['종료일'], errors='coerce')
             df = df.dropna(subset=['시작일', '종료일'])
             
-            # 기간(Day) 계산 및 표식용 문자열 생성 (image_b01abc 스타일)
             df['기간'] = (df['종료일'] - df['시작일']).dt.days + 1
-            # Y축을 [대분류 | 공정명 | 기간] 형태로 결합 (표 느낌)
             df['label'] = df.apply(lambda r: f"{r['대분류']} | {r['구분']} ({r['기간']}일)", axis=1)
-            df = df.sort_values(by='시작일', ascending=False) # 최신순 정렬
+            df = df.sort_values(by='시작일', ascending=False)
 
-            # 🏗️ 건설 현장형 Gantt 차트 구현
             fig = px.timeline(
-                df, 
-                x_start="시작일", 
-                x_end="종료일", 
-                y="label", 
-                color="진행상태",
+                df, x_start="시작일", x_end="종료일", y="label", color="진행상태",
                 color_discrete_map={"완료": "#2c3e50", "진행중": "#3498db", "예정": "#bdc3c7", "지연": "#e74c3c"},
                 hover_data=["진행률"]
             )
             
-            # 레이아웃 조정 (그리드 및 배경 스타일링)
             fig.update_layout(
-                plot_bgcolor='white',
-                paper_bgcolor='white',
-                xaxis=dict(
-                    showgrid=True, 
-                    gridcolor='#e9ecef', 
-                    tickformat="%m/%d",
-                    dtick="D7", # 주 단위 그리드
-                    side="top"
-                ),
-                yaxis=dict(
-                    showgrid=True, 
-                    gridcolor='#f1f3f5',
-                    title="",
-                    tickfont=dict(size=11)
-                ),
-                height=400 + (len(df) * 30), # 항목 수에 따라 높이 자동 조절
-                margin=dict(l=10, r=10, t=50, b=10),
+                plot_bgcolor='white', paper_bgcolor='white',
+                xaxis=dict(showgrid=True, gridcolor='#e9ecef', tickformat="%m/%d", dtick="D7", side="top"),
+                yaxis=dict(showgrid=True, gridcolor='#f1f3f5', title="", tickfont=dict(size=11)),
+                height=400 + (len(df) * 30), margin=dict(l=10, r=10, t=50, b=10),
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
             )
-            
-            # 바 두께 조정 및 텍스트 추가
-            fig.update_traces(marker_line_color='rgb(8,48,107)', marker_line_width=0.5, opacity=0.9)
-            
-            st.plotly_chart(fig, use_container_width=True, config={'staticPlot': True})
+            st.plotly_chart(fig, use_container_width=True)
             
             st.subheader("📋 공정 상세 리스트")
             st.dataframe(df_raw, use_container_width=True)
@@ -281,7 +306,7 @@ def show_project_detail(p_name, sh, full_hist_data):
                     if st.form_submit_button("반영"):
                         sh.worksheet(p_name).update(f"E{edit_idx+2}:G{edit_idx+2}", [[ns, nn, np]])
                         st.cache_data.clear(); st.toast("성공!"); time.sleep(0.5); st.rerun()
-        else: st.info("공정 데이터가 없습니다. 아래 '일정등록' 탭에서 첫 공정을 등록해 주세요.")
+        else: st.info("공정 데이터가 없습니다. '일정등록' 탭에서 첫 공정을 등록해 주세요.")
 
     with t2:
         st.subheader("📝 신규 공정 일정 등록")
@@ -294,7 +319,7 @@ def show_project_detail(p_name, sh, full_hist_data):
             pct = st.number_input("초기 진행률(%)", 0, 100, 0)
             if st.form_submit_button("공정표에 추가"):
                 sh.worksheet(p_name).append_row([str(sd), str(ed), cat, name, stat, "", pct, st.session_state['user_id']])
-                st.cache_data.clear(); st.success("공정이 성공적으로 등록되었습니다."); time.sleep(0.5); st.rerun()
+                st.cache_data.clear(); st.success("공정이 등록되었습니다."); time.sleep(0.5); st.rerun()
 
     with t3:
         st.subheader("📢 현장 이슈 및 주요 현황 업데이트")
@@ -303,7 +328,7 @@ def show_project_detail(p_name, sh, full_hist_data):
             if st.form_submit_button("현황 저장"):
                 ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
                 sh.worksheet('weekly_history').append_row([ts, p_name, txt, st.session_state['user_id']])
-                st.cache_data.clear(); st.success("주간 현황이 대시보드에 반영되었습니다."); time.sleep(0.5); st.rerun()
+                st.cache_data.clear(); st.success("주간 현황이 반영되었습니다."); time.sleep(0.5); st.rerun()
 
     with t4:
         st.subheader("📜 과거 기록 조회")
@@ -325,42 +350,39 @@ if check_password():
             with st.spinner('실시간 동기화 중...'):
                 pjt_names, summary_list, full_hist_data, kpi_df = fetch_dashboard_summary(sh.id, st.secrets["gcp_service_account"]["client_email"])
             
-            # --- 사이드바 네비게이션 엔진 ---
             if "selected_project" not in st.session_state:
                 st.session_state["selected_project"] = "🏠 전체 대시보드"
 
             st.sidebar.title("📁 PMO 프로젝트 센터")
-            st.sidebar.write(f"👤 접속자: **{st.session_state['user_id']}**")
+            st.sidebar.write(f"👤 접속자: **{st.session_state['user_id']} 이사님**")
             
             dropdown_opts = ["🏠 전체 대시보드"] + pjt_names
             curr_idx = dropdown_opts.index(st.session_state["selected_project"]) if st.session_state["selected_project"] in dropdown_opts else 0
             
             selected_menu = st.sidebar.selectbox("🎯 프로젝트 선택", dropdown_opts, index=curr_idx)
             
-            # 내비게이션 동기화 로직
-            if selected_menu != st.session_state["selected_project"] and selected_menu != "🏠 전체 대시보드":
+            if selected_menu != st.session_state["selected_project"] and selected_menu not in ["🎯 경영지표(KPI)", "☀️ 태양광 분석"]:
                 st.session_state["selected_project"] = selected_menu
                 st.rerun()
-            elif selected_menu == "🏠 전체 대시보드" and st.session_state["selected_project"] not in ["🏠 전체 대시보드", "🎯 경영지표(KPI)"]:
-                st.session_state["selected_project"] = "🏠 전체 대시보드"
-                st.rerun()
 
-            # 신규 프로젝트 생성
             with st.sidebar.expander("➕ 프로젝트 신규 생성"):
                 n_name = st.text_input("새 프로젝트 명칭")
                 if st.button("시트 생성"):
-                    if n_name and n_name not in pjt_names and n_name != "KPI":
+                    if n_name and n_name not in pjt_names:
                         sh.add_worksheet(title=n_name, rows="100", cols="20").append_row(["시작일", "종료일", "대분류", "구분", "진행상태", "비고", "진행률", "담당자"])
                         st.cache_data.clear(); st.success("생성 완료!"); time.sleep(1); st.rerun()
 
-            # [사용자 요청] KPI 독립 링크 버튼
             st.sidebar.markdown("---")
-            st.sidebar.subheader("💎 전사 관리")
+            st.sidebar.subheader("💎 전사 및 기상 관리")
             if st.sidebar.button("🎯 경영지표(KPI) 관리", key="kpi_nav_link", use_container_width=True):
                 st.session_state["selected_project"] = "🎯 경영지표(KPI)"
                 st.rerun()
+                
+            # [Rev 0.9.2 추가] 태양광 분석 버튼
+            if st.sidebar.button("☀️ 태양광 발전 분석", key="solar_nav_link", use_container_width=True):
+                st.session_state["selected_project"] = "☀️ 태양광 분석"
+                st.rerun()
 
-            # 하단 유틸리티
             st.sidebar.markdown("<br><br>", unsafe_allow_html=True)
             c_ref, c_log = st.sidebar.columns(2)
             if c_ref.button("🔄 갱신"): st.cache_data.clear(); st.rerun()
@@ -371,10 +393,11 @@ if check_password():
                 show_dashboard(summary_list)
             elif st.session_state["selected_project"] == "🎯 경영지표(KPI)":
                 show_kpi_page(kpi_df)
+            elif st.session_state["selected_project"] == "☀️ 태양광 분석":
+                show_solar_analysis()
             else:
                 show_project_detail(st.session_state["selected_project"], sh, full_hist_data)
                                     
         except Exception as e:
             st.error("🚨 시스템 초기화 중 에러가 발생했습니다.")
-            st.info("구글 시트('pms_db')의 권한 설정과 KPI 시트 구성을 확인해 주세요.")
             st.warning(f"상세 에러 내용: {e}")
