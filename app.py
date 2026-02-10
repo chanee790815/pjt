@@ -8,7 +8,7 @@ import time
 import plotly.express as px
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v3.1.0", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v3.1.1", page_icon="🏗️", layout="wide")
 
 # --- [UI] 스타일 ---
 st.markdown("""
@@ -18,7 +18,7 @@ st.markdown("""
     .pjt-card { background-color: #ffffff; padding: 20px; border-radius: 12px; border: 1px solid #eee; margin-bottom: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
     .footer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: #f1f1f1; color: #555; text-align: center; padding: 5px; font-size: 11px; z-index: 100; }
     </style>
-    <div class="footer">시스템 상태: 정상 (v3.1.0 Admin Added) | 데이터 출처: 기상청 API & 구글 클라우드</div>
+    <div class="footer">시스템 상태: 정상 (v3.1.1 Incheon/Suwon Added) | 데이터 출처: 기상청 API & 구글 클라우드</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -28,7 +28,7 @@ st.markdown("""
 def check_login():
     if st.session_state.get("logged_in", False): return True
     
-    st.title("🏗️ PM 통합 관리 시스템 (v3.1.0)")
+    st.title("🏗️ PM 통합 관리 시스템 (v3.1.1)")
     with st.form("login"):
         u_id = st.text_input("ID")
         u_pw = st.text_input("Password", type="password")
@@ -79,17 +79,22 @@ def view_dashboard(sh, pjt_list):
 
 def view_solar(sh):
     st.title("📅 일 발전량 분석")
-    with st.expander("📥 기상청 데이터 수집 도구"):
+    with st.expander("📥 기상청 데이터 수집 도구", expanded=True):
         c1, c2, c3 = st.columns([1, 1, 1])
-        stn_map = {127:"충주", 108:"서울", 131:"청주", 159:"부산"}
-        stn_id = c1.selectbox("수집 지점", list(stn_map.keys()), format_func=lambda x: stn_map[x])
+        
+        # [업데이트] 인천(112)과 수원(119) 추가
+        stn_map = {127:"충주", 108:"서울", 131:"청주", 159:"부산", 112:"인천", 119:"수원"}
+        
+        stn_id = c1.selectbox("수집 지점", list(stn_map.keys()), format_func=lambda x: stn_map[x], index=4) # 기본값 인천 선택
         year = c2.selectbox("수집 연도", list(range(2026, 2019, -1)))
+        
         if c3.button("🚀 데이터 동기화 실행", use_container_width=True):
-            with st.spinner("기상청 서버 통신 중..."):
+            with st.spinner(f"{stn_map[stn_id]} 지역 데이터 통신 중..."):
                 try:
                     db_ws = sh.worksheet('Solar_DB')
                     start, end = f"{year}0101", f"{year}1231"
                     if int(year) >= datetime.date.today().year: end = (datetime.date.today() - datetime.timedelta(days=1)).strftime("%Y%m%d")
+                    
                     url = f'http://apis.data.go.kr/1360000/AsosDalyInfoService/getWthrDataList?serviceKey=ba10959184b37d5a2f94b2fe97ecb2f96589f7d8724ba17f85fdbc22d47fb7fe&numOfRows=366&dataType=JSON&dataCd=ASOS&dateCd=DAY&stnIds={stn_id}&startDt={start}&endDt={end}'
                     res = requests.get(url, timeout=10).json()
                     items = res.get('response', {}).get('body', {}).get('items', {}).get('item', [])
@@ -103,6 +108,7 @@ def view_solar(sh):
                         if len(all_val) > 1:
                             df = pd.DataFrame(all_val[1:], columns=all_val[0])
                             df['날짜'] = pd.to_datetime(df['날짜'], errors='coerce')
+                            # 중복 삭제 (해당 연도 & 해당 지점)
                             df = df.loc[~((df['날짜'].dt.year == int(year)) & (df['지점'] == stn_map[stn_id]))].dropna(subset=['날짜'])
                             df['날짜'] = df['날짜'].dt.strftime('%Y-%m-%d')
                             db_ws.clear(); db_ws.append_row(all_val[0]); db_ws.append_rows(df.values.tolist())
@@ -112,7 +118,8 @@ def view_solar(sh):
 
     st.subheader("📊 연간 발전 효율 차트")
     col1, col2 = st.columns(2)
-    sel_stn = col1.selectbox("분석 지점", ["충주", "서울", "청주", "부산"])
+    # [업데이트] 분석 지점 목록에 인천, 수원 추가
+    sel_stn = col1.selectbox("분석 지점", ["충주", "서울", "인천", "수원", "청주", "부산"])
     sel_year = col2.selectbox("분석 연도", list(range(2026, 2019, -1)), index=3)
     try:
         df = pd.DataFrame(sh.worksheet('Solar_DB').get_all_records())
@@ -125,7 +132,7 @@ def view_solar(sh):
                 target['월'] = target['날짜'].dt.month
                 m_avg = target.groupby('월')['발전시간'].mean().reset_index()
                 st.plotly_chart(px.bar(m_avg, x='월', y='발전시간', color_discrete_sequence=['#ffca28']), use_container_width=True)
-            else: st.warning("해당 조건의 데이터가 없습니다.")
+            else: st.warning("해당 조건의 데이터가 없습니다. 위 도구에서 먼저 수집해주세요.")
     except: st.warning("데이터베이스 로드 실패")
 
 def view_project_detail(sh, pjt_list):
@@ -158,31 +165,20 @@ def view_kpi(sh):
         st.dataframe(df, use_container_width=True)
     except: st.error("KPI 시트가 존재하지 않습니다.")
 
-# [신규 기능] 프로젝트 등록/수정/삭제 페이지
 def view_project_admin(sh, pjt_list):
     st.title("⚙️ 프로젝트 설정 (마스터 관리)")
-    st.write("현장 시트를 새로 생성하거나 이름을 변경, 삭제할 수 있습니다.")
-    
     tab1, tab2, tab3 = st.tabs(["➕ 신규 등록", "✏️ 이름 수정", "🗑️ 삭제"])
-    
-    # 1. 신규 등록
     with tab1:
-        new_pjt_name = st.text_input("새 프로젝트 명칭 (예: 00현장_공사명)")
+        new_pjt_name = st.text_input("새 프로젝트 명칭 (예: 광명_서부_현장)")
         if st.button("프로젝트 생성", type="primary", use_container_width=True):
             if new_pjt_name and new_pjt_name not in pjt_list:
                 try:
                     sh.add_worksheet(title=new_pjt_name, rows="100", cols="20")
-                    # 필수 헤더 자동 입력 (Gantt 차트용)
                     ws = sh.worksheet(new_pjt_name)
                     ws.append_row(["대분류", "구분", "작업명", "시작일", "종료일", "진행률", "담당자", "비고"])
                     st.success(f"✅ '{new_pjt_name}' 프로젝트가 생성되었습니다!"); time.sleep(1); st.rerun()
                 except Exception as e: st.error(f"생성 실패: {e}")
-            elif new_pjt_name in pjt_list:
-                st.warning("이미 존재하는 프로젝트 이름입니다.")
-            else:
-                st.warning("프로젝트 이름을 입력해주세요.")
-
-    # 2. 이름 수정
+            else: st.warning("유효한 이름을 입력해주세요.")
     with tab2:
         target_pjt = st.selectbox("이름을 변경할 프로젝트", ["선택"] + pjt_list, key="rename_sel")
         new_name_input = st.text_input("변경할 새 이름", key="rename_input")
@@ -191,26 +187,18 @@ def view_project_admin(sh, pjt_list):
                 try:
                     ws = sh.worksheet(target_pjt)
                     ws.update_title(new_name_input)
-                    st.success(f"✅ '{target_pjt}' -> '{new_name_input}' 변경 완료!"); time.sleep(1); st.rerun()
+                    st.success(f"✅ 변경 완료!"); time.sleep(1); st.rerun()
                 except Exception as e: st.error(f"변경 실패: {e}")
-            else:
-                st.warning("대상 프로젝트와 새 이름을 모두 입력해주세요.")
-
-    # 3. 삭제
     with tab3:
-        st.error("⚠️ 주의: 삭제된 프로젝트의 데이터는 복구할 수 없습니다.")
         del_pjt = st.selectbox("삭제할 프로젝트 선택", ["선택"] + pjt_list, key="del_sel")
         confirm_del = st.checkbox("데이터 영구 삭제를 확인했습니다.")
-        
         if st.button("프로젝트 영구 삭제", type="primary", use_container_width=True):
             if del_pjt != "선택" and confirm_del:
                 try:
                     ws = sh.worksheet(del_pjt)
                     sh.del_worksheet(ws)
-                    st.success(f"🗑️ '{del_pjt}' 프로젝트가 삭제되었습니다."); time.sleep(1); st.rerun()
+                    st.success(f"🗑️ 삭제되었습니다."); time.sleep(1); st.rerun()
                 except Exception as e: st.error(f"삭제 실패: {e}")
-            elif not confirm_del:
-                st.warning("삭제 확인 체크박스를 선택해주세요.")
 
 # ---------------------------------------------------------
 # [SECTION 3] 메인 컨트롤러 (Router)
@@ -220,26 +208,16 @@ if check_login():
     client = get_client()
     if client:
         sh = client.open('pms_db')
-        # 관리용 시트 제외하고 순수 프로젝트만 필터링
-        sys_sheets = ['weekly_history', 'Solar_DB', 'KPI', 'Sheet1', 'conflict']
-        pjt_list = [ws.title for ws in sh.worksheets() if ws.title not in sys_sheets]
+        pjt_list = [ws.title for ws in sh.worksheets() if ws.title not in ['weekly_history', 'Solar_DB', 'KPI', 'Sheet1', 'conflict']]
         
         st.sidebar.title("📁 PMO 메뉴")
         st.sidebar.info(f"User: {st.session_state['user_id']}")
         
-        # 메뉴에 '프로젝트 설정' 추가
-        menu = st.sidebar.radio(
-            "메뉴 선택",
-            ["통합 대시보드", "일 발전량 분석", "프로젝트 상세", "경영지표(KPI)", "프로젝트 설정"],
-            index=0
-        )
-        
+        menu = st.sidebar.radio("메뉴 선택", ["통합 대시보드", "일 발전량 분석", "프로젝트 상세", "경영지표(KPI)", "프로젝트 설정"], index=1) # 기본값: 발전량 분석
         st.sidebar.markdown("---")
         if st.sidebar.button("로그아웃"):
-            st.session_state["logged_in"] = False
-            st.rerun()
+            st.session_state["logged_in"] = False; st.rerun()
 
-        # 라우팅
         if menu == "통합 대시보드": view_dashboard(sh, pjt_list)
         elif menu == "일 발전량 분석": view_solar(sh)
         elif menu == "프로젝트 상세": view_project_detail(sh, pjt_list)
