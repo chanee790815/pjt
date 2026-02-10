@@ -8,7 +8,7 @@ import time
 import plotly.express as px
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v3.1.1", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v3.1.2", page_icon="🏗️", layout="wide")
 
 # --- [UI] 스타일 ---
 st.markdown("""
@@ -18,7 +18,7 @@ st.markdown("""
     .pjt-card { background-color: #ffffff; padding: 20px; border-radius: 12px; border: 1px solid #eee; margin-bottom: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
     .footer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: #f1f1f1; color: #555; text-align: center; padding: 5px; font-size: 11px; z-index: 100; }
     </style>
-    <div class="footer">시스템 상태: 정상 (v3.1.1 Incheon/Suwon Added) | 데이터 출처: 기상청 API & 구글 클라우드</div>
+    <div class="footer">시스템 상태: 정상 (v3.1.2 Timeout Extended) | 데이터 출처: 기상청 API & 구글 클라우드</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -28,7 +28,7 @@ st.markdown("""
 def check_login():
     if st.session_state.get("logged_in", False): return True
     
-    st.title("🏗️ PM 통합 관리 시스템 (v3.1.1)")
+    st.title("🏗️ PM 통합 관리 시스템 (v3.1.2)")
     with st.form("login"):
         u_id = st.text_input("ID")
         u_pw = st.text_input("Password", type="password")
@@ -81,22 +81,21 @@ def view_solar(sh):
     st.title("📅 일 발전량 분석")
     with st.expander("📥 기상청 데이터 수집 도구", expanded=True):
         c1, c2, c3 = st.columns([1, 1, 1])
-        
-        # [업데이트] 인천(112)과 수원(119) 추가
         stn_map = {127:"충주", 108:"서울", 131:"청주", 159:"부산", 112:"인천", 119:"수원"}
-        
-        stn_id = c1.selectbox("수집 지점", list(stn_map.keys()), format_func=lambda x: stn_map[x], index=4) # 기본값 인천 선택
+        stn_id = c1.selectbox("수집 지점", list(stn_map.keys()), format_func=lambda x: stn_map[x], index=4) # 인천 기본
         year = c2.selectbox("수집 연도", list(range(2026, 2019, -1)))
         
         if c3.button("🚀 데이터 동기화 실행", use_container_width=True):
-            with st.spinner(f"{stn_map[stn_id]} 지역 데이터 통신 중..."):
+            with st.spinner(f"{stn_map[stn_id]} 데이터 요청 중... (최대 30초 소요)"):
                 try:
                     db_ws = sh.worksheet('Solar_DB')
                     start, end = f"{year}0101", f"{year}1231"
                     if int(year) >= datetime.date.today().year: end = (datetime.date.today() - datetime.timedelta(days=1)).strftime("%Y%m%d")
                     
                     url = f'http://apis.data.go.kr/1360000/AsosDalyInfoService/getWthrDataList?serviceKey=ba10959184b37d5a2f94b2fe97ecb2f96589f7d8724ba17f85fdbc22d47fb7fe&numOfRows=366&dataType=JSON&dataCd=ASOS&dateCd=DAY&stnIds={stn_id}&startDt={start}&endDt={end}'
-                    res = requests.get(url, timeout=10).json()
+                    
+                    # [수정] timeout을 10초 -> 30초로 증가
+                    res = requests.get(url, timeout=30).json()
                     items = res.get('response', {}).get('body', {}).get('items', {}).get('item', [])
                     rows = []
                     for i in items:
@@ -108,17 +107,17 @@ def view_solar(sh):
                         if len(all_val) > 1:
                             df = pd.DataFrame(all_val[1:], columns=all_val[0])
                             df['날짜'] = pd.to_datetime(df['날짜'], errors='coerce')
-                            # 중복 삭제 (해당 연도 & 해당 지점)
                             df = df.loc[~((df['날짜'].dt.year == int(year)) & (df['지점'] == stn_map[stn_id]))].dropna(subset=['날짜'])
                             df['날짜'] = df['날짜'].dt.strftime('%Y-%m-%d')
                             db_ws.clear(); db_ws.append_row(all_val[0]); db_ws.append_rows(df.values.tolist())
                         db_ws.append_rows(rows); st.success(f"✅ {year}년 {stn_map[stn_id]} 데이터 {len(rows)}건 수집 완료!"); time.sleep(1); st.rerun()
-                    else: st.warning("수집된 데이터가 없습니다.")
+                    else: st.warning("수집된 데이터가 없습니다 (공공데이터 포털 응답 없음).")
+                except requests.exceptions.ReadTimeout:
+                    st.error("⚠️ 기상청 서버 응답이 너무 느립니다. 잠시 후 다시 시도해주세요.")
                 except Exception as e: st.error(f"오류 발생: {e}")
 
     st.subheader("📊 연간 발전 효율 차트")
     col1, col2 = st.columns(2)
-    # [업데이트] 분석 지점 목록에 인천, 수원 추가
     sel_stn = col1.selectbox("분석 지점", ["충주", "서울", "인천", "수원", "청주", "부산"])
     sel_year = col2.selectbox("분석 연도", list(range(2026, 2019, -1)), index=3)
     try:
@@ -169,14 +168,14 @@ def view_project_admin(sh, pjt_list):
     st.title("⚙️ 프로젝트 설정 (마스터 관리)")
     tab1, tab2, tab3 = st.tabs(["➕ 신규 등록", "✏️ 이름 수정", "🗑️ 삭제"])
     with tab1:
-        new_pjt_name = st.text_input("새 프로젝트 명칭 (예: 광명_서부_현장)")
+        new_pjt_name = st.text_input("새 프로젝트 명칭")
         if st.button("프로젝트 생성", type="primary", use_container_width=True):
             if new_pjt_name and new_pjt_name not in pjt_list:
                 try:
                     sh.add_worksheet(title=new_pjt_name, rows="100", cols="20")
                     ws = sh.worksheet(new_pjt_name)
                     ws.append_row(["대분류", "구분", "작업명", "시작일", "종료일", "진행률", "담당자", "비고"])
-                    st.success(f"✅ '{new_pjt_name}' 프로젝트가 생성되었습니다!"); time.sleep(1); st.rerun()
+                    st.success(f"✅ '{new_pjt_name}' 생성 완료!"); time.sleep(1); st.rerun()
                 except Exception as e: st.error(f"생성 실패: {e}")
             else: st.warning("유효한 이름을 입력해주세요.")
     with tab2:
@@ -213,7 +212,7 @@ if check_login():
         st.sidebar.title("📁 PMO 메뉴")
         st.sidebar.info(f"User: {st.session_state['user_id']}")
         
-        menu = st.sidebar.radio("메뉴 선택", ["통합 대시보드", "일 발전량 분석", "프로젝트 상세", "경영지표(KPI)", "프로젝트 설정"], index=1) # 기본값: 발전량 분석
+        menu = st.sidebar.radio("메뉴 선택", ["통합 대시보드", "일 발전량 분석", "프로젝트 상세", "경영지표(KPI)", "프로젝트 설정"], index=1)
         st.sidebar.markdown("---")
         if st.sidebar.button("로그아웃"):
             st.session_state["logged_in"] = False; st.rerun()
