@@ -8,7 +8,7 @@ import time
 import plotly.express as px
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v3.1.2", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v3.1.3", page_icon="🏗️", layout="wide")
 
 # --- [UI] 스타일 ---
 st.markdown("""
@@ -18,7 +18,7 @@ st.markdown("""
     .pjt-card { background-color: #ffffff; padding: 20px; border-radius: 12px; border: 1px solid #eee; margin-bottom: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
     .footer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: #f1f1f1; color: #555; text-align: center; padding: 5px; font-size: 11px; z-index: 100; }
     </style>
-    <div class="footer">시스템 상태: 정상 (v3.1.2 Timeout Extended) | 데이터 출처: 기상청 API & 구글 클라우드</div>
+    <div class="footer">시스템 상태: 정상 (v3.1.3 Dangjin Added) | 데이터 출처: 기상청 API & 구글 클라우드</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -28,7 +28,7 @@ st.markdown("""
 def check_login():
     if st.session_state.get("logged_in", False): return True
     
-    st.title("🏗️ PM 통합 관리 시스템 (v3.1.2)")
+    st.title("🏗️ PM 통합 관리 시스템 (v3.1.3)")
     with st.form("login"):
         u_id = st.text_input("ID")
         u_pw = st.text_input("Password", type="password")
@@ -81,12 +81,15 @@ def view_solar(sh):
     st.title("📅 일 발전량 분석")
     with st.expander("📥 기상청 데이터 수집 도구", expanded=True):
         c1, c2, c3 = st.columns([1, 1, 1])
-        stn_map = {127:"충주", 108:"서울", 131:"청주", 159:"부산", 112:"인천", 119:"수원"}
-        stn_id = c1.selectbox("수집 지점", list(stn_map.keys()), format_func=lambda x: stn_map[x], index=4) # 인천 기본
+        
+        # [업데이트] 서산(129) 추가
+        stn_map = {127:"충주", 108:"서울", 131:"청주", 159:"부산", 112:"인천", 119:"수원", 129:"서산(당진)"}
+        
+        stn_id = c1.selectbox("수집 지점", list(stn_map.keys()), format_func=lambda x: stn_map[x], index=6) # 서산 기본 선택
         year = c2.selectbox("수집 연도", list(range(2026, 2019, -1)))
         
         if c3.button("🚀 데이터 동기화 실행", use_container_width=True):
-            with st.spinner(f"{stn_map[stn_id]} 데이터 요청 중... (최대 30초 소요)"):
+            with st.spinner(f"{stn_map[stn_id]} 데이터 요청 중... (최대 30초)"):
                 try:
                     db_ws = sh.worksheet('Solar_DB')
                     start, end = f"{year}0101", f"{year}1231"
@@ -94,7 +97,6 @@ def view_solar(sh):
                     
                     url = f'http://apis.data.go.kr/1360000/AsosDalyInfoService/getWthrDataList?serviceKey=ba10959184b37d5a2f94b2fe97ecb2f96589f7d8724ba17f85fdbc22d47fb7fe&numOfRows=366&dataType=JSON&dataCd=ASOS&dateCd=DAY&stnIds={stn_id}&startDt={start}&endDt={end}'
                     
-                    # [수정] timeout을 10초 -> 30초로 증가
                     res = requests.get(url, timeout=30).json()
                     items = res.get('response', {}).get('body', {}).get('items', {}).get('item', [])
                     rows = []
@@ -111,14 +113,15 @@ def view_solar(sh):
                             df['날짜'] = df['날짜'].dt.strftime('%Y-%m-%d')
                             db_ws.clear(); db_ws.append_row(all_val[0]); db_ws.append_rows(df.values.tolist())
                         db_ws.append_rows(rows); st.success(f"✅ {year}년 {stn_map[stn_id]} 데이터 {len(rows)}건 수집 완료!"); time.sleep(1); st.rerun()
-                    else: st.warning("수집된 데이터가 없습니다 (공공데이터 포털 응답 없음).")
+                    else: st.warning("수집된 데이터가 없습니다.")
                 except requests.exceptions.ReadTimeout:
-                    st.error("⚠️ 기상청 서버 응답이 너무 느립니다. 잠시 후 다시 시도해주세요.")
+                    st.error("⚠️ 기상청 서버 응답이 지연되고 있습니다. 잠시 후 다시 시도해주세요.")
                 except Exception as e: st.error(f"오류 발생: {e}")
 
     st.subheader("📊 연간 발전 효율 차트")
     col1, col2 = st.columns(2)
-    sel_stn = col1.selectbox("분석 지점", ["충주", "서울", "인천", "수원", "청주", "부산"])
+    # [업데이트] 분석 지점 목록에 서산(당진) 추가
+    sel_stn = col1.selectbox("분석 지점", ["충주", "서울", "인천", "수원", "서산(당진)", "청주", "부산"])
     sel_year = col2.selectbox("분석 연도", list(range(2026, 2019, -1)), index=3)
     try:
         df = pd.DataFrame(sh.worksheet('Solar_DB').get_all_records())
