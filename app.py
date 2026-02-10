@@ -7,8 +7,8 @@ import requests
 import time
 import plotly.express as px
 
-# 1. 페이지 설정 (2026.02.10 최종)
-st.set_page_config(page_title="PM 통합 공정 관리 v3.1.3 (2026.02.10 Final)", page_icon="🏗️", layout="wide")
+# 1. 페이지 설정
+st.set_page_config(page_title="PM 통합 공정 관리 v3.1.4", page_icon="🏗️", layout="wide")
 
 # --- [UI] 스타일 ---
 st.markdown("""
@@ -18,7 +18,7 @@ st.markdown("""
     .pjt-card { background-color: #ffffff; padding: 20px; border-radius: 12px; border: 1px solid #eee; margin-bottom: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
     .footer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: #f1f1f1; color: #555; text-align: center; padding: 5px; font-size: 11px; z-index: 100; }
     </style>
-    <div class="footer">시스템 상태: 정상 (2026.02.10 Final Build) | 데이터 출처: 기상청 API & 구글 클라우드</div>
+    <div class="footer">시스템 상태: 정상 (v3.1.4 Default: Seosan/2025) | 데이터 출처: 기상청 API & 구글 클라우드</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -28,7 +28,7 @@ st.markdown("""
 def check_login():
     if st.session_state.get("logged_in", False): return True
     
-    st.title("🏗️ PM 통합 관리 시스템 (v3.1.3 Final)")
+    st.title("🏗️ PM 통합 관리 시스템 (v3.1.4)")
     with st.form("login"):
         u_id = st.text_input("ID")
         u_pw = st.text_input("Password", type="password")
@@ -79,11 +79,17 @@ def view_dashboard(sh, pjt_list):
 
 def view_solar(sh):
     st.title("📅 일 발전량 분석")
+    
+    # 1. 데이터 수집 도구
     with st.expander("📥 기상청 데이터 수집 도구", expanded=True):
         c1, c2, c3 = st.columns([1, 1, 1])
         stn_map = {127:"충주", 108:"서울", 131:"청주", 159:"부산", 112:"인천", 119:"수원", 129:"서산(당진)"}
+        
+        # [설정] index=6: 서산(당진)을 기본값으로 선택
         stn_id = c1.selectbox("수집 지점", list(stn_map.keys()), format_func=lambda x: stn_map[x], index=6)
-        year = c2.selectbox("수집 연도", list(range(2026, 2019, -1)))
+        
+        # [설정] index=1: 2025년을 기본값으로 선택 (0:2026, 1:2025)
+        year = c2.selectbox("수집 연도", list(range(2026, 2019, -1)), index=1)
         
         if c3.button("🚀 데이터 동기화 실행", use_container_width=True):
             with st.spinner(f"{stn_map[stn_id]} 데이터 요청 중... (최대 30초)"):
@@ -91,9 +97,7 @@ def view_solar(sh):
                     db_ws = sh.worksheet('Solar_DB')
                     start, end = f"{year}0101", f"{year}1231"
                     if int(year) >= datetime.date.today().year: end = (datetime.date.today() - datetime.timedelta(days=1)).strftime("%Y%m%d")
-                    
                     url = f'http://apis.data.go.kr/1360000/AsosDalyInfoService/getWthrDataList?serviceKey=ba10959184b37d5a2f94b2fe97ecb2f96589f7d8724ba17f85fdbc22d47fb7fe&numOfRows=366&dataType=JSON&dataCd=ASOS&dateCd=DAY&stnIds={stn_id}&startDt={start}&endDt={end}'
-                    
                     res = requests.get(url, timeout=30).json()
                     items = res.get('response', {}).get('body', {}).get('items', {}).get('item', [])
                     rows = []
@@ -111,14 +115,18 @@ def view_solar(sh):
                             db_ws.clear(); db_ws.append_row(all_val[0]); db_ws.append_rows(df.values.tolist())
                         db_ws.append_rows(rows); st.success(f"✅ {year}년 {stn_map[stn_id]} 데이터 {len(rows)}건 수집 완료!"); time.sleep(1); st.rerun()
                     else: st.warning("수집된 데이터가 없습니다.")
-                except requests.exceptions.ReadTimeout:
-                    st.error("⚠️ 기상청 서버 응답이 지연되고 있습니다. 잠시 후 다시 시도해주세요.")
                 except Exception as e: st.error(f"오류 발생: {e}")
 
+    # 2. 분석 차트
     st.subheader("📊 연간 발전 효율 차트")
     col1, col2 = st.columns(2)
-    sel_stn = col1.selectbox("분석 지점", ["충주", "서울", "인천", "수원", "서산(당진)", "청주", "부산"])
-    sel_year = col2.selectbox("분석 연도", list(range(2026, 2019, -1)), index=3)
+    
+    # [설정] index=4: 서산(당진)을 기본값으로 선택 ("충주","서울","인천","수원","서산(당진)"...)
+    sel_stn = col1.selectbox("분석 지점", ["충주", "서울", "인천", "수원", "서산(당진)", "청주", "부산"], index=4)
+    
+    # [설정] index=1: 2025년을 기본값으로 선택
+    sel_year = col2.selectbox("분석 연도", list(range(2026, 2019, -1)), index=1)
+    
     try:
         df = pd.DataFrame(sh.worksheet('Solar_DB').get_all_records())
         if not df.empty:
@@ -130,7 +138,7 @@ def view_solar(sh):
                 target['월'] = target['날짜'].dt.month
                 m_avg = target.groupby('월')['발전시간'].mean().reset_index()
                 st.plotly_chart(px.bar(m_avg, x='월', y='발전시간', color_discrete_sequence=['#ffca28']), use_container_width=True)
-            else: st.warning("해당 조건의 데이터가 없습니다.")
+            else: st.warning("해당 조건의 데이터가 없습니다. 위 도구에서 먼저 수집해주세요.")
     except: st.warning("데이터베이스 로드 실패")
 
 def view_project_detail(sh, pjt_list):
@@ -211,7 +219,8 @@ if check_login():
         st.sidebar.title("📁 PMO 메뉴")
         st.sidebar.info(f"User: {st.session_state['user_id']}")
         
-        menu = st.sidebar.radio("메뉴 선택", ["통합 대시보드", "일 발전량 분석", "프로젝트 상세", "경영지표(KPI)", "프로젝트 설정"], index=0)
+        # 메뉴 순서 (기본값 index=1: 일 발전량 분석)
+        menu = st.sidebar.radio("메뉴 선택", ["통합 대시보드", "일 발전량 분석", "프로젝트 상세", "경영지표(KPI)", "프로젝트 설정"], index=1)
         st.sidebar.markdown("---")
         if st.sidebar.button("로그아웃"):
             st.session_state["logged_in"] = False; st.rerun()
