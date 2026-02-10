@@ -8,7 +8,7 @@ import time
 import plotly.express as px
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v3.0.0", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v3.0.1", page_icon="🏗️", layout="wide")
 
 # --- [UI] 스타일 ---
 st.markdown("""
@@ -18,17 +18,17 @@ st.markdown("""
     .pjt-card { background-color: #ffffff; padding: 20px; border-radius: 12px; border: 1px solid #eee; margin-bottom: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
     .footer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: #f1f1f1; color: #555; text-align: center; padding: 5px; font-size: 11px; z-index: 100; }
     </style>
-    <div class="footer">시스템 상태: 정상 (v3.0.0 Stable) | 데이터 출처: 기상청 API & 구글 클라우드</div>
+    <div class="footer">시스템 상태: 정상 (v3.0.1 Patch) | 데이터 출처: 기상청 API & 구글 클라우드</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# [SECTION 1] 백엔드 엔진
+# [SECTION 1] 백엔드 엔진 & 유틸리티
 # ---------------------------------------------------------
 
 def check_login():
     if st.session_state.get("logged_in", False): return True
     
-    st.title("🏗️ PM 통합 관리 시스템 (v3.0.0)")
+    st.title("🏗️ PM 통합 관리 시스템 (v3.0.1)")
     with st.form("login"):
         u_id = st.text_input("ID")
         u_pw = st.text_input("Password", type="password")
@@ -48,6 +48,15 @@ def get_client():
         creds = Credentials.from_service_account_info(key_dict, scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
         return gspread.authorize(creds)
     except: return None
+
+def get_safe_float(value):
+    """빈 문자열이나 None을 0.0으로 안전하게 변환"""
+    try:
+        if value == '' or value is None:
+            return 0.0
+        return float(value)
+    except (ValueError, TypeError):
+        return 0.0
 
 # ---------------------------------------------------------
 # [SECTION 2] 각 기능별 뷰(View) 함수
@@ -100,21 +109,32 @@ def view_solar(sh):
                         
                     url = f'http://apis.data.go.kr/1360000/AsosDalyInfoService/getWthrDataList?serviceKey=ba10959184b37d5a2f94b2fe97ecb2f96589f7d8724ba17f85fdbc22d47fb7fe&numOfRows=366&dataType=JSON&dataCd=ASOS&dateCd=DAY&stnIds={stn_id}&startDt={start}&endDt={end}'
                     res = requests.get(url, timeout=10).json()
-                    items = res['response']['body']['items']['item']
-                    rows = [[i['tm'], stn_map[stn_id], round(float(i.get('sumGsr',0))/3.6, 2), i.get('sumGsr',0)] for i in items]
+                    
+                    items = res.get('response', {}).get('body', {}).get('items', {}).get('item', [])
+                    
+                    # [수정됨] 안전한 숫자 변환 로직 적용
+                    rows = []
+                    for i in items:
+                        gsr_val = get_safe_float(i.get('sumGsr', 0)) # 빈값 처리
+                        gen_val = round(gsr_val / 3.6, 2)
+                        rows.append([i['tm'], stn_map[stn_id], gen_val, gsr_val])
                     
                     if rows:
                         all_val = db_ws.get_all_values()
                         if len(all_val) > 1:
                             df = pd.DataFrame(all_val[1:], columns=all_val[0])
                             df['날짜'] = pd.to_datetime(df['날짜'], errors='coerce')
+                            # 중복 데이터 삭제 (해당 연도 & 해당 지점)
                             df = df.loc[~((df['날짜'].dt.year == int(year)) & (df['지점'] == stn_map[stn_id]))].dropna(subset=['날짜'])
                             df['날짜'] = df['날짜'].dt.strftime('%Y-%m-%d')
                             db_ws.clear(); db_ws.append_row(all_val[0]); db_ws.append_rows(df.values.tolist())
                         
                         db_ws.append_rows(rows)
-                        st.success(f"{len(rows)}건 수집 완료!"); time.sleep(1); st.rerun()
-                except Exception as e: st.error(f"오류: {e}")
+                        st.success(f"✅ {year}년 {stn_map[stn_id]} 데이터 {len(rows)}건 수집 완료!"); time.sleep(1); st.rerun()
+                    else:
+                        st.warning("수집된 데이터가 없습니다 (기상청 응답 없음).")
+                        
+                except Exception as e: st.error(f"오류 발생: {e}")
 
     # 2. 차트 섹션
     st.subheader("📊 연간 발전 효율 차트")
@@ -140,7 +160,7 @@ def view_solar(sh):
 def view_project_detail(sh, pjt_list):
     st.title("🏗️ 개별 프로젝트 상세 관리")
     
-    # 여기서 현장을 선택하면 페이지가 리셋되어도 Radio 버튼 상태는 유지됨 -> 충돌 해결
+    # [수정] 라디오 버튼이라 상태 유지됨
     selected_pjt = st.selectbox("관리할 현장을 선택하세요", ["선택"] + pjt_list)
     
     if selected_pjt != "선택":
@@ -189,7 +209,7 @@ if check_login():
         # 관리용 시트 제외
         pjt_list = [ws.title for ws in sh.worksheets() if ws.title not in ['weekly_history', 'Solar_DB', 'KPI', 'Sheet1']]
         
-        # 사이드바 (Radio 버튼 사용으로 충돌 방지)
+        # 사이드바 (Radio 버튼 유지)
         st.sidebar.title("📁 PMO 메뉴")
         st.sidebar.info(f"사용자: {st.session_state['user_id']}")
         
@@ -204,7 +224,7 @@ if check_login():
             st.session_state["logged_in"] = False
             st.rerun()
 
-        # 라우팅 로직
+        # 라우팅
         if menu == "통합 대시보드":
             view_dashboard(sh, pjt_list)
         elif menu == "일 발전량 분석":
