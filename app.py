@@ -9,7 +9,7 @@ import plotly.graph_objects as go
 import requests
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v0.9.2", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v0.9.3", page_icon="🏗️", layout="wide")
 
 # --- [UI] 디자인 커스텀 CSS ---
 st.markdown("""
@@ -62,7 +62,7 @@ def check_password():
                 else:
                     st.error("아이디 또는 비밀번호가 일치하지 않습니다.")
             except KeyError:
-                st.error("Secrets 설정에 'passwords' 항목이 없습니다. 설정을 확인해 주세요.")
+                st.error("Secrets 설정에 'passwords' 항목이 없습니다.")
     return False
 
 def logout():
@@ -83,6 +83,12 @@ def get_client():
         return gspread.authorize(creds)
     except Exception as e:
         st.error(f"🚨 구글 API 인증 오류: {e}"); return None
+
+@st.cache_data(ttl=60)
+def get_ws_data(_client_email, pjt_name):
+    temp_client = get_client()
+    sh = temp_client.open('pms_db')
+    return sh.worksheet(pjt_name).get_all_records()
 
 @st.cache_data(ttl=300)
 def fetch_dashboard_summary(_client_email):
@@ -126,11 +132,12 @@ def fetch_dashboard_summary(_client_email):
         return [], [], pd.DataFrame(), pd.DataFrame()
 
 # ---------------------------------------------------------
-# [SECTION 2] 페이지 렌더링 함수
+# [SECTION 2] 개별 페이지 렌더링 함수 (Frontend Modules)
 # ---------------------------------------------------------
 
 def show_solar_analysis():
-    st.title("☀️ 태양광 발전 환경 분석 (기상청 API)")
+    """태양광 발전시간 실시간 분석 페이지"""
+    st.title("☀️ 태양광 발전 환경 분석 (기상청 API 연동)")
     SERVICE_KEY = 'ba10959184b37d5a2f94b2fe97ecb2f96589f7d8724ba17f85fdbc22d47fb7fe'
     
     col1, col2 = st.columns(2)
@@ -139,7 +146,7 @@ def show_solar_analysis():
                             format_func=lambda x: {127:"충주 (적서리 인근)", 108:"서울", 131:"청주", 159:"부산"}[x])
 
     if st.button("데이터 불러오기"):
-        with st.spinner('조회 중...'):
+        with st.spinner('기상청 API 조회 중...'):
             url = 'http://apis.data.go.kr/1360000/AsosHourlyInfoService/getWthrDataList'
             params = {'serviceKey': SERVICE_KEY, 'pageNo': '1', 'numOfRows': '24', 'dataType': 'JSON', 
                       'dataCd': 'ASOS', 'dateCd': 'HR', 'stnIds': str(stn_id), 
@@ -151,37 +158,77 @@ def show_solar_analysis():
                 df = pd.DataFrame(data)
                 df['icsr'] = pd.to_numeric(df['icsr'], errors='coerce').fillna(0)
                 df['hour'] = pd.to_datetime(df['tm']).dt.hour
-                
                 gen_h = round(df['icsr'].sum() / 3.6, 2)
-                st.metric("☀️ 예상 발전시간", f"{gen_h} h")
-                st.plotly_chart(px.area(df, x='hour', y='icsr', title="시간대별 일사량"), use_container_width=True)
+                
+                m1, m2 = st.columns(2)
+                m1.metric("☀️ 실측 발전시간", f"{gen_h} h")
+                m2.metric("누적 일사량", f"{round(df['icsr'].sum(), 2)} MJ/㎡")
+                st.plotly_chart(px.area(df, x='hour', y='icsr', title=f"{target_date} 일사량 추이"), use_container_width=True)
             except:
-                st.error("API 데이터 호출에 실패했습니다. 키 승인 여부를 확인하세요.")
+                st.error("API 호출 실패. 키 승인 상태를 확인하세요.")
 
 def show_project_detail(p_name, sh, full_hist_data):
+    """복구된 4대 관리 기능 탭 구성"""
     try:
-        data = sh.worksheet(p_name).get_all_records()
-        df = pd.DataFrame(data)
+        data_all = get_ws_data(st.secrets["gcp_service_account"]["client_email"], p_name)
     except:
-        st.error("시트 데이터를 읽을 수 없습니다. 제목 열을 확인하세요.")
+        st.error("데이터 로딩 중 오류가 발생했습니다.")
+        return
+
+    cols = ["시작일", "종료일", "대분류", "구분", "진행상태", "비고", "진행률", "담당자"]
+    df_raw = pd.DataFrame(data_all) if data_all else pd.DataFrame(columns=cols)
+    
+    if not df_raw.empty and '시작일' not in df_raw.columns:
+        st.warning(f"시트 컬럼명이 맞지 않습니다. [시작일] 열을 확인하세요.")
         return
 
     st.title(f"🏗️ {p_name} 상세 관리")
-    
-    if not df.empty and '시작일' in df.columns:
-        df['시작일'] = pd.to_datetime(df['시작일'], errors='coerce')
-        df['종료일'] = pd.to_datetime(df['종료일'], errors='coerce')
-        df = df.dropna(subset=['시작일', '종료일'])
-        
-        fig = px.timeline(df, x_start="시작일", x_end="종료일", y="구분", color="진행상태")
-        fig.update_yaxes(autorange="reversed")
-        st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(df, use_container_width=True)
-    else:
-        st.info("표시할 공정 데이터가 없습니다.")
+    t1, t2, t3, t4 = st.tabs(["📊 통합 공정표", "📝 일정 등록", "📢 현황 보고", "📜 히스토리"])
+
+    with t1:
+        if not df_raw.empty:
+            df = df_raw.copy()
+            df['시작일'] = pd.to_datetime(df['시작일'], errors='coerce')
+            df['종료일'] = pd.to_datetime(df['종료일'], errors='coerce')
+            df = df.dropna(subset=['시작일', '종료일'])
+            fig = px.timeline(df, x_start="시작일", x_end="종료일", y="구분", color="진행상태",
+                              color_discrete_map={"완료": "#0068c9", "진행중": "#ffbd45", "예정": "#d3d3d3", "지연": "#ff4b4b"})
+            fig.update_yaxes(autorange="reversed")
+            st.plotly_chart(fig, use_container_width=True)
+            st.dataframe(df_raw, use_container_width=True)
+        else:
+            st.info("데이터가 없습니다. '일정 등록' 탭에서 첫 공정을 등록하세요.")
+
+    with t2:
+        st.subheader("📝 신규 공정 일정 등록")
+        with st.form("add_pjt"):
+            c1, c2 = st.columns(2)
+            sd, ed = c1.date_input("시작일"), c2.date_input("종료일")
+            cat = st.selectbox("대분류", ["인허가", "설계", "토목", "설치", "시운전"])
+            task = st.text_input("공정명(구분)")
+            if st.form_submit_button("공정표에 추가"):
+                sh.worksheet(p_name).append_row([str(sd), str(ed), cat, task, "예정", "", 0, st.session_state['user_id']])
+                st.cache_data.clear(); st.success("등록되었습니다!"); st.rerun()
+
+    with t3:
+        st.subheader("📢 이슈 및 현황 보고")
+        with st.form("issue_report"):
+            note = st.text_area("활동 사항을 입력하세요.")
+            if st.form_submit_button("보고 저장"):
+                ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+                sh.worksheet('weekly_history').append_row([ts, p_name, note, st.session_state['user_id']])
+                st.cache_data.clear(); st.success("보고 완료!"); st.rerun()
+
+    with t4:
+        st.subheader("📜 과거 기록 조회")
+        if not full_hist_data.empty:
+            p_hist = full_hist_data[full_hist_data['프로젝트명'] == p_name].iloc[::-1]
+            for _, r in p_hist.iterrows():
+                with st.expander(f"📅 {r['날짜']} | {r['작성자']}"):
+                    st.write(r['주요현황'])
 
 # ---------------------------------------------------------
-# [SECTION 3] 메인 로직
+# [SECTION 3] 메인 컨트롤러
 # ---------------------------------------------------------
 
 if check_password():
@@ -194,17 +241,19 @@ if check_password():
             st.session_state["selected_project"] = "🏠 전체 대시보드"
 
         st.sidebar.title("📁 PMO 프로젝트 센터")
-        selected_menu = st.sidebar.selectbox("🎯 메뉴 선택", ["🏠 전체 대시보드", "☀️ 태양광 분석", "📈 경영지표"] + pjt_names)
+        st.sidebar.write(f"👤 접속자: **{st.session_state['user_id']} 이사님**")
         
+        selected_menu = st.sidebar.selectbox("🎯 메뉴 선택", ["🏠 전체 대시보드", "☀️ 태양광 분석", "📈 경영지표"] + pjt_names)
         if st.sidebar.button("🔓 로그아웃"): logout()
 
         if selected_menu == "🏠 전체 대시보드":
-            st.title("📊 프로젝트 현황")
+            st.title("📊 프로젝트 통합 현황")
             for item in summary:
                 st.info(f"**{item['프로젝트명']}** (진척률: {item['진척률']}%) \n\n {item['최신현황']}")
         elif selected_menu == "☀️ 태양광 분석":
             show_solar_analysis()
         elif selected_menu == "📈 경영지표":
-            st.dataframe(kpi_df)
+            st.title("📈 전사 KPI 지표")
+            st.dataframe(kpi_df, use_container_width=True)
         else:
             show_project_detail(selected_menu, sh, hist_df)
