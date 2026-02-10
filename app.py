@@ -7,13 +7,15 @@ import requests
 import time
 import plotly.express as px
 
-# 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v1.0.7", page_icon="🏗️", layout="wide")
+# 1. 페이지 설정 (최신 Streamlit 규격 적용)
+st.set_page_config(page_title="PM 통합 공정 관리 v1.1.3", page_icon="🏗️", layout="wide")
 
+# --- [UI] 디자인 및 저작권 문구 ---
 st.markdown("""
     <style>
     @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
     html, body, [class*="css"] { font-family: 'Pretendard', sans-serif; }
+    section[data-testid="stSidebar"] { background-color: #f8f9fa; border-right: 1px solid #eee; }
     .footer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: #f1f1f1; color: #555; text-align: center; padding: 5px; font-size: 11px; z-index: 100; }
     .metric-box { background-color: #ffffff; padding: 20px; border-radius: 10px; border: 1px solid #e0e0e0; text-align: center; margin-bottom: 20px; }
     </style>
@@ -21,104 +23,118 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# [SECTION 1] 백엔드 및 안정화된 동기화 로직
+# [SECTION 1] 백엔드 및 가이드 준수 데이터 수집 로직
 # ---------------------------------------------------------
 
 @st.cache_resource
 def get_client():
-    key_dict = dict(st.secrets["gcp_service_account"])
-    if "private_key" in key_dict: key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
-    creds = Credentials.from_service_account_info(key_dict, scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
-    return gspread.authorize(creds)
+    try:
+        key_dict = dict(st.secrets["gcp_service_account"])
+        if "private_key" in key_dict:
+            key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
+        creds = Credentials.from_service_account_info(key_dict, scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
+        return gspread.authorize(creds)
+    except Exception as e:
+        st.error(f"구글 시트 연결 실패: {e}")
+        return None
 
-def sync_solar_data_stable(sh, stn_id, stn_name):
-    """연도별로 나누어 안정적으로 2020~2026 데이터를 동기화"""
+def sync_yearly_data_v113(sh, stn_id, stn_name, target_year):
+    """가이드 표준 항목(sumGsr)을 사용하여 데이터 수집"""
     try:
         db_ws = sh.worksheet('Solar_DB')
         SERVICE_KEY = 'ba10959184b37d5a2f94b2fe97ecb2f96589f7d8724ba17f85fdbc22d47fb7fe'
-        all_new_rows = []
         
-        # 2020년부터 현재 연도까지 순회
-        current_year = datetime.date.today().year
-        for year in range(2020, current_year + 1):
-            start_dt = f"{year}0101"
-            # 올해인 경우 어제 날짜까지만 조회
-            if year == current_year:
-                end_dt = (datetime.date.today() - datetime.timedelta(days=1)).strftime("%Y%m%d")
-            else:
-                end_dt = f"{year}1231"
+        start_dt = f"{target_year}0101"
+        end_dt = f"{target_year}1231" if int(target_year) < datetime.date.today().year else (datetime.date.today() - datetime.timedelta(days=1)).strftime("%Y%m%d")
+        
+        url = f'http://apis.data.go.kr/1360000/AsosDalyInfoService/getWthrDataList?serviceKey={SERVICE_KEY}&numOfRows=366&pageNo=1&dataType=JSON&dataCd=ASOS&dateCd=DAY&stnIds={stn_id}&startDt={start_dt}&endDt={end_dt}'
+        
+        res = requests.get(url, timeout=15).json()
+        items = res.get('response', {}).get('body', {}).get('items', {}).get('item', [])
+        
+        new_rows = []
+        for i in items:
+            raw_gsr = i.get('sumGsr', '0')
+            gsr = float(raw_gsr) if raw_gsr and str(raw_gsr).strip() != '' else 0.0
+            new_rows.append([i['tm'], stn_name, round(gsr / 3.6, 2), gsr])
+        
+        if new_rows:
+            # 데이터 정화 및 삽입 로직
+            all_data = db_ws.get_all_values()
+            if len(all_data) > 1:
+                df_all = pd.DataFrame(all_data[1:], columns=all_data[0])
+                df_all['날짜'] = pd.to_datetime(df_all['날짜'], errors='coerce')
+                df_filtered = df_all.loc[df_all['날짜'].dt.year != int(target_year)].dropna(subset=['날짜'])
+                db_ws.clear()
+                db_ws.append_row(["날짜", "지점", "발전시간", "일사량합계"])
+                if not df_filtered.empty:
+                    df_filtered['날짜'] = df_filtered['날짜'].dt.strftime('%Y-%m-%d')
+                    db_ws.append_rows(df_filtered.values.tolist(), width='stretch')
             
-            url = f'http://apis.data.go.kr/1360000/AsosDalyInfoService/getWthrDataList?serviceKey={SERVICE_KEY}&numOfRows=366&pageNo=1&dataType=JSON&dataCd=ASOS&dateCd=DAY&stnIds={stn_id}&startDt={start_dt}&endDt={end_dt}'
-            
-            try:
-                res = requests.get(url, timeout=10).json()
-                if 'response' in res and 'body' in res['response'] and 'items' in res['response']['body']:
-                    items = res['response']['body']['items']['item']
-                    for i in items:
-                        icsr = float(i['sumIcsr']) if i.get('sumIcsr') else 0
-                        all_new_rows.append([i['tm'], stn_name, round(icsr / 3.6, 2), icsr])
-                time.sleep(0.2) # API 서버 보호를 위한 미세 지연
-            except:
-                continue # 특정 연도 실패 시 다음 연도로 진행
-
-        if all_new_rows:
-            db_ws.clear()
-            db_ws.append_row(["날짜", "지점", "발전시간", "일사량합계"])
-            db_ws.append_rows(all_new_rows)
-            return len(all_new_rows)
+            db_ws.append_rows(new_rows)
+            return len(new_rows)
     except Exception as e:
-        st.error(f"상세 오류: {e}")
+        st.error(f"동기화 오류: {e}")
         return 0
 
 # ---------------------------------------------------------
-# [SECTION 2] 분석 화면 (오류 복구 버전)
+# [SECTION 2] 분석 화면 및 메인 컨트롤러
 # ---------------------------------------------------------
 
 def show_daily_solar(sh):
-    st.title("📅 일 발전량 연간 통계 분석 (2020-2026)")
+    st.title("📅 일 발전량 연간 통계 리포트")
     
-    with st.expander("📥 과거 데이터 연도별 안정적 동기화"):
-        st.info("데이터를 연도별로 나누어 수집하여 오류를 최소화합니다. (2020년~현재)")
-        c1, c2 = st.columns([2, 1])
-        stn = c1.selectbox("수집 지점 선택", [127, 108, 131, 159], format_func=lambda x: {127:"충주", 108:"서울", 131:"청주", 159:"부산"}[x])
-        if c2.button("🚀 안정적 동기화 시작"):
-            with st.spinner('연도별 데이터를 순차적으로 수집 중입니다...'):
-                count = sync_solar_data_stable(sh, stn, {127:"충주", 108:"서울", 131:"청주", 159:"부산"}[stn])
-                if count > 0: st.success(f"✅ {count}일치 데이터 동기화 완료!"); time.sleep(1); st.rerun()
+    with st.expander("📥 연도별 데이터 정밀 동기화"):
+        c1, c2, c3 = st.columns([1, 1, 1])
+        stn = c1.selectbox("지점", [127, 108, 131, 159], format_func=lambda x: {127:"충주", 108:"서울", 131:"청주", 159:"부산"}[x])
+        year = c2.selectbox("수집 연도", list(range(2026, 2019, -1)))
+        if c3.button(f"🚀 {year}년 데이터 수집/정정", width='stretch'):
+            with st.spinner('동기화 중...'):
+                count = sync_yearly_data_v113(sh, stn, {127:"충주", 108:"서울", 131:"청주", 159:"부산"}[stn], year)
+                if count > 0: st.success(f"{year}년 수집 완료!"); time.sleep(1); st.rerun()
 
-    # 연도 선택 및 그래프 로직 (v1.0.6과 동일)
     year_list = list(range(2026, 2019, -1))
-    sel_year = st.selectbox("📊 분석 연도를 선택하세요", year_list)
+    sel_year = st.selectbox("📊 분석할 연도를 선택하세요", year_list, index=year_list.index(2023))
     
     try:
-        df = pd.DataFrame(sh.worksheet('Solar_DB').get_all_records())
+        ws = sh.worksheet('Solar_DB')
+        df = pd.DataFrame(ws.get_all_records())
         if not df.empty:
-            df['날짜'] = pd.to_datetime(df['날짜'])
-            y_df = df[df['날짜'].dt.year == sel_year]
+            df['날짜'] = pd.to_datetime(df['날짜'], errors='coerce')
+            y_df = df.loc[df['날짜'].dt.year == int(sel_year)].copy()
             if not y_df.empty:
                 avg_val = round(y_df['발전시간'].mean(), 2)
-                st.markdown(f'<div class="metric-box"><h2 style="color:#555;">✨ {sel_year}년 전체 평균 발전시간</h2><h1 style="color:#f1c40f; font-size:50px;">{avg_val} h / 일</h1></div>', unsafe_allow_html=True)
+                st.metric(f"✨ {sel_year}년 일 평균 발전시간", f"{avg_val} h")
                 y_df['월'] = y_df['날짜'].dt.month
                 m_avg = y_df.groupby('월')['발전시간'].mean().reset_index()
-                st.plotly_chart(px.bar(m_avg, x='월', y='발전시간', text_auto='.2f', color='발전시간', color_continuous_scale='YlOrRd'), use_container_width=True)
-    except: st.info("동기화가 필요합니다.")
+                st.plotly_chart(px.bar(m_avg, x='월', y='발전시간', color_discrete_sequence=['#f1c40f']), width='stretch')
+    except: st.info("데이터 동기화가 필요합니다.")
 
-# ---------------------------------------------------------
-# [SECTION 3] 메인 컨트롤러
-# ---------------------------------------------------------
+def check_password():
+    if "password_correct" not in st.session_state: st.session_state["password_correct"] = False
+    if st.session_state["password_correct"]: return True
+    st.title("🏗️ PM 통합 관리 시스템") 
+    with st.form("login_form"):
+        u_id, u_pw = st.text_input("아이디"), st.text_input("비밀번호", type="password")
+        if st.form_submit_button("로그인"):
+            if u_id in st.secrets["passwords"] and u_pw == st.secrets["passwords"][u_id]:
+                st.session_state["password_correct"] = True
+                st.session_state["user_id"] = u_id
+                st.rerun()
+            else: st.error("정보 불일치")
+    return False
 
-if "password_correct" not in st.session_state: st.session_state["password_correct"] = False
-# (로그인 로직 생략)
-
-if st.session_state.get("password_correct", True):
-    client = get_client(); sh = client.open('pms_db')
-    
-    st.sidebar.title("📁 PMO 센터")
-    st.sidebar.markdown("---")
-    if st.sidebar.button("🏠 1. 전체 대시보드", use_container_width=True): st.session_state["page"] = "home"
-    if st.sidebar.button("⏱️ 시간별 발전량 조회", use_container_width=True): st.session_state["page"] = "solar_hr"
-    if st.sidebar.button("📅 일 발전량 조회 (1년)", use_container_width=True): st.session_state["page"] = "solar_day"
-    if st.sidebar.button("📉 3. 경영지표 (KPI)", use_container_width=True): st.session_state["page"] = "kpi"
-    
-    if st.session_state.get("page") == "solar_day": show_daily_solar(sh)
-    elif st.session_state.get("page") == "home": st.title("📊 통합 대시보드")
+if check_password():
+    client = get_client()
+    if client:
+        sh = client.open('pms_db')
+        pjt_list = [ws.title for ws in sh.worksheets() if ws.title not in ['weekly_history', 'Solar_DB', 'KPI']]
+        if "page" not in st.session_state: st.session_state["page"] = "home"
+        
+        st.sidebar.title("📁 PMO 센터"); st.sidebar.markdown("---")
+        if st.sidebar.button("🏠 1. 전체 대시보드", width='stretch'): st.session_state["page"] = "home"; st.rerun()
+        if st.sidebar.button("📅 일 발전량 조회", width='stretch'): st.session_state["page"] = "solar_day"; st.rerun()
+        
+        pg = st.session_state["page"]
+        if pg == "home": st.title("📊 통합 대시보드")
+        elif pg == "solar_day": show_daily_solar(sh)
