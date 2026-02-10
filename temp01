@@ -7,8 +7,8 @@ import requests
 import time
 import plotly.express as px
 
-# 1. 페이지 설정 (최신 Streamlit 규격 적용)
-st.set_page_config(page_title="PM 통합 공정 관리 v1.1.3", page_icon="🏗️", layout="wide")
+# 1. 페이지 설정
+st.set_page_config(page_title="PM 통합 공정 관리 v1.1.4", page_icon="🏗️", layout="wide")
 
 # --- [UI] 디자인 및 저작권 문구 ---
 st.markdown("""
@@ -38,14 +38,14 @@ def get_client():
         st.error(f"구글 시트 연결 실패: {e}")
         return None
 
-def sync_yearly_data_v113(sh, stn_id, stn_name, target_year):
+def sync_yearly_data_v114(sh, stn_id, stn_name, target_year):
     """가이드 표준 항목(sumGsr)을 사용하여 데이터 수집"""
     try:
         db_ws = sh.worksheet('Solar_DB')
         SERVICE_KEY = 'ba10959184b37d5a2f94b2fe97ecb2f96589f7d8724ba17f85fdbc22d47fb7fe'
         
         start_dt = f"{target_year}0101"
-        end_dt = f"{target_year}1231" if int(target_year) < datetime.date.today().year else (datetime.date.today() - datetime.timedelta(days=1)).strftime("%Y%m%d")
+        end_dt = f"{target_year}1231" if int(target_year) < datetime.date.today().year else datetime.date.today().strftime("%Y%m%d")
         
         url = f'http://apis.data.go.kr/1360000/AsosDalyInfoService/getWthrDataList?serviceKey={SERVICE_KEY}&numOfRows=366&pageNo=1&dataType=JSON&dataCd=ASOS&dateCd=DAY&stnIds={stn_id}&startDt={start_dt}&endDt={end_dt}'
         
@@ -59,17 +59,19 @@ def sync_yearly_data_v113(sh, stn_id, stn_name, target_year):
             new_rows.append([i['tm'], stn_name, round(gsr / 3.6, 2), gsr])
         
         if new_rows:
-            # 데이터 정화 및 삽입 로직
+            # 데이터 정화 및 중복 제거 삽입 로직
             all_data = db_ws.get_all_values()
+            df_filtered = pd.DataFrame()
             if len(all_data) > 1:
                 df_all = pd.DataFrame(all_data[1:], columns=all_data[0])
                 df_all['날짜'] = pd.to_datetime(df_all['날짜'], errors='coerce')
                 df_filtered = df_all.loc[df_all['날짜'].dt.year != int(target_year)].dropna(subset=['날짜'])
-                db_ws.clear()
-                db_ws.append_row(["날짜", "지점", "발전시간", "일사량합계"])
-                if not df_filtered.empty:
-                    df_filtered['날짜'] = df_filtered['날짜'].dt.strftime('%Y-%m-%d')
-                    db_ws.append_rows(df_filtered.values.tolist(), width='stretch')
+            
+            db_ws.clear()
+            db_ws.append_row(["날짜", "지점", "발전시간", "일사량합계"])
+            if not df_filtered.empty:
+                df_filtered['날짜'] = df_filtered['날짜'].dt.strftime('%Y-%m-%d')
+                db_ws.append_rows(df_filtered.values.tolist())
             
             db_ws.append_rows(new_rows)
             return len(new_rows)
@@ -82,15 +84,15 @@ def sync_yearly_data_v113(sh, stn_id, stn_name, target_year):
 # ---------------------------------------------------------
 
 def show_daily_solar(sh):
-    st.title("📅 일 발전량 연간 통계 리포트")
+    st.title("📅 연도별 발전량 분석 리포트")
     
-    with st.expander("📥 연도별 데이터 정밀 동기화"):
+    with st.expander("📥 데이터 정밀 동기화 (기상청 API)"):
         c1, c2, c3 = st.columns([1, 1, 1])
         stn = c1.selectbox("지점", [127, 108, 131, 159], format_func=lambda x: {127:"충주", 108:"서울", 131:"청주", 159:"부산"}[x])
         year = c2.selectbox("수집 연도", list(range(2026, 2019, -1)))
         if c3.button(f"🚀 {year}년 데이터 수집/정정", width='stretch'):
             with st.spinner('동기화 중...'):
-                count = sync_yearly_data_v113(sh, stn, {127:"충주", 108:"서울", 131:"청주", 159:"부산"}[stn], year)
+                count = sync_yearly_data_v114(sh, stn, {127:"충주", 108:"서울", 131:"청주", 159:"부산"}[stn], year)
                 if count > 0: st.success(f"{year}년 수집 완료!"); time.sleep(1); st.rerun()
 
     year_list = list(range(2026, 2019, -1))
@@ -108,6 +110,7 @@ def show_daily_solar(sh):
                 y_df['월'] = y_df['날짜'].dt.month
                 m_avg = y_df.groupby('월')['발전시간'].mean().reset_index()
                 st.plotly_chart(px.bar(m_avg, x='월', y='발전시간', color_discrete_sequence=['#f1c40f']), width='stretch')
+            else: st.warning(f"{sel_year}년 데이터가 시트에 없습니다.")
     except: st.info("데이터 동기화가 필요합니다.")
 
 def check_password():
@@ -128,13 +131,34 @@ if check_password():
     client = get_client()
     if client:
         sh = client.open('pms_db')
-        pjt_list = [ws.title for ws in sh.worksheets() if ws.title not in ['weekly_history', 'Solar_DB', 'KPI']]
+        pjt_list = [ws.title for ws in sh.worksheets() if ws.title not in ['weekly_history', 'Solar_DB', 'KPI', 'Sheet1']]
         if "page" not in st.session_state: st.session_state["page"] = "home"
         
-        st.sidebar.title("📁 PMO 센터"); st.sidebar.markdown("---")
+        # 사이드바 메뉴 (이사님 지정 순서)
+        st.sidebar.title("📁 PMO 센터"); st.sidebar.write(f"👤 **{st.session_state['user_id']} 이사님**"); st.sidebar.markdown("---")
         if st.sidebar.button("🏠 1. 전체 대시보드", width='stretch'): st.session_state["page"] = "home"; st.rerun()
+        st.sidebar.markdown("### ☀️ 2. 태양광 분석")
         if st.sidebar.button("📅 일 발전량 조회", width='stretch'): st.session_state["page"] = "solar_day"; st.rerun()
+        if st.sidebar.button("📉 3. 경영지표 (KPI)", width='stretch'): st.session_state["page"] = "kpi"; st.rerun()
         
+        st.sidebar.markdown("---"); st.sidebar.markdown("### 🏗️ 4. 프로젝트 목록")
+        pjt_choice = st.sidebar.selectbox("현장 선택 (팝업)", ["선택하세요"] + pjt_list)
+        if pjt_choice != "선택하세요":
+            st.session_state["page"], st.session_state["current_pjt"] = "detail", pjt_choice
+        
+        if st.sidebar.button("🔓 로그아웃", width='stretch'):
+            for k in list(st.session_state.keys()): del st.session_state[k]
+            st.rerun()
+
+        # 페이지 라우팅
         pg = st.session_state["page"]
-        if pg == "home": st.title("📊 통합 대시보드")
+        if pg == "home":
+            st.title("📊 프로젝트 통합 대시보드")
+            st.write(f"현재 운영 중인 {len(pjt_list)}개 현장 현황입니다.")
         elif pg == "solar_day": show_daily_solar(sh)
+        elif pg == "kpi":
+            st.title("📈 전사 경영지표 (KPI)")
+            try: st.dataframe(pd.DataFrame(sh.worksheet('KPI').get_all_records()), width='stretch')
+            except: st.error("KPI 시트가 없습니다.")
+        elif pg == "detail":
+            st.title(f"🏗️ {st.session_state['current_pjt']} 상세 관리")
