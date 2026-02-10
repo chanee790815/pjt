@@ -8,7 +8,7 @@ import time
 import plotly.express as px
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v3.0.1", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v0.0.1", page_icon="🏗️", layout="wide")
 
 # --- [UI] 스타일 ---
 st.markdown("""
@@ -18,7 +18,7 @@ st.markdown("""
     .pjt-card { background-color: #ffffff; padding: 20px; border-radius: 12px; border: 1px solid #eee; margin-bottom: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
     .footer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: #f1f1f1; color: #555; text-align: center; padding: 5px; font-size: 11px; z-index: 100; }
     </style>
-    <div class="footer">시스템 상태: 정상 (v3.0.1 Patch) | 데이터 출처: 기상청 API & 구글 클라우드</div>
+    <div class="footer">시스템 상태: 정상 (v0.0.1 Baseline) | 데이터 출처: 기상청 API & 구글 클라우드</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -28,7 +28,7 @@ st.markdown("""
 def check_login():
     if st.session_state.get("logged_in", False): return True
     
-    st.title("🏗️ PM 통합 관리 시스템 (v3.0.1)")
+    st.title("🏗️ PM 통합 관리 시스템 (v0.0.1)")
     with st.form("login"):
         u_id = st.text_input("ID")
         u_pw = st.text_input("Password", type="password")
@@ -112,7 +112,7 @@ def view_solar(sh):
                     
                     items = res.get('response', {}).get('body', {}).get('items', {}).get('item', [])
                     
-                    # [수정됨] 안전한 숫자 변환 로직 적용
+                    # 안전한 숫자 변환 로직 적용
                     rows = []
                     for i in items:
                         gsr_val = get_safe_float(i.get('sumGsr', 0)) # 빈값 처리
@@ -160,7 +160,7 @@ def view_solar(sh):
 def view_project_detail(sh, pjt_list):
     st.title("🏗️ 개별 프로젝트 상세 관리")
     
-    # [수정] 라디오 버튼이라 상태 유지됨
+    # 라디오 버튼이라 상태 유지됨
     selected_pjt = st.selectbox("관리할 현장을 선택하세요", ["선택"] + pjt_list)
     
     if selected_pjt != "선택":
