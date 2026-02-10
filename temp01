@@ -220,7 +220,7 @@ if check_login():
         st.sidebar.info(f"User: {st.session_state['user_id']}")
         
         # 메뉴 순서 (기본값 index=1: 일 발전량 분석)
-        menu = st.sidebar.radio("메뉴 선택", ["통합 대시보드", "일 발전량 분석", "프로젝트 상세", "경영지표(KPI)", "프로젝트 설정"], index=1)
+        menu = st.sidebar.radio("메뉴 선택", ["통합 대시보드", "일 발전량 분석", "프로젝트 상세", "경영지표(KPI)", "프로젝트 설정"], index=0)
         st.sidebar.markdown("---")
         if st.sidebar.button("로그아웃"):
             st.session_state["logged_in"] = False; st.rerun()
