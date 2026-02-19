@@ -85,10 +85,7 @@ def view_solar(sh):
         c1, c2, c3 = st.columns([1, 1, 1])
         stn_map = {127:"충주", 108:"서울", 131:"청주", 159:"부산", 112:"인천", 119:"수원", 129:"서산(당진)"}
         
-        # [설정] index=6: 서산(당진)을 기본값으로 선택
         stn_id = c1.selectbox("수집 지점", list(stn_map.keys()), format_func=lambda x: stn_map[x], index=6)
-        
-        # [설정] index=1: 2025년을 기본값으로 선택 (0:2026, 1:2025)
         year = c2.selectbox("수집 연도", list(range(2026, 2019, -1)), index=1)
         
         if c3.button("🚀 데이터 동기화 실행", use_container_width=True):
@@ -121,10 +118,7 @@ def view_solar(sh):
     st.subheader("📊 연간 발전 효율 차트")
     col1, col2 = st.columns(2)
     
-    # [설정] index=4: 서산(당진)을 기본값으로 선택 ("충주","서울","인천","수원","서산(당진)"...)
     sel_stn = col1.selectbox("분석 지점", ["충주", "서울", "인천", "수원", "서산(당진)", "청주", "부산"], index=4)
-    
-    # [설정] index=1: 2025년을 기본값으로 선택
     sel_year = col2.selectbox("분석 연도", list(range(2026, 2019, -1)), index=1)
     
     try:
@@ -161,6 +155,9 @@ def view_project_detail(sh, pjt_list):
         st.write("📝 데이터 수정")
         edited = st.data_editor(df, use_container_width=True, num_rows="dynamic")
         if st.button("💾 저장하기", use_container_width=True):
+            # gspread 업데이트를 위한 DataFrame 전처리 (NaN 제거 등)
+            edited = edited.fillna("")
+            edited = edited.astype(str)
             ws.clear(); ws.update([edited.columns.values.tolist()] + edited.values.tolist())
             st.success("저장되었습니다!"); time.sleep(1); st.rerun()
 
@@ -173,7 +170,10 @@ def view_kpi(sh):
 
 def view_project_admin(sh, pjt_list):
     st.title("⚙️ 프로젝트 설정 (마스터 관리)")
-    tab1, tab2, tab3 = st.tabs(["➕ 신규 등록", "✏️ 이름 수정", "🗑️ 삭제"])
+    
+    # 엑셀 동기화 탭(tab4)을 추가했습니다.
+    tab1, tab2, tab3, tab4 = st.tabs(["➕ 신규 등록", "✏️ 이름 수정", "🗑️ 삭제", "🔄 엑셀 동기화"])
+    
     with tab1:
         new_pjt_name = st.text_input("새 프로젝트 명칭")
         if st.button("프로젝트 생성", type="primary", use_container_width=True):
@@ -185,6 +185,7 @@ def view_project_admin(sh, pjt_list):
                     st.success(f"✅ '{new_pjt_name}' 생성 완료!"); time.sleep(1); st.rerun()
                 except Exception as e: st.error(f"생성 실패: {e}")
             else: st.warning("유효한 이름을 입력해주세요.")
+            
     with tab2:
         target_pjt = st.selectbox("이름을 변경할 프로젝트", ["선택"] + pjt_list, key="rename_sel")
         new_name_input = st.text_input("변경할 새 이름", key="rename_input")
@@ -195,6 +196,7 @@ def view_project_admin(sh, pjt_list):
                     ws.update_title(new_name_input)
                     st.success(f"✅ 변경 완료!"); time.sleep(1); st.rerun()
                 except Exception as e: st.error(f"변경 실패: {e}")
+                
     with tab3:
         del_pjt = st.selectbox("삭제할 프로젝트 선택", ["선택"] + pjt_list, key="del_sel")
         confirm_del = st.checkbox("데이터 영구 삭제를 확인했습니다.")
@@ -205,6 +207,43 @@ def view_project_admin(sh, pjt_list):
                     sh.del_worksheet(ws)
                     st.success(f"🗑️ 삭제되었습니다."); time.sleep(1); st.rerun()
                 except Exception as e: st.error(f"삭제 실패: {e}")
+                
+    # 새롭게 추가된 엑셀 업로드 동기화 탭
+    with tab4:
+        st.markdown("#### 🔄 엑셀 파일 업로드 & 구글 시트 동기화")
+        st.info("로컬에서 작성한 엑셀 파일로 특정 프로젝트의 데이터를 일괄 덮어쓰기 합니다.")
+        
+        sync_pjt = st.selectbox("데이터를 업데이트할 프로젝트 선택", ["선택"] + pjt_list, key="sync_sel")
+        # xlsm 확장자 추가
+        uploaded_file = st.file_uploader("엑셀 파일(.xlsx, .xlsm)을 업로드하세요", type=['xlsx', 'xls', 'xlsm'])
+        
+        if sync_pjt != "선택" and uploaded_file is not None:
+            try:
+                # 엑셀 파일 읽기 (첫 번째 시트 기준)
+                df = pd.read_excel(uploaded_file)
+                
+                # [중요] 구글 시트 업로드를 위한 데이터 전처리
+                # gspread는 NaN(빈 값), NaT(날짜 결측치) 등을 처리하지 못하므로 빈 문자열로 변환합니다.
+                df = df.fillna("")
+                df = df.astype(str) # 날짜 포맷팅 등 충돌을 막기 위해 전체를 문자열로 캐스팅
+                
+                st.write(f"**미리보기 ({len(df)}행 감지됨):**")
+                st.dataframe(df.head(10), use_container_width=True)
+                
+                if st.button(f"🚀 '{sync_pjt}' 프로젝트 구글 시트 덮어쓰기", type="primary"):
+                    with st.spinner('구글 스프레드시트 업데이트 중... (기존 데이터는 삭제됩니다)'):
+                        ws = sh.worksheet(sync_pjt)
+                        ws.clear() # 기존 데이터 날리기
+                        
+                        # 새로운 데이터 쓰기 (헤더 + 내용)
+                        ws.update([df.columns.values.tolist()] + df.values.tolist())
+                        
+                        st.success(f"🎉 '{sync_pjt}' 데이터 동기화가 완료되었습니다!")
+                        time.sleep(1.5)
+                        st.rerun()
+                        
+            except Exception as e:
+                st.error(f"엑셀 파일 처리 중 오류가 발생했습니다: {e}")
 
 # ---------------------------------------------------------
 # [SECTION 3] 메인 컨트롤러 (Router)
@@ -219,7 +258,7 @@ if check_login():
         st.sidebar.title("📁 PMO 메뉴")
         st.sidebar.info(f"User: {st.session_state['user_id']}")
         
-        # 메뉴 순서 (기본값 index=1: 일 발전량 분석)
+        # 메뉴 순서 (기본값 index=0: 통합 대시보드)
         menu = st.sidebar.radio("메뉴 선택", ["통합 대시보드", "일 발전량 분석", "프로젝트 상세", "경영지표(KPI)", "프로젝트 설정"], index=0)
         st.sidebar.markdown("---")
         if st.sidebar.button("로그아웃"):
