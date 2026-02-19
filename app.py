@@ -214,7 +214,8 @@ def view_project_admin(sh, pjt_list):
         st.info("로컬에서 작성한 엑셀 파일로 특정 프로젝트의 데이터를 일괄 덮어쓰기 합니다.")
         
         sync_pjt = st.selectbox("데이터를 업데이트할 프로젝트 선택", ["선택"] + pjt_list, key="sync_sel")
-        uploaded_file = st.file_uploader("엑셀 파일(.xlsx)을 업로드하세요", type=['xlsx', 'xls'])
+        # xlsm 확장자 추가
+        uploaded_file = st.file_uploader("엑셀 파일(.xlsx, .xlsm)을 업로드하세요", type=['xlsx', 'xls', 'xlsm'])
         
         if sync_pjt != "선택" and uploaded_file is not None:
             try:
@@ -268,3 +269,4 @@ if check_login():
         elif menu == "프로젝트 상세": view_project_detail(sh, pjt_list)
         elif menu == "경영지표(KPI)": view_kpi(sh)
         elif menu == "프로젝트 설정": view_project_admin(sh, pjt_list)
+
