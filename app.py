@@ -10,7 +10,7 @@ import plotly.graph_objects as go
 import io
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v4.0", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v4.1", page_icon="🏗️", layout="wide")
 
 # --- [UI] 스타일 ---
 st.markdown("""
@@ -22,7 +22,7 @@ st.markdown("""
     .risk-high { border-left: 5px solid #ff4b4b !important; }
     .risk-normal { border-left: 5px solid #1f77b4 !important; }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.0 Default: Seosan/2026) | 데이터 출처: 기상청 API & 구글 클라우드</div>
+    <div class="footer">시스템 상태: 정상 (v4.1 Default: Seosan/2026) | 데이터 출처: 기상청 API & 구글 클라우드</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -32,7 +32,7 @@ st.markdown("""
 def check_login():
     if st.session_state.get("logged_in", False): return True
     
-    st.title("🏗️ PM 통합 관리 시스템 (v4.0)")
+    st.title("🏗️ PM 통합 관리 시스템 (v4.1)")
     with st.form("login"):
         u_id = st.text_input("ID")
         u_pw = st.text_input("Password", type="password")
@@ -59,7 +59,7 @@ def get_safe_float(value):
         return float(value)
     except (ValueError, TypeError): return 0.0
 
-# [NEW] 계획 진척률 자동 계산 로직
+# [계획 진척률 자동 계산 로직]
 def calc_planned_progress(start, end, target_date=None):
     if target_date is None:
         target_date = datetime.date.today()
@@ -82,6 +82,13 @@ def calc_planned_progress(start, end, target_date=None):
 def view_dashboard(sh, pjt_list):
     st.title("📊 통합 대시보드 (계획/실적 연동)")
     st.info(f"현재 관리 중인 현장: {len(pjt_list)}개")
+    
+    # 주간업무 기록 불러오기
+    try:
+        hist_df = pd.DataFrame(sh.worksheet('weekly_history').get_all_records())
+    except:
+        hist_df = pd.DataFrame()
+        
     try:
         cols = st.columns(2)
         for idx, p_name in enumerate(pjt_list):
@@ -93,11 +100,10 @@ def view_dashboard(sh, pjt_list):
                 avg_plan = 0.0
                 if not df.empty and '진행률' in df.columns and '시작일' in df.columns and '종료일' in df.columns:
                     avg_act = round(pd.to_numeric(df['진행률'], errors='coerce').mean(), 1)
-                    # 각 태스크별 계획 진척률 구하기
                     plans = df.apply(lambda row: calc_planned_progress(row['시작일'], row['종료일']), axis=1)
                     avg_plan = round(plans.mean(), 1)
                 
-                # 10% 이상 지연 시 경고등 로직
+                # 지연 상태 경고등 로직
                 delay_diff = avg_plan - avg_act
                 status_icon = "🟢 정상"
                 card_class = "pjt-card risk-normal"
@@ -108,19 +114,45 @@ def view_dashboard(sh, pjt_list):
                     status_icon = f"🟡 {delay_diff:.1f}% 지연주의"
                 elif avg_act == 100:
                     status_icon = "🔵 완료"
+                    
+                # [NEW] 주간업무 요약 추출 로직
+                weekly_text = "<span style='color:#999'>등록된 주간업무가 없습니다. (상세페이지에서 입력)</span>"
+                if not hist_df.empty and '프로젝트명' in hist_df.columns:
+                    row = hist_df[hist_df['프로젝트명'] == p_name]
+                    if not row.empty:
+                        latest = row.iloc[-1]
+                        this_week = str(latest.get('금주업무', '')).strip()
+                        next_week = str(latest.get('차주업무', '')).strip()
+                        
+                        lines = []
+                        if this_week and this_week != 'nan':
+                            lines.append(f"✔️ <b>[금주]</b> {this_week[:40]}{'...' if len(this_week)>40 else ''}")
+                        if next_week and next_week != 'nan':
+                            lines.append(f"🔜 <b>[차주]</b> {next_week[:40]}{'...' if len(next_week)>40 else ''}")
+                        
+                        if lines:
+                            weekly_text = "<br>".join(lines)
+                        else:
+                            # 구버전 호환용
+                            last_status = str(latest.get('주요현황', '')).strip()
+                            if last_status and last_status != 'nan':
+                                weekly_text = f"💡 <b>[현황]</b> {last_status[:40]}"
                 
-                # UI 카드 렌더링
+                # UI 카드 렌더링 (주간업무 패널 추가)
                 st.markdown(f'''
                 <div class="{card_class}">
                     <h4>🏗️ {p_name} <span style="font-size:14px; float:right;">{status_icon}</span></h4>
-                    <p style="margin-bottom: 5px; font-size: 13px; color: #666;">계획: <b>{avg_plan}%</b> &nbsp;|&nbsp; 실적: <b>{avg_act}%</b></p>
+                    <p style="margin-bottom: 8px; font-size: 13px; color: #666;">계획: <b>{avg_plan}%</b> &nbsp;|&nbsp; 실적: <b>{avg_act}%</b></p>
+                    <div style="background-color: #f8f9fa; padding: 12px; border-radius: 6px; margin-bottom: 12px; font-size: 13px; line-height: 1.5; color: #333;">
+                        {weekly_text}
+                    </div>
                 </div>
                 ''', unsafe_allow_html=True)
                 
                 st.progress(avg_act/100, text=f"현재 실적: {avg_act}%")
     except Exception as e: st.error(f"대시보드 로드 오류: {e}")
 
-# [NEW] 리스크 및 이슈 트래킹 뷰
+# 리스크 및 이슈 트래킹 뷰
 def view_risk_dashboard(sh, pjt_list):
     st.title("🚨 리스크 및 이슈 트래킹")
     st.markdown("전체 프로젝트 중 **'비고'란에 이슈가 작성되어 있고 완료되지 않은 공정**들을 한눈에 모니터링합니다.")
@@ -131,38 +163,34 @@ def view_risk_dashboard(sh, pjt_list):
             try:
                 df = pd.DataFrame(sh.worksheet(p_name).get_all_records())
                 if not df.empty and '비고' in df.columns and '진행률' in df.columns:
-                    # 빈 값이 아니고, 진행률이 100 미만인 것만 추출 (결측치는 문자열로 처리)
                     df['비고'] = df['비고'].astype(str).str.strip()
                     df['진행률'] = pd.to_numeric(df['진행률'], errors='coerce').fillna(0)
-                    
                     issues_df = df[(df['비고'] != "") & (df['비고'] != "-") & (df['진행률'] < 100)].copy()
                     if not issues_df.empty:
                         issues_df.insert(0, '현장명', p_name)
                         all_issues.append(issues_df)
             except Exception as e:
-                pass # 시트 에러는 건너뜀
+                pass
                 
     if all_issues:
         final_issues = pd.concat(all_issues, ignore_index=True)
-        # 필요한 열만 정리
         display_cols = ['현장명', '대분류', '구분', '종료일', '진행률', '비고', '담당자']
         final_issues = final_issues[[c for c in display_cols if c in final_issues.columns]]
-        
         st.error(f"⚠️ 현재 모니터링이 필요한 오픈 이슈가 총 {len(final_issues)}건 있습니다.")
         st.dataframe(final_issues, use_container_width=True)
     else:
         st.success("🎉 현재 등록된 오픈 이슈/리스크가 없습니다!")
 
 def view_project_detail(sh, pjt_list):
-    st.title("🏗️ 프로젝트 상세 관리 & S-Curve")
+    st.title("🏗️ 프로젝트 상세 관리 & 주간보고")
     selected_pjt = st.selectbox("관리할 현장을 선택하세요", ["선택"] + pjt_list)
     
     if selected_pjt != "선택":
         ws = sh.worksheet(selected_pjt)
         df = pd.DataFrame(ws.get_all_records())
         if not df.empty and '시작일' in df.columns:
-            # 1. 차트 영역 (간트 + S-Curve 탭)
-            tab_gantt, tab_scurve = st.tabs(["📊 간트 차트", "📈 계획 대비 실적 (S-Curve)"])
+            # [NEW] 주간업무 탭 추가 (3개의 탭으로 구성)
+            tab_gantt, tab_scurve, tab_weekly = st.tabs(["📊 간트 차트", "📈 계획 대비 실적 (S-Curve)", "📝 주간 업무 보고"])
             
             with tab_gantt:
                 try:
@@ -176,7 +204,6 @@ def view_project_detail(sh, pjt_list):
                     st.plotly_chart(fig, use_container_width=True)
                 except: st.caption("간트차트 생성 실패 (날짜 형식 확인)")
 
-            # [NEW] S-Curve (계획 선 vs 실적 점)
             with tab_scurve:
                 try:
                     df_sc = df.copy()
@@ -188,41 +215,74 @@ def view_project_detail(sh, pjt_list):
                         min_date = df_sc['시작일'].min()
                         max_date = df_sc['종료일'].max()
                         today = datetime.date.today()
-                        
-                        # 주 단위 기준일 생성 (프로젝트 전체 기간)
                         date_range = pd.date_range(start=min_date, end=max_date, freq='W-MON').date.tolist()
                         if min_date not in date_range: date_range.insert(0, min_date)
                         if max_date not in date_range: date_range.append(max_date)
                         
-                        planned_trend = []
-                        for d in date_range:
-                            plans = df_sc.apply(lambda row: calc_planned_progress(row['시작일'], row['종료일'], d), axis=1)
-                            planned_trend.append(plans.mean())
-                            
-                        # 실적 (오늘 날짜 기준 1개 포인트, 혹은 주간 로그가 있다면 연동 가능)
+                        planned_trend = [df_sc.apply(lambda row: calc_planned_progress(row['시작일'], row['종료일'], d), axis=1).mean() for d in date_range]
                         actual_prog = pd.to_numeric(df_sc['진행률'], errors='coerce').mean()
                         
-                        # Plotly S-Curve 그리기
                         fig_sc = go.Figure()
-                        # 계획 선
                         fig_sc.add_trace(go.Scatter(x=date_range, y=planned_trend, mode='lines+markers', name='계획 진척률', line=dict(color='gray', width=3)))
-                        # 현재 실적 점
                         fig_sc.add_trace(go.Scatter(x=[today], y=[actual_prog], mode='markers', name='현재 실적', marker=dict(color='blue', size=12, symbol='star')))
-                        
-                        # 오늘 날짜 수직선
                         fig_sc.add_vline(x=today, line_dash="dash", line_color="red", annotation_text="Today")
-                        
                         fig_sc.update_layout(title="전체 공정 S-Curve 및 현재 실적 비교", yaxis_title="진척률 (%)", yaxis=dict(range=[0, 105]))
                         st.plotly_chart(fig_sc, use_container_width=True)
-                        
                         st.info(f"📅 **오늘({today}) 기준 요약:** 전체 계획 **{calc_planned_progress(min_date, max_date):.1f}%** 대비 현재 실적 **{actual_prog:.1f}%**")
                 except Exception as e:
                     st.caption(f"S-Curve 생성 실패: {e}")
 
-            # 2. 데이터 수정 (Grid)
-            st.write("📝 데이터 수정 (셀 더블클릭)")
+            # [NEW] 📝 주간 업무 보고 작성 및 저장 로직
+            with tab_weekly:
+                st.subheader("📝 주간 주요 업무 보고 작성")
+                st.markdown("대시보드에 노출될 이 현장의 **금주 및 차주 주요 업무**를 작성해주세요.")
+                
+                # 구글 시트에서 최신 주간업무 기록 확인 및 헤더 보정
+                try:
+                    hist_ws = sh.worksheet('weekly_history')
+                    headers = hist_ws.row_values(1)
+                    if '금주업무' not in headers:
+                        hist_ws.update_cell(1, len(headers)+1, '금주업무')
+                        hist_ws.update_cell(1, len(headers)+2, '차주업무')
+                        headers.extend(['금주업무', '차주업무'])
+                except:
+                    hist_ws = sh.add_worksheet('weekly_history', 1000, 10)
+                    headers = ['프로젝트명', '업데이트일자', '금주업무', '차주업무']
+                    hist_ws.append_row(headers)
+                
+                # 기존 입력값(최신) 가져오기
+                hist_df = pd.DataFrame(hist_ws.get_all_records())
+                exist_this, exist_next = "", ""
+                if not hist_df.empty and '프로젝트명' in hist_df.columns:
+                    p_hist = hist_df[hist_df['프로젝트명'] == selected_pjt]
+                    if not p_hist.empty:
+                        exist_this = str(p_hist.iloc[-1].get('금주업무', ''))
+                        exist_next = str(p_hist.iloc[-1].get('차주업무', ''))
+                        if exist_this == 'nan': exist_this = ""
+                        if exist_next == 'nan': exist_next = ""
+                        
+                # 입력 폼
+                with st.form("weekly_form"):
+                    this_week_input = st.text_area("✔️ 금주 주요 업무 (이번 주에 진행한 핵심 내용)", value=exist_this, height=100, placeholder="예) 모듈 입고 완료, 하부 구조물 1구역 조립 완료")
+                    next_week_input = st.text_area("🔜 차주 주요 업무 (다음 주에 진행할 핵심 내용)", value=exist_next, height=100, placeholder="예) 인버터 결선 작업 시작 및 사용전 검사 서류 접수")
+                    
+                    if st.form_submit_button("주간업무 저장 및 대시보드 반영", use_container_width=True):
+                        row_data = [''] * len(headers)
+                        if '프로젝트명' in headers: row_data[headers.index('프로젝트명')] = selected_pjt
+                        if '업데이트일자' in headers: row_data[headers.index('업데이트일자')] = datetime.date.today().strftime("%Y-%m-%d")
+                        if '금주업무' in headers: row_data[headers.index('금주업무')] = this_week_input
+                        if '차주업무' in headers: row_data[headers.index('차주업무')] = next_week_input
+                        
+                        hist_ws.append_row(row_data)
+                        st.success("✅ 주간 업무가 성공적으로 업데이트되었습니다! 통합 대시보드에서 확인해보세요.")
+                        time.sleep(1.5)
+                        st.rerun()
+
+            # 데이터 수정 Grid (하단에 배치)
+            st.write("---")
+            st.write("📝 데이터(공정표) 상세 수정 (셀 더블클릭)")
             edited = st.data_editor(df, use_container_width=True, num_rows="dynamic")
-            if st.button("💾 저장하기", use_container_width=True):
+            if st.button("💾 데이터 저장하기", use_container_width=True):
                 edited = edited.fillna("")
                 edited = edited.astype(str)
                 ws.clear(); ws.update([edited.columns.values.tolist()] + edited.values.tolist())
@@ -332,7 +392,6 @@ def view_project_admin(sh, pjt_list):
         st.markdown("#### 📥 엑셀 데이터 다운로드")
         colA, colB = st.columns(2)
         
-        # 1. 개별 현장 다운로드
         with colA:
             st.info("개별 현장 다운로드")
             dl_pjt = st.selectbox("선택", ["선택"] + pjt_list, label_visibility="collapsed")
@@ -346,7 +405,6 @@ def view_project_admin(sh, pjt_list):
                         st.download_button(f"📊 '{dl_pjt}' 다운로드", data=output.getvalue(), file_name=f"{dl_pjt}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary", use_container_width=True)
                 except Exception as e: st.error(e)
                 
-        # 2. [NEW] 전체 마스터 다운로드
         with colB:
             st.warning("📚 마스터(전체) 데이터 일괄 다운로드")
             if st.button("전체 프로젝트 엑셀로 백업하기", use_container_width=True):
@@ -357,7 +415,6 @@ def view_project_admin(sh, pjt_list):
                             for p_name in pjt_list:
                                 try:
                                     p_df = pd.DataFrame(sh.worksheet(p_name).get_all_records())
-                                    # 시트명은 엑셀 규칙상 31자 제한 및 특수문자 제거 필요
                                     safe_sheet_name = p_name.replace("/", "").replace("\\", "")[:31]
                                     if not p_df.empty:
                                         p_df.to_excel(writer, index=False, sheet_name=safe_sheet_name)
@@ -379,7 +436,6 @@ if check_login():
         st.sidebar.title("📁 PMO 메뉴")
         st.sidebar.info(f"User: {st.session_state['user_id']}")
         
-        # [NEW] 리스크 메뉴 추가
         menu_options = ["통합 대시보드", "리스크 현황(Risk)", "프로젝트 상세", "일 발전량 분석", "경영지표(KPI)", "프로젝트 설정"]
         menu = st.sidebar.radio("메뉴 선택", menu_options, index=0)
         
