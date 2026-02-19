@@ -222,13 +222,17 @@ def view_project_detail(sh, pjt_list):
                         planned_trend = [df_sc.apply(lambda row: calc_planned_progress(row['시작일'], row['종료일'], d), axis=1).mean() for d in date_range]
                         actual_prog = pd.to_numeric(df_sc['진행률'], errors='coerce').mean()
                         
+                        # [오류수정]: Plotly에서 int/date 연산 충돌 방지를 위해 명시적 문자열로 변환
+                        x_vals = [d.strftime("%Y-%m-%d") for d in date_range]
+                        today_str = today.strftime("%Y-%m-%d")
+                        
                         fig_sc = go.Figure()
-                        fig_sc.add_trace(go.Scatter(x=date_range, y=planned_trend, mode='lines+markers', name='계획 진척률', line=dict(color='gray', width=3)))
-                        fig_sc.add_trace(go.Scatter(x=[today], y=[actual_prog], mode='markers', name='현재 실적', marker=dict(color='blue', size=12, symbol='star')))
-                        fig_sc.add_vline(x=today, line_dash="dash", line_color="red", annotation_text="Today")
+                        fig_sc.add_trace(go.Scatter(x=x_vals, y=planned_trend, mode='lines+markers', name='계획 진척률', line=dict(color='gray', width=3)))
+                        fig_sc.add_trace(go.Scatter(x=[today_str], y=[actual_prog], mode='markers', name='현재 실적', marker=dict(color='blue', size=12, symbol='star')))
+                        fig_sc.add_vline(x=today_str, line_dash="dash", line_color="red", annotation_text="Today")
                         fig_sc.update_layout(title="전체 공정 S-Curve 및 현재 실적 비교", yaxis_title="진척률 (%)", yaxis=dict(range=[0, 105]))
                         st.plotly_chart(fig_sc, use_container_width=True)
-                        st.info(f"📅 **오늘({today}) 기준 요약:** 전체 계획 **{calc_planned_progress(min_date, max_date):.1f}%** 대비 현재 실적 **{actual_prog:.1f}%**")
+                        st.info(f"📅 **오늘({today_str}) 기준 요약:** 전체 계획 **{calc_planned_progress(min_date, max_date):.1f}%** 대비 현재 실적 **{actual_prog:.1f}%**")
                 except Exception as e:
                     st.caption(f"S-Curve 생성 실패: {e}")
 
@@ -237,29 +241,42 @@ def view_project_detail(sh, pjt_list):
                 st.subheader("📝 주간 주요 업무 보고 작성")
                 st.markdown("대시보드에 노출될 이 현장의 **금주 및 차주 주요 업무**를 작성해주세요.")
                 
-                # 구글 시트에서 최신 주간업무 기록 확인 및 헤더 보정
+                # [오류수정]: 무조건 add_worksheet 하던 것을 안전한 get 및 핸들링 로직으로 전면 수정
                 try:
                     hist_ws = sh.worksheet('weekly_history')
-                    headers = hist_ws.row_values(1)
-                    if '금주업무' not in headers:
-                        hist_ws.update_cell(1, len(headers)+1, '금주업무')
-                        hist_ws.update_cell(1, len(headers)+2, '차주업무')
-                        headers.extend(['금주업무', '차주업무'])
-                except:
+                except gspread.WorksheetNotFound:
                     hist_ws = sh.add_worksheet('weekly_history', 1000, 10)
+                    hist_ws.append_row(['프로젝트명', '업데이트일자', '금주업무', '차주업무'])
+                
+                try:
+                    headers = hist_ws.row_values(1)
+                    if not headers:
+                        headers = ['프로젝트명', '업데이트일자', '금주업무', '차주업무']
+                        hist_ws.append_row(headers)
+                    else:
+                        if '금주업무' not in headers:
+                            hist_ws.update_cell(1, len(headers)+1, '금주업무')
+                            headers.append('금주업무')
+                        if '차주업무' not in headers:
+                            hist_ws.update_cell(1, len(headers)+1, '차주업무')
+                            headers.append('차주업무')
+                except Exception as e:
+                    # 일시적인 통신에러 방어용 기본 헤더
                     headers = ['프로젝트명', '업데이트일자', '금주업무', '차주업무']
-                    hist_ws.append_row(headers)
                 
                 # 기존 입력값(최신) 가져오기
-                hist_df = pd.DataFrame(hist_ws.get_all_records())
-                exist_this, exist_next = "", ""
-                if not hist_df.empty and '프로젝트명' in hist_df.columns:
-                    p_hist = hist_df[hist_df['프로젝트명'] == selected_pjt]
-                    if not p_hist.empty:
-                        exist_this = str(p_hist.iloc[-1].get('금주업무', ''))
-                        exist_next = str(p_hist.iloc[-1].get('차주업무', ''))
-                        if exist_this == 'nan': exist_this = ""
-                        if exist_next == 'nan': exist_next = ""
+                try:
+                    hist_df = pd.DataFrame(hist_ws.get_all_records())
+                    exist_this, exist_next = "", ""
+                    if not hist_df.empty and '프로젝트명' in hist_df.columns:
+                        p_hist = hist_df[hist_df['프로젝트명'] == selected_pjt]
+                        if not p_hist.empty:
+                            exist_this = str(p_hist.iloc[-1].get('금주업무', ''))
+                            exist_next = str(p_hist.iloc[-1].get('차주업무', ''))
+                            if exist_this == 'nan': exist_this = ""
+                            if exist_next == 'nan': exist_next = ""
+                except:
+                    exist_this, exist_next = "", ""
                         
                 # 입력 폼
                 with st.form("weekly_form"):
