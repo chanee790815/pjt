@@ -1,272 +1,273 @@
-import streamlit as st
-import pandas as pd
-import datetime
-import gspread
-from google.oauth2.service_account import Credentials
-import requests
-import time
-import plotly.express as px
-
-# 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v3.1.4", page_icon="🏗️", layout="wide")
-
-# --- [UI] 스타일 ---
-st.markdown("""
-    <style>
-    @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
-    html, body, [class*="css"] { font-family: 'Pretendard', sans-serif; }
-    .pjt-card { background-color: #ffffff; padding: 20px; border-radius: 12px; border: 1px solid #eee; margin-bottom: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-    .footer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: #f1f1f1; color: #555; text-align: center; padding: 5px; font-size: 11px; z-index: 100; }
-    </style>
-    <div class="footer">시스템 상태: 정상 (v3.1.4 Default: Seosan/2025) | 데이터 출처: 기상청 API & 구글 클라우드</div>
-    """, unsafe_allow_html=True)
-
-# ---------------------------------------------------------
-# [SECTION 1] 백엔드 엔진 & 유틸리티
-# ---------------------------------------------------------
-
-def check_login():
-    if st.session_state.get("logged_in", False): return True
+' =======================================================================
+' 1. [통합 대시보드] 생성 매크로 (모든 현장 요약) - 웹 메인페이지 클론
+' =======================================================================
+Sub CreateMainDashboard()
+    Dim wsDash As Worksheet
+    Dim wb As Workbook
+    Dim ws As Worksheet
+    Dim rowPos As Integer, colPos As Integer
+    Dim pjtCount As Integer
+    Dim avgProg As Double
+    Dim lastRow As Long
     
-    st.title("🏗️ PM 통합 관리 시스템 (v3.1.4)")
-    with st.form("login"):
-        u_id = st.text_input("ID")
-        u_pw = st.text_input("Password", type="password")
-        if st.form_submit_button("로그인"):
-            if u_id in st.secrets["passwords"] and u_pw == st.secrets["passwords"][u_id]:
-                st.session_state["logged_in"] = True
-                st.session_state["user_id"] = u_id
-                st.rerun()
-            else: st.error("정보 불일치")
-    return False
-
-@st.cache_resource
-def get_client():
-    try:
-        key_dict = dict(st.secrets["gcp_service_account"])
-        if "private_key" in key_dict: key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
-        creds = Credentials.from_service_account_info(key_dict, scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
-        return gspread.authorize(creds)
-    except: return None
-
-def get_safe_float(value):
-    try:
-        if value == '' or value is None: return 0.0
-        return float(value)
-    except (ValueError, TypeError): return 0.0
-
-# ---------------------------------------------------------
-# [SECTION 2] 각 기능별 뷰(View) 함수
-# ---------------------------------------------------------
-
-def view_dashboard(sh, pjt_list):
-    st.title("📊 통합 대시보드")
-    st.info(f"현재 관리 중인 현장: {len(pjt_list)}개")
-    try:
-        hist_df = pd.DataFrame(sh.worksheet('weekly_history').get_all_records())
-        cols = st.columns(2)
-        for idx, p_name in enumerate(pjt_list):
-            with cols[idx % 2]:
-                p_df = pd.DataFrame(sh.worksheet(p_name).get_all_records())
-                prog = round(pd.to_numeric(p_df['진행률'], errors='coerce').mean(), 1) if '진행률' in p_df.columns else 0
-                last_status = "업데이트 대기 중"
-                if not hist_df.empty:
-                    row = hist_df[hist_df['프로젝트명'] == p_name]
-                    if not row.empty: last_status = row.iloc[-1]['주요현황']
-                st.markdown(f'<div class="pjt-card"><h4>🏗️ {p_name}</h4><p style="font-size:14px; color:#666;">{last_status}</p></div>', unsafe_allow_html=True)
-                st.progress(prog/100, text=f"진척률: {prog}%")
-    except Exception as e: st.error(f"대시보드 로드 오류: {e}")
-
-def view_solar(sh):
-    st.title("📅 일 발전량 분석")
+    Set wb = ThisWorkbook
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
     
-    # 1. 데이터 수집 도구
-    with st.expander("📥 기상청 데이터 수집 도구", expanded=True):
-        c1, c2, c3 = st.columns([1, 1, 1])
-        stn_map = {127:"충주", 108:"서울", 131:"청주", 159:"부산", 112:"인천", 119:"수원", 129:"서산(당진)"}
-        
-        stn_id = c1.selectbox("수집 지점", list(stn_map.keys()), format_func=lambda x: stn_map[x], index=6)
-        year = c2.selectbox("수집 연도", list(range(2026, 2019, -1)), index=1)
-        
-        if c3.button("🚀 데이터 동기화 실행", use_container_width=True):
-            with st.spinner(f"{stn_map[stn_id]} 데이터 요청 중... (최대 30초)"):
-                try:
-                    db_ws = sh.worksheet('Solar_DB')
-                    start, end = f"{year}0101", f"{year}1231"
-                    if int(year) >= datetime.date.today().year: end = (datetime.date.today() - datetime.timedelta(days=1)).strftime("%Y%m%d")
-                    url = f'http://apis.data.go.kr/1360000/AsosDalyInfoService/getWthrDataList?serviceKey=ba10959184b37d5a2f94b2fe97ecb2f96589f7d8724ba17f85fdbc22d47fb7fe&numOfRows=366&dataType=JSON&dataCd=ASOS&dateCd=DAY&stnIds={stn_id}&startDt={start}&endDt={end}'
-                    res = requests.get(url, timeout=30).json()
-                    items = res.get('response', {}).get('body', {}).get('items', {}).get('item', [])
-                    rows = []
-                    for i in items:
-                        gsr_val = get_safe_float(i.get('sumGsr', 0))
-                        gen_val = round(gsr_val / 3.6, 2)
-                        rows.append([i['tm'], stn_map[stn_id], gen_val, gsr_val])
-                    if rows:
-                        all_val = db_ws.get_all_values()
-                        if len(all_val) > 1:
-                            df = pd.DataFrame(all_val[1:], columns=all_val[0])
-                            df['날짜'] = pd.to_datetime(df['날짜'], errors='coerce')
-                            df = df.loc[~((df['날짜'].dt.year == int(year)) & (df['지점'] == stn_map[stn_id]))].dropna(subset=['날짜'])
-                            df['날짜'] = df['날짜'].dt.strftime('%Y-%m-%d')
-                            db_ws.clear(); db_ws.append_row(all_val[0]); db_ws.append_rows(df.values.tolist())
-                        db_ws.append_rows(rows); st.success(f"✅ {year}년 {stn_map[stn_id]} 데이터 {len(rows)}건 수집 완료!"); time.sleep(1); st.rerun()
-                    else: st.warning("수집된 데이터가 없습니다.")
-                except Exception as e: st.error(f"오류 발생: {e}")
-
-    # 2. 분석 차트
-    st.subheader("📊 연간 발전 효율 차트")
-    col1, col2 = st.columns(2)
+    ' 기존 통합 대시보드 삭제 후 재생성 (이모지 제거)
+    On Error Resume Next
+    wb.Sheets("통합 대시보드").Delete
+    On Error GoTo 0
     
-    sel_stn = col1.selectbox("분석 지점", ["충주", "서울", "인천", "수원", "서산(당진)", "청주", "부산"], index=4)
-    sel_year = col2.selectbox("분석 연도", list(range(2026, 2019, -1)), index=1)
+    Set wsDash = wb.Sheets.Add(Before:=wb.Sheets(1))
+    wsDash.Name = "통합 대시보드"
+    ActiveWindow.DisplayGridlines = False
+    wsDash.Cells.Interior.Color = RGB(255, 255, 255) ' 전체 배경 흰색
     
-    try:
-        df = pd.DataFrame(sh.worksheet('Solar_DB').get_all_records())
-        if not df.empty:
-            df['날짜'] = pd.to_datetime(df['날짜'], errors='coerce')
-            target = df.loc[(df['날짜'].dt.year == int(sel_year)) & (df['지점'] == sel_stn)].copy()
-            if not target.empty:
-                avg = round(pd.to_numeric(target['발전시간']).mean(), 2)
-                st.metric(f"{sel_year}년 {sel_stn} 평균", f"{avg} h")
-                target['월'] = target['날짜'].dt.month
-                m_avg = target.groupby('월')['발전시간'].mean().reset_index()
-                st.plotly_chart(px.bar(m_avg, x='월', y='발전시간', color_discrete_sequence=['#ffca28']), use_container_width=True)
-            else: st.warning("해당 조건의 데이터가 없습니다. 위 도구에서 먼저 수집해주세요.")
-    except: st.warning("데이터베이스 로드 실패")
-
-def view_project_detail(sh, pjt_list):
-    st.title("🏗️ 개별 프로젝트 상세 관리")
-    selected_pjt = st.selectbox("관리할 현장을 선택하세요", ["선택"] + pjt_list)
-    if selected_pjt != "선택":
-        ws = sh.worksheet(selected_pjt)
-        df = pd.DataFrame(ws.get_all_records())
-        if not df.empty and '시작일' in df.columns:
-            try:
-                chart_df = df.copy()
-                chart_df['시작일'] = pd.to_datetime(chart_df['시작일'], errors='coerce')
-                chart_df['종료일'] = pd.to_datetime(chart_df['종료일'], errors='coerce')
-                chart_df = chart_df.dropna(subset=['시작일', '종료일'])
-                y_col = '대분류' if '대분류' in chart_df.columns else chart_df.columns[0]
-                fig = px.timeline(chart_df, x_start="시작일", x_end="종료일", y=y_col, color="진행률", color_continuous_scale='RdYlGn', range_color=[0, 100])
-                fig.update_yaxes(autorange="reversed")
-                st.plotly_chart(fig, use_container_width=True)
-            except: st.caption("차트 생성 실패 (날짜 확인 필요)")
-        st.write("📝 데이터 수정")
-        edited = st.data_editor(df, use_container_width=True, num_rows="dynamic")
-        if st.button("💾 저장하기", use_container_width=True):
-            # gspread 업데이트를 위한 DataFrame 전처리 (NaN 제거 등)
-            edited = edited.fillna("")
-            edited = edited.astype(str)
-            ws.clear(); ws.update([edited.columns.values.tolist()] + edited.values.tolist())
-            st.success("저장되었습니다!"); time.sleep(1); st.rerun()
-
-def view_kpi(sh):
-    st.title("📉 전사 경영지표 (KPI)")
-    try:
-        df = pd.DataFrame(sh.worksheet('KPI').get_all_records())
-        st.dataframe(df, use_container_width=True)
-    except: st.error("KPI 시트가 존재하지 않습니다.")
-
-def view_project_admin(sh, pjt_list):
-    st.title("⚙️ 프로젝트 설정 (마스터 관리)")
+    ' --- 타이틀 ---
+    wsDash.Range("B2").Value = "통합 대시보드"
+    wsDash.Range("B2").Font.Size = 24
+    wsDash.Range("B2").Font.Bold = True
     
-    # 엑셀 동기화 탭(tab4)을 추가했습니다.
-    tab1, tab2, tab3, tab4 = st.tabs(["➕ 신규 등록", "✏️ 이름 수정", "🗑️ 삭제", "🔄 엑셀 동기화"])
+    ' --- 활성 프로젝트 개수 카운트 ---
+    pjtCount = 0
+    For Each ws In wb.Sheets
+        If Not IsSystemSheet(ws.Name) Then pjtCount = pjtCount + 1
+    Next ws
     
-    with tab1:
-        new_pjt_name = st.text_input("새 프로젝트 명칭")
-        if st.button("프로젝트 생성", type="primary", use_container_width=True):
-            if new_pjt_name and new_pjt_name not in pjt_list:
-                try:
-                    sh.add_worksheet(title=new_pjt_name, rows="100", cols="20")
-                    ws = sh.worksheet(new_pjt_name)
-                    ws.append_row(["대분류", "구분", "작업명", "시작일", "종료일", "진행률", "담당자", "비고"])
-                    st.success(f"✅ '{new_pjt_name}' 생성 완료!"); time.sleep(1); st.rerun()
-                except Exception as e: st.error(f"생성 실패: {e}")
-            else: st.warning("유효한 이름을 입력해주세요.")
+    ' --- 요약 바 ---
+    wsDash.Range("B4:J4").Merge
+    wsDash.Range("B4").Value = "  현재 관리 중인 현장: " & pjtCount & "개"
+    wsDash.Range("B4").Interior.Color = RGB(232, 244, 254) ' 연한 파란색 배경
+    wsDash.Range("B4").Font.Color = RGB(25, 103, 210)
+    wsDash.Range("B4").Font.Bold = True
+    wsDash.Range("B4").VerticalAlignment = xlCenter
+    wsDash.Range("B4").RowHeight = 35
+    
+    ' --- 카드 레이아웃 그리기 ---
+    rowPos = 6
+    colPos = 2 ' B열 시작
+    Dim cardIdx As Integer: cardIdx = 0
+    
+    For Each ws In wb.Sheets
+        If Not IsSystemSheet(ws.Name) Then
+            cardIdx = cardIdx + 1
             
-    with tab2:
-        target_pjt = st.selectbox("이름을 변경할 프로젝트", ["선택"] + pjt_list, key="rename_sel")
-        new_name_input = st.text_input("변경할 새 이름", key="rename_input")
-        if st.button("이름 변경 실행", use_container_width=True):
-            if target_pjt != "선택" and new_name_input:
-                try:
-                    ws = sh.worksheet(target_pjt)
-                    ws.update_title(new_name_input)
-                    st.success(f"✅ 변경 완료!"); time.sleep(1); st.rerun()
-                except Exception as e: st.error(f"변경 실패: {e}")
-                
-    with tab3:
-        del_pjt = st.selectbox("삭제할 프로젝트 선택", ["선택"] + pjt_list, key="del_sel")
-        confirm_del = st.checkbox("데이터 영구 삭제를 확인했습니다.")
-        if st.button("프로젝트 영구 삭제", type="primary", use_container_width=True):
-            if del_pjt != "선택" and confirm_del:
-                try:
-                    ws = sh.worksheet(del_pjt)
-                    sh.del_worksheet(ws)
-                    st.success(f"🗑️ 삭제되었습니다."); time.sleep(1); st.rerun()
-                except Exception as e: st.error(f"삭제 실패: {e}")
-                
-    # 새롭게 추가된 엑셀 업로드 동기화 탭
-    with tab4:
-        st.markdown("#### 🔄 엑셀 파일 업로드 & 구글 시트 동기화")
-        st.info("로컬에서 작성한 엑셀 파일로 특정 프로젝트의 데이터를 일괄 덮어쓰기 합니다.")
-        
-        sync_pjt = st.selectbox("데이터를 업데이트할 프로젝트 선택", ["선택"] + pjt_list, key="sync_sel")
-        # xlsm 확장자 추가
-        uploaded_file = st.file_uploader("엑셀 파일(.xlsx, .xlsm)을 업로드하세요", type=['xlsx', 'xls', 'xlsm'])
-        
-        if sync_pjt != "선택" and uploaded_file is not None:
-            try:
-                # 엑셀 파일 읽기 (첫 번째 시트 기준)
-                df = pd.read_excel(uploaded_file)
-                
-                # [중요] 구글 시트 업로드를 위한 데이터 전처리
-                # gspread는 NaN(빈 값), NaT(날짜 결측치) 등을 처리하지 못하므로 빈 문자열로 변환합니다.
-                df = df.fillna("")
-                df = df.astype(str) # 날짜 포맷팅 등 충돌을 막기 위해 전체를 문자열로 캐스팅
-                
-                st.write(f"**미리보기 ({len(df)}행 감지됨):**")
-                st.dataframe(df.head(10), use_container_width=True)
-                
-                if st.button(f"🚀 '{sync_pjt}' 프로젝트 구글 시트 덮어쓰기", type="primary"):
-                    with st.spinner('구글 스프레드시트 업데이트 중... (기존 데이터는 삭제됩니다)'):
-                        ws = sh.worksheet(sync_pjt)
-                        ws.clear() # 기존 데이터 날리기
-                        
-                        # 새로운 데이터 쓰기 (헤더 + 내용)
-                        ws.update([df.columns.values.tolist()] + df.values.tolist())
-                        
-                        st.success(f"🎉 '{sync_pjt}' 데이터 동기화가 완료되었습니다!")
-                        time.sleep(1.5)
-                        st.rerun()
-                        
-            except Exception as e:
-                st.error(f"엑셀 파일 처리 중 오류가 발생했습니다: {e}")
+            ' 진척률 계산 (G열)
+            lastRow = ws.Cells(ws.Rows.Count, "A").End(xlUp).Row
+            If lastRow >= 2 Then
+                On Error Resume Next
+                avgProg = Application.WorksheetFunction.Average(ws.Range("G2:G" & lastRow))
+                If Err.Number <> 0 Then avgProg = 0
+                On Error GoTo 0
+            Else
+                avgProg = 0
+            End If
+            
+            ' 1) 카드 테두리 및 배경
+            With wsDash.Range(wsDash.Cells(rowPos, colPos), wsDash.Cells(rowPos + 5, colPos + 3))
+                .Borders.LineStyle = xlContinuous
+                .Borders.Color = RGB(220, 220, 220)
+                .Interior.Color = RGB(255, 255, 255)
+            End With
+            
+            ' 2) 현장 이름 (Title) - 이모지 제거 후 텍스트 대체
+            wsDash.Cells(rowPos + 1, colPos + 1).Value = "[현장] " & ws.Name
+            wsDash.Cells(rowPos + 1, colPos + 1).Font.Size = 14
+            wsDash.Cells(rowPos + 1, colPos + 1).Font.Bold = True
+            
+            ' 3) 상태 텍스트 (Subtitle)
+            wsDash.Cells(rowPos + 2, colPos + 1).Value = "업데이트 완료"
+            wsDash.Cells(rowPos + 2, colPos + 1).Font.Color = RGB(150, 150, 150)
+            wsDash.Cells(rowPos + 2, colPos + 1).Font.Size = 10
+            
+            ' 4) 진척률 텍스트
+            wsDash.Cells(rowPos + 4, colPos + 1).Value = "진척률: " & Format(avgProg, "0.0") & "%"
+            wsDash.Cells(rowPos + 4, colPos + 1).Font.Size = 10
+            
+            ' 5) 웹 스타일 프로그레스 바 (Shape 객체로 HTML Bar 완벽 구현)
+            Dim barRng As Range
+            Set barRng = wsDash.Range(wsDash.Cells(rowPos + 5, colPos + 1), wsDash.Cells(rowPos + 5, colPos + 2))
+            
+            ' 회색 바탕 바
+            Dim shpBg As Shape
+            Set shpBg = wsDash.Shapes.AddShape(msoShapeRectangle, barRng.Left, barRng.Top - 5, barRng.Width, 6)
+            shpBg.Line.Visible = msoFalse
+            shpBg.Fill.ForeColor.RGB = RGB(230, 240, 255)
+            
+            ' 파란색 진행 바
+            If avgProg > 0 Then
+                Dim shpFill As Shape
+                Set shpFill = wsDash.Shapes.AddShape(msoShapeRectangle, barRng.Left, barRng.Top - 5, barRng.Width * (avgProg / 100), 6)
+                shpFill.Line.Visible = msoFalse
+                shpFill.Fill.ForeColor.RGB = RGB(25, 103, 210) ' Streamlit Primary Blue
+            End If
+            
+            ' 레이아웃 2단 배치 계산 (좌/우)
+            If cardIdx Mod 2 = 1 Then
+                colPos = 7 ' 오른쪽 열로 이동 (G열)
+            Else
+                colPos = 2 ' 왼쪽 열로 복귀 (B열)
+                rowPos = rowPos + 7 ' 아래로 한 칸 이동
+            End If
+        End If
+    Next ws
+    
+    ' --- 열 너비 정리 ---
+    wsDash.Columns("A").ColumnWidth = 3
+    wsDash.Columns("B").ColumnWidth = 2
+    wsDash.Columns("C:D").ColumnWidth = 18
+    wsDash.Columns("E").ColumnWidth = 2
+    wsDash.Columns("F").ColumnWidth = 3 ' 중앙 여백
+    wsDash.Columns("G").ColumnWidth = 2
+    wsDash.Columns("H:I").ColumnWidth = 18
+    wsDash.Columns("J").ColumnWidth = 2
+    
+    Application.ScreenUpdating = True
+    Application.DisplayAlerts = True
+    MsgBox "통합 대시보드 생성이 완료되었습니다!", vbInformation, "메인페이지 생성"
+End Sub
 
-# ---------------------------------------------------------
-# [SECTION 3] 메인 컨트롤러 (Router)
-# ---------------------------------------------------------
+' =======================================================================
+' 2. [개별 현장 간트차트] 생성 매크로 - 웹 프로젝트 상세 클론
+' =======================================================================
+Sub CreateProjectGantt()
+    Dim wsData As Worksheet, wsGantt As Worksheet
+    Dim wb As Workbook
+    Dim lastRow As Long, r As Long, c As Long
+    Set wb = ThisWorkbook
+    
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+    Set wsData = ActiveSheet
+    
+    ' 시스템 시트 실행 방지
+    If IsSystemSheet(wsData.Name) Then
+        MsgBox "데이터가 있는 개별 현장 시트(예: 기아 광명공장)를 선택한 후 실행해주세요.", vbExclamation, "시트 선택 오류"
+        Exit Sub
+    End If
+    If wsData.Range("A1").Value <> "시작일" Then
+        MsgBox "[시작일, 종료일, 대분류...] 형식의 데이터 시트가 아닙니다.", vbCritical, "양식 오류"
+        Exit Sub
+    End If
+    
+    On Error Resume Next
+    wb.Sheets("프로젝트 간트차트").Delete
+    On Error GoTo 0
+    
+    lastRow = wsData.Cells(wsData.Rows.Count, "A").End(xlUp).Row
+    If lastRow < 2 Then
+        MsgBox "입력된 데이터가 없습니다.", vbExclamation, "데이터 없음"
+        Exit Sub
+    End If
+    
+    Set wsGantt = wb.Sheets.Add(After:=wsData)
+    wsGantt.Name = "프로젝트 간트차트"
+    ActiveWindow.DisplayGridlines = False
+    wsGantt.Cells.Interior.Color = RGB(255, 255, 255)
+    
+    wsGantt.Range("B2").Value = "[" & wsData.Name & "] 상세 간트차트"
+    wsGantt.Range("B2").Font.Size = 18
+    wsGantt.Range("B2").Font.Bold = True
+    
+    wsGantt.Range("B4:F4").Value = Array("대분류", "구분", "시작일", "종료일", "진행률(%)")
+    wsGantt.Range("B4:F4").Interior.Color = RGB(240, 242, 246)
+    wsGantt.Range("B4:F4").Font.Bold = True
+    wsGantt.Range("B4:F4").HorizontalAlignment = xlCenter
+    
+    For r = 2 To lastRow
+        wsGantt.Cells(r + 3, 2).Value = wsData.Cells(r, 3).Value
+        wsGantt.Cells(r + 3, 3).Value = wsData.Cells(r, 4).Value
+        wsGantt.Cells(r + 3, 4).Value = wsData.Cells(r, 1).Value
+        wsGantt.Cells(r + 3, 5).Value = wsData.Cells(r, 2).Value
+        wsGantt.Cells(r + 3, 6).Value = wsData.Cells(r, 7).Value
+    Next r
+    
+    wsGantt.Columns("D:E").NumberFormat = "yyyy-mm-dd"
+    wsGantt.Columns("B").ColumnWidth = 14
+    wsGantt.Columns("C").ColumnWidth = 28
+    wsGantt.Columns("D:E").ColumnWidth = 12
+    wsGantt.Columns("F").ColumnWidth = 10
+    
+    Dim minDate As Date, maxDate As Date
+    minDate = Application.WorksheetFunction.Min(wsData.Range("A2:A" & lastRow))
+    maxDate = Application.WorksheetFunction.Max(wsData.Range("B2:B" & lastRow))
+    
+    If minDate = 0 Then minDate = Date
+    If maxDate = 0 Then maxDate = Date + 30
+    minDate = minDate - Weekday(minDate, vbMonday) + 1
+    
+    Dim currDate As Date: currDate = minDate
+    Dim tCol As Integer: tCol = 7
+    
+    Do While currDate <= maxDate + 14
+        wsGantt.Cells(4, tCol).Value = currDate
+        wsGantt.Cells(4, tCol).NumberFormat = "mm/dd"
+        wsGantt.Cells(4, tCol).Font.Size = 8
+        wsGantt.Cells(4, tCol).Orientation = xlUpward
+        wsGantt.Columns(tCol).ColumnWidth = 2.5
+        currDate = currDate + 7
+        tCol = tCol + 1
+    Loop
+    
+    wsGantt.Range(wsGantt.Cells(4, 7), wsGantt.Cells(4, tCol - 1)).Interior.Color = RGB(240, 242, 246)
+    
+    Dim tStart As Date, tEnd As Date, Prog As Double, wStart As Date, wEnd As Date
+    For r = 5 To lastRow + 3
+        If IsDate(wsGantt.Cells(r, 4).Value) And IsDate(wsGantt.Cells(r, 5).Value) Then
+            tStart = wsGantt.Cells(r, 4).Value
+            tEnd = wsGantt.Cells(r, 5).Value
+            Prog = Val(wsGantt.Cells(r, 6).Value)
+            
+            For c = 7 To tCol - 1
+                wStart = wsGantt.Cells(4, c).Value
+                wEnd = wStart + 6
+                If tStart <= wEnd And tEnd >= wStart Then
+                    wsGantt.Cells(r, c).Interior.Color = GetPlotlyColor(Prog)
+                End If
+            Next c
+        End If
+    Next r
+    
+    wsGantt.Range("B4:F" & lastRow + 3).Borders.LineStyle = xlContinuous
+    wsGantt.Range("B5:B" & lastRow + 3).HorizontalAlignment = xlCenter
+    wsGantt.Range("D5:F" & lastRow + 3).HorizontalAlignment = xlCenter
+    
+    Application.ScreenUpdating = True
+    Application.DisplayAlerts = True
+    MsgBox "[" & wsData.Name & "] 현장 간트차트 생성이 완료되었습니다!", vbInformation, "상세페이지 생성"
+End Sub
 
-if check_login():
-    client = get_client()
-    if client:
-        sh = client.open('pms_db')
-        pjt_list = [ws.title for ws in sh.worksheets() if ws.title not in ['weekly_history', 'Solar_DB', 'KPI', 'Sheet1', 'conflict']]
-        
-        st.sidebar.title("📁 PMO 메뉴")
-        st.sidebar.info(f"User: {st.session_state['user_id']}")
-        
-        # 메뉴 순서 (기본값 index=0: 통합 대시보드)
-        menu = st.sidebar.radio("메뉴 선택", ["통합 대시보드", "일 발전량 분석", "프로젝트 상세", "경영지표(KPI)", "프로젝트 설정"], index=0)
-        st.sidebar.markdown("---")
-        if st.sidebar.button("로그아웃"):
-            st.session_state["logged_in"] = False; st.rerun()
+' --- 시스템 시트 여부 확인 함수 ---
+Function IsSystemSheet(sheetName As String) As Boolean
+    Dim sysSheets As Variant
+    ' 이모지를 모두 제거하고 정확한 텍스트로 수정
+    sysSheets = Array("통합 대시보드", "프로젝트 간트차트", "DB_업로드양식", "프로젝트_데이터", "KPI", "Solar_DB", "weekly_history")
+    Dim i As Integer
+    IsSystemSheet = False
+    For i = LBound(sysSheets) To UBound(sysSheets)
+        If sheetName = sysSheets(i) Then
+            IsSystemSheet = True
+            Exit Function
+        End If
+    Next i
+End Function
 
-        if menu == "통합 대시보드": view_dashboard(sh, pjt_list)
-        elif menu == "일 발전량 분석": view_solar(sh)
-        elif menu == "프로젝트 상세": view_project_detail(sh, pjt_list)
-        elif menu == "경영지표(KPI)": view_kpi(sh)
-        elif menu == "프로젝트 설정": view_project_admin(sh, pjt_list)
-
+' --- 간트차트 색상 (Plotly RdYlGn) ---
+Function GetPlotlyColor(prog As Double) As Long
+    If prog = 0 Then
+        GetPlotlyColor = RGB(178, 24, 43)    ' 0%
+    ElseIf prog < 20 Then
+        GetPlotlyColor = RGB(214, 96, 77)    ' 1~19%
+    ElseIf prog < 40 Then
+        GetPlotlyColor = RGB(244, 165, 130)  ' 20~39%
+    ElseIf prog < 60 Then
+        GetPlotlyColor = RGB(253, 219, 199)  ' 40~59%
+    ElseIf prog < 80 Then
+        GetPlotlyColor = RGB(209, 229, 240)  ' 60~79%
+    ElseIf prog < 100 Then
+        GetPlotlyColor = RGB(146, 197, 222)  ' 80~99%
+    Else
+        GetPlotlyColor = RGB(26, 152, 80)    ' 100%
+    End If
+End Function
