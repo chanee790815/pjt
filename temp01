@@ -6,6 +6,7 @@ from google.oauth2.service_account import Credentials
 import requests
 import time
 import plotly.express as px
+import io  # 엑셀 파일 변환을 위해 추가된 라이브러리
 
 # 1. 페이지 설정
 st.set_page_config(page_title="PM 통합 공정 관리 v3.1.4", page_icon="🏗️", layout="wide")
@@ -155,7 +156,6 @@ def view_project_detail(sh, pjt_list):
         st.write("📝 데이터 수정")
         edited = st.data_editor(df, use_container_width=True, num_rows="dynamic")
         if st.button("💾 저장하기", use_container_width=True):
-            # gspread 업데이트를 위한 DataFrame 전처리 (NaN 제거 등)
             edited = edited.fillna("")
             edited = edited.astype(str)
             ws.clear(); ws.update([edited.columns.values.tolist()] + edited.values.tolist())
@@ -171,8 +171,8 @@ def view_kpi(sh):
 def view_project_admin(sh, pjt_list):
     st.title("⚙️ 프로젝트 설정 (마스터 관리)")
     
-    # 엑셀 동기화 탭(tab4)을 추가했습니다.
-    tab1, tab2, tab3, tab4 = st.tabs(["➕ 신규 등록", "✏️ 이름 수정", "🗑️ 삭제", "🔄 엑셀 동기화"])
+    # 동기화 및 다운로드 탭 포함 5개 구성
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["➕ 신규 등록", "✏️ 이름 수정", "🗑️ 삭제", "🔄 엑셀 동기화", "📥 엑셀 다운로드"])
     
     with tab1:
         new_pjt_name = st.text_input("새 프로젝트 명칭")
@@ -208,24 +208,18 @@ def view_project_admin(sh, pjt_list):
                     st.success(f"🗑️ 삭제되었습니다."); time.sleep(1); st.rerun()
                 except Exception as e: st.error(f"삭제 실패: {e}")
                 
-    # 새롭게 추가된 엑셀 업로드 동기화 탭
     with tab4:
         st.markdown("#### 🔄 엑셀 파일 업로드 & 구글 시트 동기화")
         st.info("로컬에서 작성한 엑셀 파일로 특정 프로젝트의 데이터를 일괄 덮어쓰기 합니다.")
         
         sync_pjt = st.selectbox("데이터를 업데이트할 프로젝트 선택", ["선택"] + pjt_list, key="sync_sel")
-        # xlsm 확장자 추가
         uploaded_file = st.file_uploader("엑셀 파일(.xlsx, .xlsm)을 업로드하세요", type=['xlsx', 'xls', 'xlsm'])
         
         if sync_pjt != "선택" and uploaded_file is not None:
             try:
-                # 엑셀 파일 읽기 (첫 번째 시트 기준)
                 df = pd.read_excel(uploaded_file)
-                
-                # [중요] 구글 시트 업로드를 위한 데이터 전처리
-                # gspread는 NaN(빈 값), NaT(날짜 결측치) 등을 처리하지 못하므로 빈 문자열로 변환합니다.
                 df = df.fillna("")
-                df = df.astype(str) # 날짜 포맷팅 등 충돌을 막기 위해 전체를 문자열로 캐스팅
+                df = df.astype(str) 
                 
                 st.write(f"**미리보기 ({len(df)}행 감지됨):**")
                 st.dataframe(df.head(10), use_container_width=True)
@@ -233,9 +227,7 @@ def view_project_admin(sh, pjt_list):
                 if st.button(f"🚀 '{sync_pjt}' 프로젝트 구글 시트 덮어쓰기", type="primary"):
                     with st.spinner('구글 스프레드시트 업데이트 중... (기존 데이터는 삭제됩니다)'):
                         ws = sh.worksheet(sync_pjt)
-                        ws.clear() # 기존 데이터 날리기
-                        
-                        # 새로운 데이터 쓰기 (헤더 + 내용)
+                        ws.clear() 
                         ws.update([df.columns.values.tolist()] + df.values.tolist())
                         
                         st.success(f"🎉 '{sync_pjt}' 데이터 동기화가 완료되었습니다!")
@@ -244,6 +236,39 @@ def view_project_admin(sh, pjt_list):
                         
             except Exception as e:
                 st.error(f"엑셀 파일 처리 중 오류가 발생했습니다: {e}")
+
+    with tab5:
+        st.markdown("#### 📥 구글 시트 데이터 엑셀 다운로드")
+        st.info("웹(구글 시트)에 저장된 최신 프로젝트 데이터를 엑셀 파일로 내려받습니다.")
+        
+        dl_pjt = st.selectbox("다운로드할 프로젝트 선택", ["선택"] + pjt_list, key="dl_sel")
+        
+        if dl_pjt != "선택":
+            with st.spinner("엑셀 파일을 생성하는 중..."):
+                try:
+                    ws = sh.worksheet(dl_pjt)
+                    df = pd.DataFrame(ws.get_all_records())
+                    
+                    if not df.empty:
+                        output = io.BytesIO()
+                        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                            df.to_excel(writer, index=False, sheet_name=dl_pjt)
+                        excel_data = output.getvalue()
+                        
+                        st.success(f"✅ '{dl_pjt}' 엑셀 파일 준비 완료!")
+                        
+                        st.download_button(
+                            label=f"📊 '{dl_pjt}' 엑셀 파일 다운로드 (Click)",
+                            data=excel_data,
+                            file_name=f"{dl_pjt}_최신데이터.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            type="primary",
+                            use_container_width=True
+                        )
+                    else:
+                        st.warning("해당 프로젝트에 다운로드할 데이터가 없습니다.")
+                except Exception as e:
+                    st.error(f"다운로드 준비 중 오류가 발생했습니다: {e}")
 
 # ---------------------------------------------------------
 # [SECTION 3] 메인 컨트롤러 (Router)
@@ -258,7 +283,6 @@ if check_login():
         st.sidebar.title("📁 PMO 메뉴")
         st.sidebar.info(f"User: {st.session_state['user_id']}")
         
-        # 메뉴 순서 (기본값 index=0: 통합 대시보드)
         menu = st.sidebar.radio("메뉴 선택", ["통합 대시보드", "일 발전량 분석", "프로젝트 상세", "경영지표(KPI)", "프로젝트 설정"], index=0)
         st.sidebar.markdown("---")
         if st.sidebar.button("로그아웃"):
