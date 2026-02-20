@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 import io
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v4.5.2", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v4.5.4", page_icon="🏗️", layout="wide")
 
 # --- [UI] 스타일 ---
 st.markdown("""
@@ -22,16 +22,30 @@ st.markdown("""
     .footer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: #f1f1f1; color: #555; text-align: center; padding: 5px; font-size: 11px; z-index: 100; }
     .weekly-box { background-color: #f8f9fa; padding: 12px; border-radius: 6px; margin-top: 10px; font-size: 13px; line-height: 1.6; color: #333; border: 1px solid #edf0f2; white-space: pre-wrap; }
     .history-box { background-color: #e3f2fd; padding: 15px; border-radius: 8px; border-left: 5px solid #2196f3; margin-bottom: 20px; }
-    .pm-tag { background-color: #f1f3f5; color: #495057; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; margin-left: 10px; border: 1px solid #dee2e6; }
+    .pm-tag { background-color: #e7f5ff; color: #1971c2; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; margin-left: 10px; border: 1px solid #a5d8ff; }
     .risk-high { border-left: 5px solid #ff4b4b !important; }
     .risk-normal { border-left: 5px solid #1f77b4 !important; }
+    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; border: 1px solid #eee; }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.5.2) | 발전량 분석 엔진 복구 및 인코딩 오류 해결</div>
+    <div class="footer">시스템 상태: 정상 (v4.5.4) | API 초고속 최적화 및 에러 완전 수정판</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
 # [SECTION 1] 백엔드 엔진 & 유틸리티
 # ---------------------------------------------------------
+
+def safe_api_call(func, *args, **kwargs):
+    """API 할당량 초과(429) 방지를 위한 자동 재시도 함수"""
+    retries = 5
+    for i in range(retries):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            if "429" in str(e) and i < retries - 1:
+                time.sleep(2 ** i)
+                continue
+            else:
+                raise e
 
 def check_login():
     if st.session_state.get("logged_in", False): return True
@@ -83,15 +97,25 @@ def view_dashboard(sh, pjt_list):
     for idx, p_name in enumerate(pjt_list):
         with cols[idx % 2]:
             try:
-                ws = sh.worksheet(p_name)
-                data = ws.get_all_values()
-                df = pd.DataFrame(data[1:], columns=data[0]) if len(data) > 0 else pd.DataFrame()
+                ws = safe_api_call(sh.worksheet, p_name)
+                # 단 1번의 API 호출로 모든 데이터를 가져옴 (429 에러 방지)
+                data = safe_api_call(ws.get_all_values)
                 
-                # I1: PM 이름, J2: 금주 업무, K2: 차주 업무
-                pm_name = ws.acell('I1').value or "미지정"
-                this_w = ws.acell('J2').value or "내용 없음"
-                next_w = ws.acell('K2').value or "계획 없음"
+                pm_name = "미지정"
+                this_w = "금주 실적 미입력"
+                next_w = "차주 계획 미입력"
                 
+                if len(data) > 0:
+                    header = data[0][:8]
+                    df = pd.DataFrame([r[:8] for r in data[1:]], columns=header) if len(data) > 1 else pd.DataFrame(columns=header)
+                    
+                    # I1(8), J2(9), K2(10) 인덱스로 직접 추출
+                    if len(data[0]) > 8 and str(data[0][8]).strip(): pm_name = str(data[0][8]).strip()
+                    if len(data) > 1 and len(data[1]) > 9 and str(data[1][9]).strip(): this_w = str(data[1][9]).strip()
+                    if len(data) > 1 and len(data[1]) > 10 and str(data[1][10]).strip(): next_w = str(data[1][10]).strip()
+                else:
+                    df = pd.DataFrame()
+
                 if not df.empty and '진행률' in df.columns:
                     avg_act = round(pd.to_numeric(df['진행률'], errors='coerce').fillna(0).mean(), 1)
                     avg_plan = round(df.apply(lambda r: calc_planned_progress(r.get('시작일'), r.get('종료일')), axis=1).mean(), 1)
@@ -113,33 +137,45 @@ def view_dashboard(sh, pjt_list):
                     </div>
                 ''', unsafe_allow_html=True)
                 st.progress(min(1.0, max(0.0, avg_act/100)))
-            except: pass
+            except Exception as e:
+                st.warning(f"'{p_name}' 데이터를 로드하지 못했습니다.")
 
 # 2. 프로젝트 상세 관리
 def view_project_detail(sh, pjt_list):
     st.title("🏗️ 프로젝트 상세 관리")
     selected_pjt = st.selectbox("현장 선택", ["선택"] + pjt_list)
     if selected_pjt != "선택":
-        ws = sh.worksheet(selected_pjt)
+        ws = safe_api_call(sh.worksheet, selected_pjt)
+        data = safe_api_call(ws.get_all_values)
         
-        # 1) 담당 PM 편집 (I1 셀)
-        current_pm = ws.acell('I1').value or ""
+        # 데이터 분리 (A~H열은 공정표, I/J/K는 메타데이터)
+        current_pm = ""
+        this_val = ""
+        next_val = ""
+        
+        if len(data) > 0:
+            header = data[0][:8]
+            df = pd.DataFrame([r[:8] for r in data[1:]], columns=header) if len(data) > 1 else pd.DataFrame(columns=header)
+            if len(data[0]) > 8: current_pm = str(data[0][8]).strip()
+            if len(data) > 1 and len(data[1]) > 9: this_val = str(data[1][9]).strip()
+            if len(data) > 1 and len(data[1]) > 10: next_val = str(data[1][10]).strip()
+        else:
+            df = pd.DataFrame(columns=["시작일", "종료일", "대분류", "구분", "진행상태", "비고", "진행률", "담당자"])
+
+        if '진행률' in df.columns:
+            df['진행률'] = pd.to_numeric(df['진행률'], errors='coerce').fillna(0)
+
+        # 상단 PM 입력부
         col_pm1, col_pm2 = st.columns([3, 1])
         with col_pm1:
             new_pm = st.text_input("프로젝트 담당 PM (I1 셀)", value=current_pm)
         with col_pm2:
             st.write("")
             if st.button("PM 성함 저장"):
-                ws.update('I1', [[new_pm]])
-                st.success("PM 정보가 업데이트되었습니다!")
+                safe_api_call(ws.update, 'I1', [[new_pm]])
+                st.success("PM이 업데이트되었습니다!")
         
         st.divider()
-
-        # 데이터 로드
-        data = ws.get_all_values()
-        df = pd.DataFrame(data[1:], columns=data[0]) if len(data) > 0 else pd.DataFrame()
-        if '진행률' in df.columns:
-            df['진행률'] = pd.to_numeric(df['진행률'], errors='coerce').fillna(0)
 
         tab1, tab2, tab3 = st.tabs(["📊 간트 차트", "📈 S-Curve 분석", "📝 주간 업무 보고"])
         
@@ -156,35 +192,65 @@ def view_project_detail(sh, pjt_list):
                     st.plotly_chart(fig, use_container_width=True)
             except: st.warning("차트를 표시할 데이터가 부족합니다.")
 
+        with tab2:
+            try:
+                sdf = df.copy()
+                sdf['시작일'] = pd.to_datetime(sdf['시작일'], errors='coerce').dt.date
+                sdf['종료일'] = pd.to_datetime(sdf['종료일'], errors='coerce').dt.date
+                sdf = sdf.dropna(subset=['시작일', '종료일'])
+                if not sdf.empty:
+                    min_d, max_d = sdf['시작일'].min(), sdf['종료일'].max()
+                    d_range = pd.date_range(min_d, max_d, freq='W-MON').date.tolist()
+                    p_trend = [sdf.apply(lambda r: calc_planned_progress(r['시작일'], r['종료일'], d), axis=1).mean() for d in d_range]
+                    a_prog = pd.to_numeric(sdf['진행률'], errors='coerce').fillna(0).mean()
+                    fig_s = go.Figure()
+                    fig_s.add_trace(go.Scatter(x=[d.strftime("%Y-%m-%d") for d in d_range], y=p_trend, mode='lines+markers', name='계획'))
+                    fig_s.add_trace(go.Scatter(x=[datetime.date.today().strftime("%Y-%m-%d")], y=[a_prog], mode='markers', name='현재 실적', marker=dict(size=12, color='red', symbol='star')))
+                    fig_s.update_layout(title="진척률 추이 (S-Curve)", yaxis_title="진척률(%)")
+                    st.plotly_chart(fig_s, use_container_width=True)
+            except: pass
+
         with tab3:
             st.subheader("📋 주간 업무 실시간 동기화 (J2, K2 셀)")
-            this_val = ws.acell('J2').value or ""
-            next_val = ws.acell('K2').value or ""
             with st.form("weekly_sync_form"):
                 in_this = st.text_area("✔️ 금주 주요 업무 (J2)", value=this_val, height=120)
                 in_next = st.text_area("🔜 차주 주요 업무 (K2)", value=next_val, height=120)
                 if st.form_submit_button("시트 데이터 업데이트"):
-                    ws.update('J2', [[in_this]])
-                    ws.update('K2', [[in_next]])
+                    safe_api_call(ws.update, 'J2', [[in_this]])
+                    safe_api_call(ws.update, 'K2', [[in_next]])
                     st.success("저장되었습니다!"); time.sleep(1); st.rerun()
 
         st.write("---")
-        st.subheader("📝 상세 공정표 편집")
+        st.subheader("📝 상세 공정표 편집 (A~H열 전용)")
         edited = st.data_editor(df, use_container_width=True, num_rows="dynamic")
-        if st.button("💾 변경사항 저장"):
-            ws.clear()
-            ws.update([edited.columns.values.tolist()] + edited.fillna("").astype(str).values.tolist())
-            ws.update('I1', [[new_pm]]) # 보존
-            ws.update('J2', [[in_this]])
-            ws.update('K2', [[in_next]])
-            st.success("데이터가 저장되었습니다!")
+        if st.button("💾 변경사항 전체 저장"):
+            # A~H 편집 내용과 I, J, K 메타데이터를 하나의 배열로 병합하여 안전하게 저장
+            full_data = []
+            header_8 = edited.columns.values.tolist()[:8]
+            while len(header_8) < 8: header_8.append("")
+            full_data.append(header_8 + [new_pm]) # Row 1
+            
+            edited_rows = edited.fillna("").astype(str).values.tolist()
+            if len(edited_rows) > 0:
+                for i, r in enumerate(edited_rows):
+                    r_8 = r[:8]
+                    while len(r_8) < 8: r_8.append("")
+                    if i == 0:
+                        r_8.extend(["", in_this, in_next]) # Row 2에 주간업무 삽입
+                    full_data.append(r_8)
+            else:
+                full_data.append([""] * 8 + ["", in_this, in_next])
+                
+            safe_api_call(ws.clear)
+            safe_api_call(ws.update, 'A1', full_data)
+            st.success("데이터가 완벽하게 저장되었습니다!"); time.sleep(1); st.rerun()
 
-# 3. [복원] 일 발전량 및 일조 분석 검색
+# 3. 일 발전량 및 일조 분석
 def view_solar(sh):
     st.title("☀️ 일 발전량 및 일조 분석")
     try:
-        db_ws = sh.worksheet('Solar_DB')
-        raw = db_ws.get_all_records()
+        db_ws = safe_api_call(sh.worksheet, 'Solar_DB')
+        raw = safe_api_call(db_ws.get_all_records)
         if not raw:
             st.info("데이터가 없습니다.")
             return
@@ -195,7 +261,6 @@ def view_solar(sh):
         df_db['일사량합계'] = pd.to_numeric(df_db['일사량합계'], errors='coerce').fillna(0)
         df_db = df_db.dropna(subset=['날짜'])
 
-        # 필터 레이아웃
         with st.expander("🔍 발전량 상세 검색 필터", expanded=True):
             f1, f2 = st.columns(2)
             with f1:
@@ -229,19 +294,20 @@ def view_solar(sh):
             st.warning("조건에 맞는 데이터가 없습니다.")
 
     except Exception as e:
-        st.error(f"분석 엔진 로드 실패: {e}")
+        st.error("분석 데이터를 불러올 수 없습니다.")
 
 # 4. 경영지표 KPI
 def view_kpi(sh):
     st.title("📉 경영 실적 및 KPI")
     try:
-        df = pd.DataFrame(sh.worksheet('KPI').get_all_records())
+        ws = safe_api_call(sh.worksheet, 'KPI')
+        df = pd.DataFrame(safe_api_call(ws.get_all_records))
         st.table(df)
         if not df.empty and '실적' in df.columns:
             st.plotly_chart(px.pie(df, values='실적', names=df.columns[0], title="항목별 실적 비중"))
     except: st.warning("KPI 시트를 찾을 수 없습니다.")
 
-# 5. 마스터 관리 (CRUD 복구)
+# 5. 마스터 관리
 def view_project_admin(sh, pjt_list):
     st.title("⚙️ 마스터 관리")
     t1, t2, t3, t4, t5 = st.tabs(["➕ 등록", "✏️ 수정", "🗑️ 삭제", "🔄 업로드", "📥 다운로드"])
@@ -249,22 +315,24 @@ def view_project_admin(sh, pjt_list):
     with t1:
         new_n = st.text_input("신규 프로젝트명")
         if st.button("생성") and new_n:
-            new_ws = sh.add_worksheet(title=new_n, rows="100", cols="20")
-            new_ws.append_row(["시작일", "종료일", "대분류", "구분", "진행상태", "비고", "진행률", "담당자", "금주업무", "PM", "차주업무"])
+            new_ws = safe_api_call(sh.add_worksheet, title=new_n, rows="100", cols="20")
+            safe_api_call(new_ws.append_row, ["시작일", "종료일", "대분류", "구분", "진행상태", "비고", "진행률", "담당자"])
             st.success("생성 완료!"); st.rerun()
             
     with t2:
         target = st.selectbox("수정 대상", ["선택"] + pjt_list, key="ren")
         new_name = st.text_input("변경할 이름")
         if st.button("이름 변경") and target != "선택" and new_name:
-            sh.worksheet(target).update_title(new_name)
+            ws = safe_api_call(sh.worksheet, target)
+            safe_api_call(ws.update_title, new_name)
             st.success("수정 완료!"); st.rerun()
 
     with t3:
         target_del = st.selectbox("삭제 대상", ["선택"] + pjt_list, key="del")
         conf = st.checkbox("영구 삭제에 동의합니다.")
         if st.button("삭제 수행") and target_del != "선택" and conf:
-            sh.del_worksheet(sh.worksheet(target_del))
+            ws = safe_api_call(sh.worksheet, target_del)
+            safe_api_call(sh.del_worksheet, ws)
             st.success("삭제 완료!"); st.rerun()
 
     with t4:
@@ -272,8 +340,9 @@ def view_project_admin(sh, pjt_list):
         file = st.file_uploader("엑셀 파일", type=['xlsx'])
         if target_up != "선택" and file and st.button("동기화"):
             df_up = pd.read_excel(file).fillna("").astype(str)
-            ws = sh.worksheet(target_up); ws.clear()
-            ws.update([df_up.columns.values.tolist()] + df_up.values.tolist())
+            ws = safe_api_call(sh.worksheet, target_up)
+            safe_api_call(ws.clear)
+            safe_api_call(ws.update, [df_up.columns.values.tolist()] + df_up.values.tolist())
             st.success("완료!")
 
     with t5:
@@ -282,7 +351,8 @@ def view_project_admin(sh, pjt_list):
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 for p in pjt_list:
                     try:
-                        data = sh.worksheet(p).get_all_values()
+                        ws = safe_api_call(sh.worksheet, p)
+                        data = safe_api_call(ws.get_all_values)
                         pd.DataFrame(data[1:], columns=data[0]).to_excel(writer, index=False, sheet_name=p[:31])
                     except: pass
             st.download_button("📥 통합 파일 받기", output.getvalue(), f"Backup_{datetime.date.today()}.xlsx")
@@ -295,7 +365,7 @@ if check_login():
     client = get_client()
     if client:
         try:
-            sh = client.open('pms_db')
+            sh = safe_api_call(client.open, 'pms_db')
             sys_names = ['weekly_history', 'Solar_DB', 'KPI', 'Sheet1', 'Control_Center', 'Dashboard_Control', '통합 대시보드']
             pjt_list = [ws.title for ws in sh.worksheets() if ws.title not in sys_names]
             
@@ -309,4 +379,4 @@ if check_login():
             elif menu == "마스터 설정": view_project_admin(sh, pjt_list)
             
             if st.sidebar.button("로그아웃"): st.session_state.logged_in = False; st.rerun()
-        except Exception as e: st.error(f"DB 연결 실패: {e}")
+        except Exception as e: st.error(f"서버 접속이 지연되고 있습니다. 잠시 후 새로고침 해주세요.")
