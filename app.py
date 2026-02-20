@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 import io
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v4.5.13", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v4.5.11", page_icon="🏗️", layout="wide")
 
 # --- [UI] 스타일 ---
 st.markdown("""
@@ -26,36 +26,34 @@ st.markdown("""
         line-height: 1.3 !important;
     }
     
-    .footer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: var(--secondary-background-color); color: var(--text-color); text-align: center; padding: 5px; font-size: 11px; z-index: 100; opacity: 0.8; }
+    .footer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: #f1f1f1; color: #555; text-align: center; padding: 5px; font-size: 11px; z-index: 100; }
+    .weekly-box { background-color: #f8f9fa; padding: 8px 10px; border-radius: 6px; margin-top: 4px; font-size: 12px; line-height: 1.4; color: #333; border: 1px solid #edf0f2; white-space: pre-wrap; }
+    .history-box { background-color: #e3f2fd; padding: 15px; border-radius: 8px; border-left: 5px solid #2196f3; margin-bottom: 20px; }
+    .pm-tag { background-color: #e7f5ff; color: #1971c2; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; margin-left: 8px; border: 1px solid #a5d8ff; vertical-align: middle; }
+    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; border: 1px solid #eee; }
     
-    /* [핵심] 다크/라이트 모드 자동 대응 박스 디자인 */
-    .weekly-box { background-color: var(--secondary-background-color); padding: 8px 10px; border-radius: 6px; margin-top: 4px; font-size: 12px; line-height: 1.4; color: var(--text-color); border: 1px solid var(--border-color); white-space: pre-wrap; }
-    .history-box { background-color: var(--secondary-background-color); padding: 15px; border-radius: 8px; border-left: 5px solid #2196f3; margin-bottom: 20px; color: var(--text-color); }
-    .stMetric { background-color: var(--secondary-background-color); padding: 15px; border-radius: 10px; border: 1px solid var(--border-color); }
+    /* 상태 뱃지 디자인 (우측 정렬용) */
+    .status-badge { padding: 3px 8px; border-radius: 12px; font-size: 11.5px; font-weight: 700; display: inline-block; white-space: nowrap; }
+    .status-normal { background-color: #e3f2fd; color: #1976d2; border: 1px solid #bbdefb; }
+    .status-delay { background-color: #ffebee; color: #c62828; border: 1px solid #ffcdd2; }
+    .status-done { background-color: #e8f5e9; color: #2e7d32; border: 1px solid #c8e6c9; }
     
-    /* 태그 및 뱃지: 다크모드에서도 잘 보이도록 반투명(rgba) 색상 적용 */
-    .pm-tag { background-color: rgba(25, 113, 194, 0.15); color: #339af0; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; border: 1px solid rgba(25, 113, 194, 0.3); display: inline-block; }
-    .status-badge { padding: 3px 8px; border-radius: 12px; font-size: 11px; font-weight: 700; display: inline-block; white-space: nowrap; }
-    .status-normal { background-color: rgba(33, 150, 243, 0.15); color: #42a5f5; border: 1px solid rgba(33, 150, 243, 0.3); }
-    .status-delay { background-color: rgba(244, 67, 54, 0.15); color: #ef5350; border: 1px solid rgba(244, 67, 54, 0.3); }
-    .status-done { background-color: rgba(76, 175, 80, 0.15); color: #66bb6a; border: 1px solid rgba(76, 175, 80, 0.3); }
-    
-    /* 컴팩트 버튼 */
+    /* 컴팩트 버튼 (제목 옆으로 배치하기 위한 최적화) */
     div[data-testid="stButton"] button {
-        min-height: 28px !important;
-        height: 28px !important;
+        min-height: 26px !important;
+        height: 26px !important;
         padding: 0px 8px !important;
         font-size: 12px !important;
         border-radius: 6px !important;
         font-weight: 600 !important;
         line-height: 1 !important;
-        margin: 0 !important;
+        margin-top: -2px !important;
     }
     
     /* 진행바 마진 최적화 */
     div[data-testid="stProgressBar"] { margin-bottom: 0px !important; margin-top: 5px !important; }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.5.13) | 다크/라이트 모드 완벽 호환 업데이트 적용</div>
+    <div class="footer">시스템 상태: 정상 (v4.5.11) | 프로젝트명 모바일 반응형 글꼴 크기 적용 완료</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -163,19 +161,16 @@ def view_dashboard(sh, pjt_list):
                         status_ui = "🔵 완료"
                         b_style = "status-done"
                     
-                    # 헤더: 2단 구성 유지
-                    h_col1, h_col2 = st.columns([7.3, 2.7], gap="small")
+                    # 헤더 영역을 3개의 구역으로 나누어 같은 줄에 배치
+                    h_col1, h_col2, h_col3 = st.columns([5.5, 2.8, 1.7], gap="small")
                     
                     with h_col1:
-                        # [핵심 수정] color 속성을 var(--text-color)로 변경하여 다크모드 대응
+                        # [핵심 수정] 글자가 화면 크기에 따라 줄어들도록 반응형 clamp 폰트 적용 & 자동 줄바꿈 허용
                         st.markdown(f"""
-                            <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 2px;">
-                                <h4 style="color: var(--text-color); font-weight:700; margin:0; font-size:clamp(13.5px, 3.5vw, 16px); word-break:keep-all; line-height:1.2;">
-                                    🏗️ {p_name}
-                                </h4>
-                                <span class="pm-tag" style="margin:0;">PM: {pm_name}</span>
-                                <span class="status-badge {b_style}" style="margin:0;">{status_ui}</span>
-                            </div>
+                            <h4 style="color:#222222; font-weight:700; margin-top:2px; margin-bottom:0; font-size:clamp(13px, 3.5vw, 16px); word-break:keep-all; line-height:1.2;">
+                                🏗️ {p_name} 
+                                <span class="pm-tag" style="font-size:clamp(10px, 2.5vw, 11px);">PM: {pm_name}</span>
+                            </h4>
                         """, unsafe_allow_html=True)
                         
                     with h_col2:
@@ -186,16 +181,23 @@ def view_dashboard(sh, pjt_list):
                             args=(p_name,), 
                             use_container_width=True
                         )
+                        
+                    with h_col3:
+                        st.markdown(f"""
+                            <div style="text-align:right; margin-top:3px;">
+                                <span class="status-badge {b_style}">{status_ui}</span>
+                            </div>
+                        """, unsafe_allow_html=True)
                     
                     # 정보 표시 영역
                     st.markdown(f'''
-                        <div style="margin-bottom:4px; margin-top:2px;">
-                            <p style="font-size:12.5px; color: var(--text-color); opacity: 0.7; margin-top:0; margin-bottom:4px;">계획: {avg_plan}% | 실적: {avg_act}%</p>
+                        <div style="margin-bottom:4px; margin-top:-5px;">
+                            <p style="font-size:12.5px; color:#666; margin-top:0; margin-bottom:4px;">계획: {avg_plan}% | 실적: {avg_act}%</p>
                             <div class="weekly-box" style="margin-top:0;"><b>[금주]</b> {this_w}<br><b>[차주]</b> {next_w}</div>
                         </div>
                     ''', unsafe_allow_html=True)
                     
-                    # 진행바 표시
+                    # 진행바 표시 (맨 아래로 배치)
                     st.progress(min(1.0, max(0.0, avg_act/100)))
                     
                 except Exception as e:
@@ -203,4 +205,271 @@ def view_dashboard(sh, pjt_list):
 
 # 2. 프로젝트 상세 관리
 def view_project_detail(sh, pjt_list):
-    st.title("🏗️ 프로젝트 상세
+    st.title("🏗️ 프로젝트 상세 관리")
+    
+    selected_pjt = st.selectbox("현장 선택", ["선택"] + pjt_list, key="selected_pjt")
+    
+    if selected_pjt != "선택":
+        ws = safe_api_call(sh.worksheet, selected_pjt)
+        data = safe_api_call(ws.get_all_values)
+        
+        current_pm = ""
+        this_val = ""
+        next_val = ""
+        
+        if len(data) > 0:
+            header = data[0][:8]
+            df = pd.DataFrame([r[:8] for r in data[1:]], columns=header) if len(data) > 1 else pd.DataFrame(columns=header)
+            if len(data[0]) > 8: current_pm = str(data[0][8]).strip()
+            if len(data) > 1 and len(data[1]) > 9: this_val = str(data[1][9]).strip()
+            if len(data) > 1 and len(data[1]) > 10: next_val = str(data[1][10]).strip()
+        else:
+            df = pd.DataFrame(columns=["시작일", "종료일", "대분류", "구분", "진행상태", "비고", "진행률", "담당자"])
+
+        if '진행률' in df.columns:
+            df['진행률'] = pd.to_numeric(df['진행률'], errors='coerce').fillna(0)
+
+        col_pm1, col_pm2 = st.columns([3, 1])
+        with col_pm1:
+            new_pm = st.text_input("프로젝트 담당 PM (I1 셀)", value=current_pm)
+        with col_pm2:
+            st.write("")
+            if st.button("PM 성함 저장"):
+                safe_api_call(ws.update, 'I1', [[new_pm]])
+                st.success("PM이 업데이트되었습니다!")
+        
+        st.divider()
+
+        tab1, tab2, tab3 = st.tabs(["📊 간트 차트", "📈 S-Curve 분석", "📝 주간 업무 보고"])
+        
+        with tab1:
+            try:
+                cdf = df.copy()
+                cdf['시작일'] = pd.to_datetime(cdf['시작일'], errors='coerce')
+                cdf['종료일'] = pd.to_datetime(cdf['종료일'], errors='coerce')
+                cdf = cdf.dropna(subset=['시작일', '종료일'])
+                if not cdf.empty:
+                    fig = px.timeline(cdf, x_start="시작일", x_end="종료일", y="대분류", color="진행률", 
+                                     color_continuous_scale='RdYlGn', range_color=[0, 100])
+                    fig.update_yaxes(autorange="reversed")
+                    st.plotly_chart(fig, use_container_width=True)
+            except: st.warning("차트를 표시할 데이터가 부족합니다.")
+
+        with tab2:
+            try:
+                sdf = df.copy()
+                sdf['시작일'] = pd.to_datetime(sdf['시작일'], errors='coerce').dt.date
+                sdf['종료일'] = pd.to_datetime(sdf['종료일'], errors='coerce').dt.date
+                sdf = sdf.dropna(subset=['시작일', '종료일'])
+                if not sdf.empty:
+                    min_d, max_d = sdf['시작일'].min(), sdf['종료일'].max()
+                    d_range = pd.date_range(min_d, max_d, freq='W-MON').date.tolist()
+                    p_trend = [sdf.apply(lambda r: calc_planned_progress(r['시작일'], r['종료일'], d), axis=1).mean() for d in d_range]
+                    a_prog = pd.to_numeric(sdf['진행률'], errors='coerce').fillna(0).mean()
+                    fig_s = go.Figure()
+                    fig_s.add_trace(go.Scatter(x=[d.strftime("%Y-%m-%d") for d in d_range], y=p_trend, mode='lines+markers', name='계획'))
+                    fig_s.add_trace(go.Scatter(x=[datetime.date.today().strftime("%Y-%m-%d")], y=[a_prog], mode='markers', name='현재 실적', marker=dict(size=12, color='red', symbol='star')))
+                    fig_s.update_layout(title="진척률 추이 (S-Curve)", yaxis_title="진척률(%)")
+                    st.plotly_chart(fig_s, use_container_width=True)
+            except: pass
+
+        with tab3:
+            st.subheader("📋 최근 주간 업무 이력")
+            try:
+                h_ws = safe_api_call(sh.worksheet, 'weekly_history')
+                h_data = safe_api_call(h_ws.get_all_records)
+                h_df = pd.DataFrame(h_data)
+                if not h_df.empty:
+                    h_df['프로젝트명'] = h_df['프로젝트명'].astype(str).str.strip()
+                    p_match = h_df[h_df['프로젝트명'] == selected_pjt.strip()]
+                    if not p_match.empty:
+                        latest = p_match.iloc[-1]
+                        st.markdown(f"""
+                        <div class="history-box">
+                            <p style="font-size:14px; color:#555; margin-bottom:10px;">📅 <b>최종 보고일:</b> {latest.get('날짜', '-')}</p>
+                            <p style="margin-bottom:12px;"><b>✔️ 금주 주요 업무:</b><br>{latest.get('금주업무', latest.get('주요현황', '-'))}</p>
+                            <p style="margin-bottom:0;"><b>🔜 차주 주요 업무:</b><br>{latest.get('차주업무', '-')}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    else: st.info("아직 등록된 주간 업무 기록이 없습니다.")
+            except: st.warning("이력 데이터를 불러오는 중 오류가 발생했습니다.")
+
+            st.divider()
+
+            st.subheader("📝 주간 업무 작성 및 동기화 (J2, K2 셀 & 히스토리)")
+            with st.form("weekly_sync_form"):
+                in_this = st.text_area("✔️ 금주 주요 업무 (J2)", value=this_val, height=120)
+                in_next = st.text_area("🔜 차주 주요 업무 (K2)", value=next_val, height=120)
+                if st.form_submit_button("시트 데이터 업데이트 및 이력 저장"):
+                    safe_api_call(ws.update, 'J2', [[in_this]])
+                    safe_api_call(ws.update, 'K2', [[in_next]])
+                    try:
+                        h_ws = safe_api_call(sh.worksheet, 'weekly_history')
+                        safe_api_call(h_ws.append_row, [datetime.date.today().strftime("%Y-%m-%d"), selected_pjt, in_this, in_next, st.session_state.user_id])
+                    except: pass
+                    st.success("성공적으로 업데이트 및 저장되었습니다!"); time.sleep(1); st.rerun()
+
+        st.write("---")
+        st.subheader("📝 상세 공정표 편집 (A~H열 전용)")
+        edited = st.data_editor(df, use_container_width=True, num_rows="dynamic")
+        if st.button("💾 변경사항 전체 저장"):
+            full_data = []
+            header_8 = edited.columns.values.tolist()[:8]
+            while len(header_8) < 8: header_8.append("")
+            full_data.append(header_8 + [new_pm])
+            
+            edited_rows = edited.fillna("").astype(str).values.tolist()
+            if len(edited_rows) > 0:
+                for i, r in enumerate(edited_rows):
+                    r_8 = r[:8]
+                    while len(r_8) < 8: r_8.append("")
+                    if i == 0:
+                        r_8.extend(["", in_this, in_next])
+                    full_data.append(r_8)
+            else:
+                full_data.append([""] * 8 + ["", in_this, in_next])
+                
+            safe_api_call(ws.clear)
+            safe_api_call(ws.update, 'A1', full_data)
+            st.success("데이터가 완벽하게 저장되었습니다!"); time.sleep(1); st.rerun()
+
+# 3. 일 발전량 및 일조 분석
+def view_solar(sh):
+    st.title("☀️ 일 발전량 및 일조 분석")
+    try:
+        db_ws = safe_api_call(sh.worksheet, 'Solar_DB')
+        raw = safe_api_call(db_ws.get_all_records)
+        if not raw:
+            st.info("데이터가 없습니다.")
+            return
+        
+        df_db = pd.DataFrame(raw)
+        df_db['날짜'] = pd.to_datetime(df_db['날짜'], errors='coerce')
+        df_db['발전시간'] = pd.to_numeric(df_db['발전시간'], errors='coerce').fillna(0)
+        df_db['일사량합계'] = pd.to_numeric(df_db['일사량합계'], errors='coerce').fillna(0)
+        df_db = df_db.dropna(subset=['날짜'])
+
+        with st.expander("🔍 발전량 상세 검색 필터", expanded=True):
+            f1, f2 = st.columns(2)
+            with f1:
+                locs = sorted(df_db['지점'].unique().tolist())
+                sel_locs = st.multiselect("조회 지역 선택", locs, default=locs[:3] if len(locs)>3 else locs)
+            with f2:
+                dr = st.date_input("조회 기간", [df_db['날짜'].min().date(), df_db['날짜'].max().date()])
+
+        mask = (df_db['지점'].isin(sel_locs))
+        if len(dr) == 2:
+            mask = mask & (df_db['날짜'].dt.date >= dr[0]) & (df_db['날짜'].dt.date <= dr[1])
+        
+        f_df = df_db[mask].sort_values('날짜')
+
+        if not f_df.empty:
+            m1, m2, m3 = st.columns(3)
+            m1.metric("평균 발전 시간", f"{f_df['발전시간'].mean():.2f} h")
+            m2.metric("최대 발전량 지역", f_df.loc[f_df['발전시간'].idxmax(), '지점'])
+            m3.metric("검색 데이터 수", f"{len(f_df)} 건")
+
+            c1, c2 = st.columns(2)
+            with c1:
+                st.plotly_chart(px.line(f_df, x='날짜', y='발전시간', color='지점', title="일별 발전 시간 추이"), use_container_width=True)
+            with c2:
+                avg_comp = f_df.groupby('지점')['발전시간'].mean().reset_index()
+                st.plotly_chart(px.bar(avg_comp, x='지점', y='발전시간', color='발전시간', title="지역별 평균 효율 비교"), use_container_width=True)
+            
+            st.subheader("📊 검색 결과 상세 내역")
+            st.dataframe(f_df, use_container_width=True)
+        else:
+            st.warning("조건에 맞는 데이터가 없습니다.")
+
+    except Exception as e:
+        st.error("분석 데이터를 불러올 수 없습니다.")
+
+# 4. 경영지표 KPI
+def view_kpi(sh):
+    st.title("📉 경영 실적 및 KPI")
+    try:
+        ws = safe_api_call(sh.worksheet, 'KPI')
+        df = pd.DataFrame(safe_api_call(ws.get_all_records))
+        st.table(df)
+        if not df.empty and '실적' in df.columns:
+            st.plotly_chart(px.pie(df, values='실적', names=df.columns[0], title="항목별 실적 비중"))
+    except: st.warning("KPI 시트를 찾을 수 없습니다.")
+
+# 5. 마스터 관리
+def view_project_admin(sh, pjt_list):
+    st.title("⚙️ 마스터 관리")
+    t1, t2, t3, t4, t5 = st.tabs(["➕ 등록", "✏️ 수정", "🗑️ 삭제", "🔄 업로드", "📥 다운로드"])
+    
+    with t1:
+        new_n = st.text_input("신규 프로젝트명")
+        if st.button("생성") and new_n:
+            new_ws = safe_api_call(sh.add_worksheet, title=new_n, rows="100", cols="20")
+            safe_api_call(new_ws.append_row, ["시작일", "종료일", "대분류", "구분", "진행상태", "비고", "진행률", "담당자"])
+            st.success("생성 완료!"); st.rerun()
+            
+    with t2:
+        target = st.selectbox("수정 대상", ["선택"] + pjt_list, key="ren")
+        new_name = st.text_input("변경할 이름")
+        if st.button("이름 변경") and target != "선택" and new_name:
+            ws = safe_api_call(sh.worksheet, target)
+            safe_api_call(ws.update_title, new_name)
+            st.success("수정 완료!"); st.rerun()
+
+    with t3:
+        target_del = st.selectbox("삭제 대상", ["선택"] + pjt_list, key="del")
+        conf = st.checkbox("영구 삭제에 동의합니다.")
+        if st.button("삭제 수행") and target_del != "선택" and conf:
+            ws = safe_api_call(sh.worksheet, target_del)
+            safe_api_call(sh.del_worksheet, ws)
+            st.success("삭제 완료!"); st.rerun()
+
+    with t4:
+        target_up = st.selectbox("업로드 대상", ["선택"] + pjt_list, key="up")
+        file = st.file_uploader("엑셀 파일", type=['xlsx'])
+        if target_up != "선택" and file and st.button("동기화"):
+            df_up = pd.read_excel(file).fillna("").astype(str)
+            ws = safe_api_call(sh.worksheet, target_up)
+            safe_api_call(ws.clear)
+            safe_api_call(ws.update, [df_up.columns.values.tolist()] + df_up.values.tolist())
+            st.success("완료!")
+
+    with t5:
+        if st.button("📚 통합 백업 엑셀 생성"):
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                for p in pjt_list:
+                    try:
+                        ws = safe_api_call(sh.worksheet, p)
+                        data = safe_api_call(ws.get_all_values)
+                        pd.DataFrame(data[1:], columns=data[0]).to_excel(writer, index=False, sheet_name=p[:31])
+                    except: pass
+            st.download_button("📥 통합 파일 받기", output.getvalue(), f"Backup_{datetime.date.today()}.xlsx")
+
+# ---------------------------------------------------------
+# [SECTION 3] 메인 컨트롤러
+# ---------------------------------------------------------
+
+if check_login():
+    client = get_client()
+    if client:
+        try:
+            sh = safe_api_call(client.open, 'pms_db')
+            sys_names = ['weekly_history', 'Solar_DB', 'KPI', 'Sheet1', 'Control_Center', 'Dashboard_Control', '통합 대시보드']
+            pjt_list = [ws.title for ws in sh.worksheets() if ws.title not in sys_names]
+            
+            if "selected_menu" not in st.session_state:
+                st.session_state.selected_menu = "통합 대시보드"
+            if "selected_pjt" not in st.session_state:
+                st.session_state.selected_pjt = "선택"
+            
+            st.sidebar.title("📁 PMO 메뉴")
+            menu = st.sidebar.radio("메뉴 선택", ["통합 대시보드", "프로젝트 상세", "일 발전량 분석", "경영지표(KPI)", "마스터 설정"], key="selected_menu")
+            
+            if menu == "통합 대시보드": view_dashboard(sh, pjt_list)
+            elif menu == "프로젝트 상세": view_project_detail(sh, pjt_list)
+            elif menu == "일 발전량 분석": view_solar(sh)
+            elif menu == "경영지표(KPI)": view_kpi(sh)
+            elif menu == "마스터 설정": view_project_admin(sh, pjt_list)
+            
+            if st.sidebar.button("로그아웃"): st.session_state.logged_in = False; st.rerun()
+        except Exception as e: st.error(f"서버 접속이 지연되고 있습니다. 잠시 후 새로고침 해주세요.")
