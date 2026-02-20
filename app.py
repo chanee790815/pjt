@@ -11,10 +11,9 @@ import plotly.graph_objects as go
 import io
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v4.5.14", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v4.5.15", page_icon="🏗️", layout="wide")
 
 # --- [UI] 스타일 ---
-# 텍스트 컬러(color) 지정을 없애고 반투명 배경(rgba)과 투명도(opacity)를 사용하여 다크/라이트 모드 자동 대응 완벽 지원
 st.markdown("""
     <style>
     @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
@@ -29,34 +28,60 @@ st.markdown("""
     
     .footer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: rgba(128, 128, 128, 0.15); backdrop-filter: blur(5px); text-align: center; padding: 5px; font-size: 11px; z-index: 100; }
     
-    /* [핵심] 다크/라이트 모드 완벽 대응 박스 디자인 (반투명 회색 배경) */
+    /* 박스 디자인 (반투명 회색 배경) */
     .weekly-box { background-color: rgba(128, 128, 128, 0.1); padding: 8px 10px; border-radius: 6px; margin-top: 4px; font-size: 12px; line-height: 1.4; border: 1px solid rgba(128, 128, 128, 0.2); white-space: pre-wrap; }
     .history-box { background-color: rgba(128, 128, 128, 0.1); padding: 15px; border-radius: 8px; border-left: 5px solid #2196f3; margin-bottom: 20px; }
     .stMetric { background-color: rgba(128, 128, 128, 0.05); padding: 15px; border-radius: 10px; border: 1px solid rgba(128, 128, 128, 0.2); }
     
-    /* 태그 및 뱃지: 다크모드에서도 잘 보이도록 반투명(rgba) 색상 적용 */
+    /* 태그 및 뱃지 */
     .pm-tag { background-color: rgba(25, 113, 194, 0.15); color: #339af0; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; border: 1px solid rgba(25, 113, 194, 0.3); display: inline-block; }
     .status-badge { padding: 3px 8px; border-radius: 12px; font-size: 11px; font-weight: 700; display: inline-block; white-space: nowrap; }
     .status-normal { background-color: rgba(33, 150, 243, 0.15); color: #42a5f5; border: 1px solid rgba(33, 150, 243, 0.3); }
     .status-delay { background-color: rgba(244, 67, 54, 0.15); color: #ef5350; border: 1px solid rgba(244, 67, 54, 0.3); }
     .status-done { background-color: rgba(76, 175, 80, 0.15); color: #66bb6a; border: 1px solid rgba(76, 175, 80, 0.3); }
     
-    /* 컴팩트 버튼 */
+    /* [핵심] 컴팩트 버튼 디자인 */
     div[data-testid="stButton"] button {
-        min-height: 28px !important;
-        height: 28px !important;
-        padding: 0px 8px !important;
-        font-size: 12px !important;
+        min-height: 26px !important;
+        height: 26px !important;
+        padding: 0px 4px !important;
+        font-size: 11.5px !important;
         border-radius: 6px !important;
         font-weight: 600 !important;
         line-height: 1 !important;
         margin: 0 !important;
+        margin-top: 2px !important;
+        width: 100% !important;
     }
     
     /* 진행바 마진 최적화 */
     div[data-testid="stProgressBar"] { margin-bottom: 0px !important; margin-top: 5px !important; }
+    
+    /* ========================================================= */
+    /* [중요] 모바일 세로 모드에서 버튼이 밑으로 떨어지는 현상 강제 차단 */
+    /* ========================================================= */
+    @media (max-width: 768px) {
+        div[data-testid="stContainer"] div[data-testid="stHorizontalBlock"] {
+            flex-direction: row !important; /* 강제 가로 배치 */
+            flex-wrap: nowrap !important;   /* 줄바꿈 금지 */
+            align-items: flex-start !important; /* 위쪽 정렬 */
+            gap: 5px !important;
+        }
+        /* 제목 부분 영역 확보 */
+        div[data-testid="stContainer"] div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:first-child {
+            width: calc(100% - 80px) !important;
+            flex: 1 1 auto !important;
+            min-width: 0 !important;
+        }
+        /* 버튼 부분 영역 고정 */
+        div[data-testid="stContainer"] div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:last-child {
+            width: 75px !important;
+            flex: 0 0 75px !important;
+            min-width: 75px !important;
+        }
+    }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.5.14) | 다크모드/라이트모드 글자색상 자동 반전 최적화 완료</div>
+    <div class="footer">시스템 상태: 정상 (v4.5.15) | 모바일 세로모드 버튼 줄바꿈 강제 고정 완료</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -164,11 +189,10 @@ def view_dashboard(sh, pjt_list):
                         status_ui = "🔵 완료"
                         b_style = "status-done"
                     
-                    # 헤더: 2단 구성 유지
-                    h_col1, h_col2 = st.columns([7.3, 2.7], gap="small")
+                    # 헤더: 2단 구성 (비율 수정)
+                    h_col1, h_col2 = st.columns([7.5, 2.5], gap="small")
                     
                     with h_col1:
-                        # [핵심 수정] color 속성을 아예 제거하여 Streamlit 기본 테마 색상을 자연스럽게 상속받도록 함
                         st.markdown(f"""
                             <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 2px;">
                                 <h4 style="font-weight:700; margin:0; font-size:clamp(13.5px, 3.5vw, 16px); word-break:keep-all; line-height:1.2;">
@@ -181,7 +205,7 @@ def view_dashboard(sh, pjt_list):
                         
                     with h_col2:
                         st.button(
-                            "🔍 상세 보기", 
+                            "🔍 상세", 
                             key=f"btn_go_{p_name}", 
                             on_click=navigate_to_project, 
                             args=(p_name,), 
@@ -189,7 +213,6 @@ def view_dashboard(sh, pjt_list):
                         )
                     
                     # 정보 표시 영역
-                    # [핵심 수정] color 속성을 제거하고 opacity(투명도)만 주어 다크/라이트 모드에서 모두 예쁜 회색이 되도록 수정
                     st.markdown(f'''
                         <div style="margin-bottom:4px; margin-top:2px;">
                             <p style="font-size:12.5px; opacity: 0.7; margin-top:0; margin-bottom:4px;">계획: {avg_plan}% | 실적: {avg_act}%</p>
