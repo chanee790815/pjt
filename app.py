@@ -378,8 +378,11 @@ def view_solar(sh):
                 locs = sorted(df_db['지점'].unique().tolist())
                 sel_locs = st.multiselect("조회 지역 선택", locs, default=locs[:3] if len(locs)>3 else locs)
             with f2:
-                dr = st.date_input("조회 기간", [df_db['날짜'].min().date(), df_db['날짜'].max().date()])
-
+                # dr = st.date_input("조회 기간", [df_db['날짜'].min().date(), df_db['날짜'].max().date()])
+                # [수정] 2025년 1월 1일 ~ 2025년 12월 31일을 기본값으로 설정
+                default_start = datetime.date(2025, 1, 1)
+                default_end = datetime.date(2025, 12, 31)
+                dr = st.date_input("조회 기간", [default_start, default_end])
         mask = (df_db['지점'].isin(sel_locs))
         if len(dr) == 2:
             mask = mask & (df_db['날짜'].dt.date >= dr[0]) & (df_db['날짜'].dt.date <= dr[1])
@@ -496,3 +499,4 @@ if check_login():
             
             if st.sidebar.button("로그아웃"): st.session_state.logged_in = False; st.rerun()
         except Exception as e: st.error(f"서버 접속이 지연되고 있습니다. 잠시 후 새로고침 해주세요.")
+
