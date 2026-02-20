@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 import io
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v4.5.8", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v4.5.15", page_icon="🏗️", layout="wide")
 
 # --- [UI] 스타일 ---
 st.markdown("""
@@ -19,27 +19,69 @@ st.markdown("""
     @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
     html, body, [class*="css"] { font-family: 'Pretendard', sans-serif; }
     
-    /* 메인 제목(h1) 반응형 폰트 크기 및 줄바꿈 최적화 */
+    /* 메인 제목 반응형 최적화 */
     h1 {
         font-size: clamp(1.5rem, 6vw, 2.5rem) !important; 
         word-break: keep-all !important; 
         line-height: 1.3 !important;
     }
     
-    .pjt-card { background-color: #ffffff; color: #212529; padding: 12px 15px; border-radius: 10px; border: 1px solid #eee; margin-bottom: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
-    .pjt-card h4 { color: #222222 !important; font-weight: 700; margin-top: 0; margin-bottom: 2px; font-size: 15px; }
-    .footer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: #f1f1f1; color: #555; text-align: center; padding: 5px; font-size: 11px; z-index: 100; }
-    .weekly-box { background-color: #f8f9fa; padding: 8px 10px; border-radius: 6px; margin-top: 4px; font-size: 12px; line-height: 1.4; color: #333; border: 1px solid #edf0f2; white-space: pre-wrap; }
-    .history-box { background-color: #e3f2fd; padding: 15px; border-radius: 8px; border-left: 5px solid #2196f3; margin-bottom: 20px; }
-    .pm-tag { background-color: #e7f5ff; color: #1971c2; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; margin-left: 8px; border: 1px solid #a5d8ff; vertical-align: middle; }
-    .risk-high { border-left: 5px solid #ff4b4b !important; }
-    .risk-normal { border-left: 5px solid #1f77b4 !important; }
-    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; border: 1px solid #eee; }
+    .footer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: rgba(128, 128, 128, 0.15); backdrop-filter: blur(5px); text-align: center; padding: 5px; font-size: 11px; z-index: 100; }
     
-    /* 버튼과 진행바 사이 간격 최소화 */
-    div[data-testid="stProgressBar"] { margin-bottom: 5px; }
+    /* 박스 디자인 (반투명 회색 배경) */
+    .weekly-box { background-color: rgba(128, 128, 128, 0.1); padding: 8px 10px; border-radius: 6px; margin-top: 4px; font-size: 12px; line-height: 1.4; border: 1px solid rgba(128, 128, 128, 0.2); white-space: pre-wrap; }
+    .history-box { background-color: rgba(128, 128, 128, 0.1); padding: 15px; border-radius: 8px; border-left: 5px solid #2196f3; margin-bottom: 20px; }
+    .stMetric { background-color: rgba(128, 128, 128, 0.05); padding: 15px; border-radius: 10px; border: 1px solid rgba(128, 128, 128, 0.2); }
+    
+    /* 태그 및 뱃지 */
+    .pm-tag { background-color: rgba(25, 113, 194, 0.15); color: #339af0; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; border: 1px solid rgba(25, 113, 194, 0.3); display: inline-block; }
+    .status-badge { padding: 3px 8px; border-radius: 12px; font-size: 11px; font-weight: 700; display: inline-block; white-space: nowrap; }
+    .status-normal { background-color: rgba(33, 150, 243, 0.15); color: #42a5f5; border: 1px solid rgba(33, 150, 243, 0.3); }
+    .status-delay { background-color: rgba(244, 67, 54, 0.15); color: #ef5350; border: 1px solid rgba(244, 67, 54, 0.3); }
+    .status-done { background-color: rgba(76, 175, 80, 0.15); color: #66bb6a; border: 1px solid rgba(76, 175, 80, 0.3); }
+    
+    /* [핵심] 컴팩트 버튼 디자인 */
+    div[data-testid="stButton"] button {
+        min-height: 26px !important;
+        height: 26px !important;
+        padding: 0px 4px !important;
+        font-size: 11.5px !important;
+        border-radius: 6px !important;
+        font-weight: 600 !important;
+        line-height: 1 !important;
+        margin: 0 !important;
+        margin-top: 2px !important;
+        width: 100% !important;
+    }
+    
+    /* 진행바 마진 최적화 */
+    div[data-testid="stProgressBar"] { margin-bottom: 0px !important; margin-top: 5px !important; }
+    
+    /* ========================================================= */
+    /* [중요] 모바일 세로 모드에서 버튼이 밑으로 떨어지는 현상 강제 차단 */
+    /* ========================================================= */
+    @media (max-width: 768px) {
+        div[data-testid="stContainer"] div[data-testid="stHorizontalBlock"] {
+            flex-direction: row !important; /* 강제 가로 배치 */
+            flex-wrap: nowrap !important;   /* 줄바꿈 금지 */
+            align-items: flex-start !important; /* 위쪽 정렬 */
+            gap: 5px !important;
+        }
+        /* 제목 부분 영역 확보 */
+        div[data-testid="stContainer"] div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:first-child {
+            width: calc(100% - 80px) !important;
+            flex: 1 1 auto !important;
+            min-width: 0 !important;
+        }
+        /* 버튼 부분 영역 고정 */
+        div[data-testid="stContainer"] div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:last-child {
+            width: 75px !important;
+            flex: 0 0 75px !important;
+            min-width: 75px !important;
+        }
+    }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.5.8) | 상세페이지 다이렉트 콜백 라우팅 적용</div>
+    <div class="footer">시스템 상태: 정상 (v4.5.15) | 모바일 세로모드 버튼 줄바꿈 강제 고정 완료</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -113,71 +155,87 @@ def view_dashboard(sh, pjt_list):
     cols = st.columns(2)
     for idx, p_name in enumerate(pjt_list):
         with cols[idx % 2]:
-            try:
-                ws = safe_api_call(sh.worksheet, p_name)
-                # 단 1번의 API 호출로 모든 데이터를 가져옴 (429 에러 방지)
-                data = safe_api_call(ws.get_all_values)
-                
-                pm_name = "미지정"
-                this_w = "금주 실적 미입력"
-                next_w = "차주 계획 미입력"
-                
-                if len(data) > 0:
-                    header = data[0][:8]
-                    df = pd.DataFrame([r[:8] for r in data[1:]], columns=header) if len(data) > 1 else pd.DataFrame(columns=header)
+            with st.container(border=True):
+                try:
+                    ws = safe_api_call(sh.worksheet, p_name)
+                    data = safe_api_call(ws.get_all_values)
                     
-                    # I1(8), J2(9), K2(10) 인덱스로 직접 추출
-                    if len(data[0]) > 8 and str(data[0][8]).strip(): pm_name = str(data[0][8]).strip()
-                    if len(data) > 1 and len(data[1]) > 9 and str(data[1][9]).strip(): this_w = str(data[1][9]).strip()
-                    if len(data) > 1 and len(data[1]) > 10 and str(data[1][10]).strip(): next_w = str(data[1][10]).strip()
-                else:
-                    df = pd.DataFrame()
+                    pm_name = "미지정"
+                    this_w = "금주 실적 미입력"
+                    next_w = "차주 계획 미입력"
+                    
+                    if len(data) > 0:
+                        header = data[0][:8]
+                        df = pd.DataFrame([r[:8] for r in data[1:]], columns=header) if len(data) > 1 else pd.DataFrame(columns=header)
+                        
+                        if len(data[0]) > 8 and str(data[0][8]).strip(): pm_name = str(data[0][8]).strip()
+                        if len(data) > 1 and len(data[1]) > 9 and str(data[1][9]).strip(): this_w = str(data[1][9]).strip()
+                        if len(data) > 1 and len(data[1]) > 10 and str(data[1][10]).strip(): next_w = str(data[1][10]).strip()
+                    else:
+                        df = pd.DataFrame()
 
-                if not df.empty and '진행률' in df.columns:
-                    avg_act = round(pd.to_numeric(df['진행률'], errors='coerce').fillna(0).mean(), 1)
-                    avg_plan = round(df.apply(lambda r: calc_planned_progress(r.get('시작일'), r.get('종료일')), axis=1).mean(), 1)
-                else:
-                    avg_act = 0.0; avg_plan = 0.0
-                
-                status_ui = "🟢 정상"
-                c_style = "pjt-card risk-normal"
-                if (avg_plan - avg_act) >= 10:
-                    status_ui = "🔴 지연"
-                    c_style = "pjt-card risk-high"
-                elif avg_act >= 100: status_ui = "🔵 완료"
-                
-                st.markdown(f'''
-                    <div class="{c_style}">
-                        <h4>🏗️ {p_name} <span class="pm-tag">PM: {pm_name}</span> <span style="font-size:13px; font-weight:normal; float:right;">{status_ui}</span></h4>
-                        <p style="font-size:12px; color:#666; margin-top:0; margin-bottom:4px;">계획: {avg_plan}% | 실적: {avg_act}%</p>
-                        <div class="weekly-box"><b>[금주]</b> {this_w}<br><b>[차주]</b> {next_w}</div>
-                    </div>
-                ''', unsafe_allow_html=True)
-                st.progress(min(1.0, max(0.0, avg_act/100)))
-                
-                # [수정] 콜백 함수(on_click)를 사용하여 하이퍼링크처럼 빠르고 부드럽게 이동
-                st.button(
-                    "🔗 프로젝트 상세 보기", 
-                    key=f"btn_go_{p_name}", 
-                    on_click=navigate_to_project, 
-                    args=(p_name,), 
-                    use_container_width=True
-                )
-            except Exception as e:
-                st.warning(f"'{p_name}' 데이터를 로드하지 못했습니다.")
+                    if not df.empty and '진행률' in df.columns:
+                        avg_act = round(pd.to_numeric(df['진행률'], errors='coerce').fillna(0).mean(), 1)
+                        avg_plan = round(df.apply(lambda r: calc_planned_progress(r.get('시작일'), r.get('종료일')), axis=1).mean(), 1)
+                    else:
+                        avg_act = 0.0; avg_plan = 0.0
+                    
+                    status_ui = "🟢 정상"
+                    b_style = "status-normal"
+                    if (avg_plan - avg_act) >= 10:
+                        status_ui = "🔴 지연"
+                        b_style = "status-delay"
+                    elif avg_act >= 100: 
+                        status_ui = "🔵 완료"
+                        b_style = "status-done"
+                    
+                    # 헤더: 2단 구성 (비율 수정)
+                    h_col1, h_col2 = st.columns([7.5, 2.5], gap="small")
+                    
+                    with h_col1:
+                        st.markdown(f"""
+                            <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 2px;">
+                                <h4 style="font-weight:700; margin:0; font-size:clamp(13.5px, 3.5vw, 16px); word-break:keep-all; line-height:1.2;">
+                                    🏗️ {p_name}
+                                </h4>
+                                <span class="pm-tag" style="margin:0;">PM: {pm_name}</span>
+                                <span class="status-badge {b_style}" style="margin:0;">{status_ui}</span>
+                            </div>
+                        """, unsafe_allow_html=True)
+                        
+                    with h_col2:
+                        st.button(
+                            "🔍 상세", 
+                            key=f"btn_go_{p_name}", 
+                            on_click=navigate_to_project, 
+                            args=(p_name,), 
+                            use_container_width=True
+                        )
+                    
+                    # 정보 표시 영역
+                    st.markdown(f'''
+                        <div style="margin-bottom:4px; margin-top:2px;">
+                            <p style="font-size:12.5px; opacity: 0.7; margin-top:0; margin-bottom:4px;">계획: {avg_plan}% | 실적: {avg_act}%</p>
+                            <div class="weekly-box" style="margin-top:0;"><b>[금주]</b> {this_w}<br><b>[차주]</b> {next_w}</div>
+                        </div>
+                    ''', unsafe_allow_html=True)
+                    
+                    # 진행바 표시
+                    st.progress(min(1.0, max(0.0, avg_act/100)))
+                    
+                except Exception as e:
+                    st.warning(f"'{p_name}' 데이터를 로드하지 못했습니다.")
 
 # 2. 프로젝트 상세 관리
 def view_project_detail(sh, pjt_list):
     st.title("🏗️ 프로젝트 상세 관리")
     
-    # 세션 상태(selected_pjt)와 selectbox를 동기화
     selected_pjt = st.selectbox("현장 선택", ["선택"] + pjt_list, key="selected_pjt")
     
     if selected_pjt != "선택":
         ws = safe_api_call(sh.worksheet, selected_pjt)
         data = safe_api_call(ws.get_all_values)
         
-        # 데이터 분리 (A~H열은 공정표, I/J/K는 메타데이터)
         current_pm = ""
         this_val = ""
         next_val = ""
@@ -194,7 +252,6 @@ def view_project_detail(sh, pjt_list):
         if '진행률' in df.columns:
             df['진행률'] = pd.to_numeric(df['진행률'], errors='coerce').fillna(0)
 
-        # 상단 PM 입력부
         col_pm1, col_pm2 = st.columns([3, 1])
         with col_pm1:
             new_pm = st.text_input("프로젝트 담당 PM (I1 셀)", value=current_pm)
@@ -252,7 +309,7 @@ def view_project_detail(sh, pjt_list):
                         latest = p_match.iloc[-1]
                         st.markdown(f"""
                         <div class="history-box">
-                            <p style="font-size:14px; color:#555; margin-bottom:10px;">📅 <b>최종 보고일:</b> {latest.get('날짜', '-')}</p>
+                            <p style="font-size:14px; opacity: 0.7; margin-bottom:10px;">📅 <b>최종 보고일:</b> {latest.get('날짜', '-')}</p>
                             <p style="margin-bottom:12px;"><b>✔️ 금주 주요 업무:</b><br>{latest.get('금주업무', latest.get('주요현황', '-'))}</p>
                             <p style="margin-bottom:0;"><b>🔜 차주 주요 업무:</b><br>{latest.get('차주업무', '-')}</p>
                         </div>
@@ -279,11 +336,10 @@ def view_project_detail(sh, pjt_list):
         st.subheader("📝 상세 공정표 편집 (A~H열 전용)")
         edited = st.data_editor(df, use_container_width=True, num_rows="dynamic")
         if st.button("💾 변경사항 전체 저장"):
-            # A~H 편집 내용과 I, J, K 메타데이터를 하나의 배열로 병합하여 안전하게 저장
             full_data = []
             header_8 = edited.columns.values.tolist()[:8]
             while len(header_8) < 8: header_8.append("")
-            full_data.append(header_8 + [new_pm]) # Row 1
+            full_data.append(header_8 + [new_pm])
             
             edited_rows = edited.fillna("").astype(str).values.tolist()
             if len(edited_rows) > 0:
@@ -291,7 +347,7 @@ def view_project_detail(sh, pjt_list):
                     r_8 = r[:8]
                     while len(r_8) < 8: r_8.append("")
                     if i == 0:
-                        r_8.extend(["", in_this, in_next]) # Row 2에 주간업무 삽입
+                        r_8.extend(["", in_this, in_next])
                     full_data.append(r_8)
             else:
                 full_data.append([""] * 8 + ["", in_this, in_next])
@@ -424,7 +480,6 @@ if check_login():
             sys_names = ['weekly_history', 'Solar_DB', 'KPI', 'Sheet1', 'Control_Center', 'Dashboard_Control', '통합 대시보드']
             pjt_list = [ws.title for ws in sh.worksheets() if ws.title not in sys_names]
             
-            # [추가/수정] 화면 간 이동을 위한 Session State 동기화 처리
             if "selected_menu" not in st.session_state:
                 st.session_state.selected_menu = "통합 대시보드"
             if "selected_pjt" not in st.session_state:
