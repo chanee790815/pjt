@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 import io
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v4.5.4", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v4.5.5", page_icon="🏗️", layout="wide")
 
 # --- [UI] 스타일 ---
 st.markdown("""
@@ -27,7 +27,7 @@ st.markdown("""
     .risk-normal { border-left: 5px solid #1f77b4 !important; }
     .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; border: 1px solid #eee; }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.5.4) | API 초고속 최적화 및 에러 완전 수정판</div>
+    <div class="footer">시스템 상태: 정상 (v4.5.5) | 주간업무 히스토리 저장 및 상세페이지 표시 기능 추가</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -211,14 +211,40 @@ def view_project_detail(sh, pjt_list):
             except: pass
 
         with tab3:
-            st.subheader("📋 주간 업무 실시간 동기화 (J2, K2 셀)")
+            st.subheader("📋 최근 주간 업무 이력")
+            try:
+                h_ws = safe_api_call(sh.worksheet, 'weekly_history')
+                h_data = safe_api_call(h_ws.get_all_records)
+                h_df = pd.DataFrame(h_data)
+                if not h_df.empty:
+                    h_df['프로젝트명'] = h_df['프로젝트명'].astype(str).str.strip()
+                    p_match = h_df[h_df['프로젝트명'] == selected_pjt.strip()]
+                    if not p_match.empty:
+                        latest = p_match.iloc[-1]
+                        st.markdown(f"""
+                        <div class="history-box">
+                            <p style="font-size:14px; color:#555; margin-bottom:10px;">📅 <b>최종 보고일:</b> {latest.get('날짜', '-')}</p>
+                            <p style="margin-bottom:12px;"><b>✔️ 금주 주요 업무:</b><br>{latest.get('금주업무', latest.get('주요현황', '-'))}</p>
+                            <p style="margin-bottom:0;"><b>🔜 차주 주요 업무:</b><br>{latest.get('차주업무', '-')}</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    else: st.info("아직 등록된 주간 업무 기록이 없습니다.")
+            except: st.warning("이력 데이터를 불러오는 중 오류가 발생했습니다.")
+
+            st.divider()
+
+            st.subheader("📝 주간 업무 작성 및 동기화 (J2, K2 셀 & 히스토리)")
             with st.form("weekly_sync_form"):
                 in_this = st.text_area("✔️ 금주 주요 업무 (J2)", value=this_val, height=120)
                 in_next = st.text_area("🔜 차주 주요 업무 (K2)", value=next_val, height=120)
-                if st.form_submit_button("시트 데이터 업데이트"):
+                if st.form_submit_button("시트 데이터 업데이트 및 이력 저장"):
                     safe_api_call(ws.update, 'J2', [[in_this]])
                     safe_api_call(ws.update, 'K2', [[in_next]])
-                    st.success("저장되었습니다!"); time.sleep(1); st.rerun()
+                    try:
+                        h_ws = safe_api_call(sh.worksheet, 'weekly_history')
+                        safe_api_call(h_ws.append_row, [datetime.date.today().strftime("%Y-%m-%d"), selected_pjt, in_this, in_next, st.session_state.user_id])
+                    except: pass
+                    st.success("성공적으로 업데이트 및 저장되었습니다!"); time.sleep(1); st.rerun()
 
         st.write("---")
         st.subheader("📝 상세 공정표 편집 (A~H열 전용)")
