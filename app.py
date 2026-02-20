@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 import io
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v4.5.7", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v4.5.8", page_icon="🏗️", layout="wide")
 
 # --- [UI] 스타일 ---
 st.markdown("""
@@ -39,7 +39,7 @@ st.markdown("""
     /* 버튼과 진행바 사이 간격 최소화 */
     div[data-testid="stProgressBar"] { margin-bottom: 5px; }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.5.7) | 대시보드 상세페이지 하이퍼링크 기능 추가</div>
+    <div class="footer">시스템 상태: 정상 (v4.5.8) | 상세페이지 다이렉트 콜백 라우팅 적용</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -98,6 +98,11 @@ def calc_planned_progress(start, end, target_date=None):
         return min(100.0, max(0.0, (passed_days / total_days) * 100))
     except: return 0.0
 
+# 콜백 함수: 하이퍼링크처럼 상세페이지로 부드럽게 이동
+def navigate_to_project(p_name):
+    st.session_state.selected_menu = "프로젝트 상세"
+    st.session_state.selected_pjt = p_name
+
 # ---------------------------------------------------------
 # [SECTION 2] 뷰(View) 함수
 # ---------------------------------------------------------
@@ -150,11 +155,14 @@ def view_dashboard(sh, pjt_list):
                 ''', unsafe_allow_html=True)
                 st.progress(min(1.0, max(0.0, avg_act/100)))
                 
-                # [추가] 상세페이지 이동 버튼
-                if st.button(f"🔍 '{p_name}' 상세정보 보기", key=f"btn_go_{p_name}", use_container_width=True):
-                    st.session_state.selected_menu = "프로젝트 상세"
-                    st.session_state.selected_pjt = p_name
-                    st.rerun()
+                # [수정] 콜백 함수(on_click)를 사용하여 하이퍼링크처럼 빠르고 부드럽게 이동
+                st.button(
+                    "🔗 프로젝트 상세 보기", 
+                    key=f"btn_go_{p_name}", 
+                    on_click=navigate_to_project, 
+                    args=(p_name,), 
+                    use_container_width=True
+                )
             except Exception as e:
                 st.warning(f"'{p_name}' 데이터를 로드하지 못했습니다.")
 
@@ -162,8 +170,9 @@ def view_dashboard(sh, pjt_list):
 def view_project_detail(sh, pjt_list):
     st.title("🏗️ 프로젝트 상세 관리")
     
-    # [수정] selectbox에 key="selected_pjt" 연결 (버튼 클릭 시 전달받기 위함)
+    # 세션 상태(selected_pjt)와 selectbox를 동기화
     selected_pjt = st.selectbox("현장 선택", ["선택"] + pjt_list, key="selected_pjt")
+    
     if selected_pjt != "선택":
         ws = safe_api_call(sh.worksheet, selected_pjt)
         data = safe_api_call(ws.get_all_values)
@@ -415,14 +424,13 @@ if check_login():
             sys_names = ['weekly_history', 'Solar_DB', 'KPI', 'Sheet1', 'Control_Center', 'Dashboard_Control', '통합 대시보드']
             pjt_list = [ws.title for ws in sh.worksheets() if ws.title not in sys_names]
             
-            # [추가] 화면 간 이동을 위한 세션 상태(Session State) 초기화
+            # [추가/수정] 화면 간 이동을 위한 Session State 동기화 처리
             if "selected_menu" not in st.session_state:
                 st.session_state.selected_menu = "통합 대시보드"
             if "selected_pjt" not in st.session_state:
                 st.session_state.selected_pjt = "선택"
             
             st.sidebar.title("📁 PMO 메뉴")
-            # [수정] 라디오 버튼에 key="selected_menu" 지정
             menu = st.sidebar.radio("메뉴 선택", ["통합 대시보드", "프로젝트 상세", "일 발전량 분석", "경영지표(KPI)", "마스터 설정"], key="selected_menu")
             
             if menu == "통합 대시보드": view_dashboard(sh, pjt_list)
