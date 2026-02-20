@@ -11,9 +11,10 @@ import plotly.graph_objects as go
 import io
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v4.5.11", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v4.5.14", page_icon="🏗️", layout="wide")
 
 # --- [UI] 스타일 ---
+# 텍스트 컬러(color) 지정을 없애고 반투명 배경(rgba)과 투명도(opacity)를 사용하여 다크/라이트 모드 자동 대응 완벽 지원
 st.markdown("""
     <style>
     @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
@@ -26,34 +27,36 @@ st.markdown("""
         line-height: 1.3 !important;
     }
     
-    .footer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: #f1f1f1; color: #555; text-align: center; padding: 5px; font-size: 11px; z-index: 100; }
-    .weekly-box { background-color: #f8f9fa; padding: 8px 10px; border-radius: 6px; margin-top: 4px; font-size: 12px; line-height: 1.4; color: #333; border: 1px solid #edf0f2; white-space: pre-wrap; }
-    .history-box { background-color: #e3f2fd; padding: 15px; border-radius: 8px; border-left: 5px solid #2196f3; margin-bottom: 20px; }
-    .pm-tag { background-color: #e7f5ff; color: #1971c2; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; margin-left: 8px; border: 1px solid #a5d8ff; vertical-align: middle; }
-    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; border: 1px solid #eee; }
+    .footer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: rgba(128, 128, 128, 0.15); backdrop-filter: blur(5px); text-align: center; padding: 5px; font-size: 11px; z-index: 100; }
     
-    /* 상태 뱃지 디자인 (우측 정렬용) */
-    .status-badge { padding: 3px 8px; border-radius: 12px; font-size: 11.5px; font-weight: 700; display: inline-block; white-space: nowrap; }
-    .status-normal { background-color: #e3f2fd; color: #1976d2; border: 1px solid #bbdefb; }
-    .status-delay { background-color: #ffebee; color: #c62828; border: 1px solid #ffcdd2; }
-    .status-done { background-color: #e8f5e9; color: #2e7d32; border: 1px solid #c8e6c9; }
+    /* [핵심] 다크/라이트 모드 완벽 대응 박스 디자인 (반투명 회색 배경) */
+    .weekly-box { background-color: rgba(128, 128, 128, 0.1); padding: 8px 10px; border-radius: 6px; margin-top: 4px; font-size: 12px; line-height: 1.4; border: 1px solid rgba(128, 128, 128, 0.2); white-space: pre-wrap; }
+    .history-box { background-color: rgba(128, 128, 128, 0.1); padding: 15px; border-radius: 8px; border-left: 5px solid #2196f3; margin-bottom: 20px; }
+    .stMetric { background-color: rgba(128, 128, 128, 0.05); padding: 15px; border-radius: 10px; border: 1px solid rgba(128, 128, 128, 0.2); }
     
-    /* 컴팩트 버튼 (제목 옆으로 배치하기 위한 최적화) */
+    /* 태그 및 뱃지: 다크모드에서도 잘 보이도록 반투명(rgba) 색상 적용 */
+    .pm-tag { background-color: rgba(25, 113, 194, 0.15); color: #339af0; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; border: 1px solid rgba(25, 113, 194, 0.3); display: inline-block; }
+    .status-badge { padding: 3px 8px; border-radius: 12px; font-size: 11px; font-weight: 700; display: inline-block; white-space: nowrap; }
+    .status-normal { background-color: rgba(33, 150, 243, 0.15); color: #42a5f5; border: 1px solid rgba(33, 150, 243, 0.3); }
+    .status-delay { background-color: rgba(244, 67, 54, 0.15); color: #ef5350; border: 1px solid rgba(244, 67, 54, 0.3); }
+    .status-done { background-color: rgba(76, 175, 80, 0.15); color: #66bb6a; border: 1px solid rgba(76, 175, 80, 0.3); }
+    
+    /* 컴팩트 버튼 */
     div[data-testid="stButton"] button {
-        min-height: 26px !important;
-        height: 26px !important;
+        min-height: 28px !important;
+        height: 28px !important;
         padding: 0px 8px !important;
         font-size: 12px !important;
         border-radius: 6px !important;
         font-weight: 600 !important;
         line-height: 1 !important;
-        margin-top: -2px !important;
+        margin: 0 !important;
     }
     
     /* 진행바 마진 최적화 */
     div[data-testid="stProgressBar"] { margin-bottom: 0px !important; margin-top: 5px !important; }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.5.11) | 프로젝트명 모바일 반응형 글꼴 크기 적용 완료</div>
+    <div class="footer">시스템 상태: 정상 (v4.5.14) | 다크모드/라이트모드 글자색상 자동 반전 최적화 완료</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -161,16 +164,19 @@ def view_dashboard(sh, pjt_list):
                         status_ui = "🔵 완료"
                         b_style = "status-done"
                     
-                    # 헤더 영역을 3개의 구역으로 나누어 같은 줄에 배치
-                    h_col1, h_col2, h_col3 = st.columns([5.5, 2.8, 1.7], gap="small")
+                    # 헤더: 2단 구성 유지
+                    h_col1, h_col2 = st.columns([7.3, 2.7], gap="small")
                     
                     with h_col1:
-                        # [핵심 수정] 글자가 화면 크기에 따라 줄어들도록 반응형 clamp 폰트 적용 & 자동 줄바꿈 허용
+                        # [핵심 수정] color 속성을 아예 제거하여 Streamlit 기본 테마 색상을 자연스럽게 상속받도록 함
                         st.markdown(f"""
-                            <h4 style="color:#222222; font-weight:700; margin-top:2px; margin-bottom:0; font-size:clamp(13px, 3.5vw, 16px); word-break:keep-all; line-height:1.2;">
-                                🏗️ {p_name} 
-                                <span class="pm-tag" style="font-size:clamp(10px, 2.5vw, 11px);">PM: {pm_name}</span>
-                            </h4>
+                            <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 2px;">
+                                <h4 style="font-weight:700; margin:0; font-size:clamp(13.5px, 3.5vw, 16px); word-break:keep-all; line-height:1.2;">
+                                    🏗️ {p_name}
+                                </h4>
+                                <span class="pm-tag" style="margin:0;">PM: {pm_name}</span>
+                                <span class="status-badge {b_style}" style="margin:0;">{status_ui}</span>
+                            </div>
                         """, unsafe_allow_html=True)
                         
                     with h_col2:
@@ -181,23 +187,17 @@ def view_dashboard(sh, pjt_list):
                             args=(p_name,), 
                             use_container_width=True
                         )
-                        
-                    with h_col3:
-                        st.markdown(f"""
-                            <div style="text-align:right; margin-top:3px;">
-                                <span class="status-badge {b_style}">{status_ui}</span>
-                            </div>
-                        """, unsafe_allow_html=True)
                     
                     # 정보 표시 영역
+                    # [핵심 수정] color 속성을 제거하고 opacity(투명도)만 주어 다크/라이트 모드에서 모두 예쁜 회색이 되도록 수정
                     st.markdown(f'''
-                        <div style="margin-bottom:4px; margin-top:-5px;">
-                            <p style="font-size:12.5px; color:#666; margin-top:0; margin-bottom:4px;">계획: {avg_plan}% | 실적: {avg_act}%</p>
+                        <div style="margin-bottom:4px; margin-top:2px;">
+                            <p style="font-size:12.5px; opacity: 0.7; margin-top:0; margin-bottom:4px;">계획: {avg_plan}% | 실적: {avg_act}%</p>
                             <div class="weekly-box" style="margin-top:0;"><b>[금주]</b> {this_w}<br><b>[차주]</b> {next_w}</div>
                         </div>
                     ''', unsafe_allow_html=True)
                     
-                    # 진행바 표시 (맨 아래로 배치)
+                    # 진행바 표시
                     st.progress(min(1.0, max(0.0, avg_act/100)))
                     
                 except Exception as e:
@@ -286,7 +286,7 @@ def view_project_detail(sh, pjt_list):
                         latest = p_match.iloc[-1]
                         st.markdown(f"""
                         <div class="history-box">
-                            <p style="font-size:14px; color:#555; margin-bottom:10px;">📅 <b>최종 보고일:</b> {latest.get('날짜', '-')}</p>
+                            <p style="font-size:14px; opacity: 0.7; margin-bottom:10px;">📅 <b>최종 보고일:</b> {latest.get('날짜', '-')}</p>
                             <p style="margin-bottom:12px;"><b>✔️ 금주 주요 업무:</b><br>{latest.get('금주업무', latest.get('주요현황', '-'))}</p>
                             <p style="margin-bottom:0;"><b>🔜 차주 주요 업무:</b><br>{latest.get('차주업무', '-')}</p>
                         </div>
