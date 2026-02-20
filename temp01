@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 import io
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v4.4.6", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v4.4.8", page_icon="🏗️", layout="wide")
 
 # --- [UI] 스타일 ---
 st.markdown("""
@@ -22,10 +22,11 @@ st.markdown("""
     .footer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: #f1f1f1; color: #555; text-align: center; padding: 5px; font-size: 11px; z-index: 100; }
     .weekly-box { background-color: #f8f9fa; padding: 12px; border-radius: 6px; margin-top: 10px; font-size: 13px; line-height: 1.6; color: #333; border: 1px solid #edf0f2; white-space: pre-wrap; }
     .history-box { background-color: #e3f2fd; padding: 15px; border-radius: 8px; border-left: 5px solid #2196f3; margin-bottom: 20px; }
+    .pm-tag { background-color: #f1f3f5; color: #495057; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; margin-left: 10px; }
     .risk-high { border-left: 5px solid #ff4b4b !important; }
     .risk-normal { border-left: 5px solid #1f77b4 !important; }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.4.6) | 마스터 관리(생성/수정/삭제) 기능 복구 완료</div>
+    <div class="footer">시스템 상태: 정상 (v4.4.8) | 진행률 편집 수정 및 담당 PM 기능 추가</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -89,9 +90,18 @@ def view_dashboard(sh, pjt_list):
     for idx, p_name in enumerate(pjt_list):
         with cols[idx % 2]:
             try:
-                df = pd.DataFrame(sh.worksheet(p_name).get_all_records())
-                avg_act = round(pd.to_numeric(df['진행률'], errors='coerce').mean(), 1) if not df.empty else 0
-                avg_plan = round(df.apply(lambda r: calc_planned_progress(r.get('시작일'), r.get('종료일')), axis=1).mean(), 1) if not df.empty else 0
+                ws = sh.worksheet(p_name)
+                df = pd.DataFrame(ws.get_all_records())
+                
+                # 담당 PM 정보 가져오기 (J1 셀)
+                pm_name = ws.acell('J1').value or "미지정"
+                
+                if not df.empty and '진행률' in df.columns:
+                    avg_act = round(pd.to_numeric(df['진행률'], errors='coerce').fillna(0).mean(), 1)
+                    avg_plan = round(df.apply(lambda r: calc_planned_progress(r.get('시작일'), r.get('종료일')), axis=1).mean(), 1)
+                else:
+                    avg_act = 0.0
+                    avg_plan = 0.0
                 
                 status_ui = "🟢 정상"
                 c_style = "pjt-card risk-normal"
@@ -112,7 +122,13 @@ def view_dashboard(sh, pjt_list):
                         if next_w and next_w != 'nan' and next_w != "": summary.append(f"<b>[차주]</b> {next_w[:70]}")
                         if summary: weekly_content = "<br>".join(summary)
                 
-                st.markdown(f'<div class="{c_style}"><h4>🏗️ {p_name} <span style="font-size:14px; float:right;">{status_ui}</span></h4><p style="font-size:13px; color:#666;">계획: {avg_plan}% | 실적: {avg_act}%</p><div class="weekly-box">{weekly_content}</div></div>', unsafe_allow_html=True)
+                st.markdown(f'''
+                    <div class="{c_style}">
+                        <h4>🏗️ {p_name} <span class="pm-tag">PM: {pm_name}</span> <span style="font-size:14px; float:right;">{status_ui}</span></h4>
+                        <p style="font-size:13px; color:#666;">계획: {avg_plan}% | 실적: {avg_act}%</p>
+                        <div class="weekly-box">{weekly_content}</div>
+                    </div>
+                ''', unsafe_allow_html=True)
                 st.progress(min(1.0, max(0.0, avg_act/100)))
             except: pass
 
@@ -122,8 +138,27 @@ def view_project_detail(sh, pjt_list):
     selected_pjt = st.selectbox("현장 선택", ["선택"] + pjt_list)
     if selected_pjt != "선택":
         ws = sh.worksheet(selected_pjt)
-        df = pd.DataFrame(ws.get_all_records())
         
+        # 데이터 로드 및 타입 보정 (진행률 수정 활성화를 위한 필수 단계)
+        df = pd.DataFrame(ws.get_all_records())
+        if '진행률' in df.columns:
+            df['진행률'] = pd.to_numeric(df['진행률'], errors='coerce').fillna(0)
+            
+        # 담당 PM 정보 가져오기 (J1 셀 사용)
+        current_pm = ws.acell('J1').value or ""
+        
+        # 프로젝트 메타 정보 영역
+        col_pm1, col_pm2 = st.columns([3, 1])
+        with col_pm1:
+            new_pm = st.text_input("프로젝트 담당 PM", value=current_pm, placeholder="담당 PM 이름을 입력하세요")
+        with col_pm2:
+            st.write(" ") # 수직 맞춤용
+            if st.button("PM 정보 저장"):
+                ws.update('J1', [[new_pm]])
+                st.success("PM 정보가 업데이트되었습니다!")
+        
+        st.divider()
+
         tab1, tab2, tab3 = st.tabs(["📊 간트 차트", "📈 S-Curve 분석", "📝 주간 업무 보고"])
         
         with tab1:
@@ -191,10 +226,18 @@ def view_project_detail(sh, pjt_list):
         
         st.write("---")
         st.subheader("📝 상세 공정표 편집")
+        st.info("💡 진행률(%) 칸을 더블클릭하여 숫자를 직접 입력할 수 있습니다.")
         edited = st.data_editor(df, use_container_width=True, num_rows="dynamic")
-        if st.button("💾 변경사항 저장"):
-            ws.clear(); ws.update([edited.columns.values.tolist()] + edited.fillna("").astype(str).values.tolist())
-            st.success("데이터가 성공적으로 저장되었습니다!"); st.rerun()
+        if st.button("💾 공정표 데이터 저장"):
+            # 저장 전 데이터 타입 정리
+            final_df = edited.copy()
+            # 전체 공정 데이터 업데이트 (PM 정보인 J1을 보존하기 위해 범위 지정 업데이트 권장되나 단순화를 위해 전체 업데이트 후 PM 재입력)
+            header = final_df.columns.values.tolist()
+            rows = final_df.fillna("").astype(str).values.tolist()
+            ws.update([header] + rows)
+            # PM 정보 복구
+            ws.update('J1', [[new_pm]])
+            st.success("데이터가 성공적으로 저장되었습니다!"); time.sleep(1); st.rerun()
 
 # 3. 일 발전량 분석
 def view_solar(sh):
@@ -236,7 +279,7 @@ def view_risk_dashboard(sh, pjt_list):
     if all_issues: st.dataframe(pd.concat(all_issues), use_container_width=True)
     else: st.success("🎉 현재 진행 중인 리스크 공정이 없습니다.")
 
-# 6. 마스터 관리 (복구 완료)
+# 6. 마스터 관리
 def view_project_admin(sh, pjt_list):
     st.title("⚙️ 마스터 관리")
     t1, t2, t3, t4, t5 = st.tabs(["➕ 등록", "✏️ 수정", "🗑️ 삭제", "🔄 엑셀 업로드", "📥 마스터 다운로드"])
@@ -253,25 +296,6 @@ def view_project_admin(sh, pjt_list):
                     st.success(f"'{new_name}' 프로젝트가 성공적으로 생성되었습니다!"); time.sleep(1); st.rerun()
             else: st.error("이미 존재하는 프로젝트 명칭입니다.")
             
-    with t2:
-        st.subheader("✏️ 프로젝트 이름 수정")
-        target_ren = st.selectbox("수정할 프로젝트 선택", ["선택"] + pjt_list, key="ren_sel")
-        new_ren_name = st.text_input("새로운 명칭")
-        if st.button("이름 변경 실행") and target_ren != "선택" and new_ren_name:
-            with st.spinner("수정 중..."):
-                sh.worksheet(target_ren).update_title(new_ren_name)
-                st.success(f"'{target_ren}' -> '{new_ren_name}' 수정 완료!"); time.sleep(1); st.rerun()
-
-    with t3:
-        st.subheader("🗑️ 프로젝트 삭제")
-        target_del = st.selectbox("삭제할 프로젝트 선택", ["선택"] + pjt_list, key="del_sel")
-        st.warning("※ 삭제 시 모든 공정 데이터가 영구적으로 사라집니다.")
-        confirm_del = st.checkbox(f"'{target_del}' 프로젝트를 영구 삭제함에 동의합니다.")
-        if st.button("영구 삭제 수행", type="secondary") and target_del != "선택" and confirm_del:
-            with st.spinner("삭제 중..."):
-                sh.del_worksheet(sh.worksheet(target_del))
-                st.success("프로젝트가 삭제되었습니다!"); time.sleep(1); st.rerun()
-
     with t4:
         st.subheader("🔄 엑셀 데이터 동기화")
         target_sync = st.selectbox("업데이트 프로젝트 선택", ["선택"] + pjt_list, key="sync_sel")
