@@ -340,7 +340,3 @@ if check_login():
             
             if st.sidebar.button("로그아웃"): st.session_state.logged_in = False; st.rerun()
         except Exception as e: st.error(f"DB 연결 오류: {e}")
-
-여기 소스에 원래 있던, 일조량 관련 기존에 있던 기능들이 다 사라졌어 기억해서 추가해줄수 있어? 
-
-지역별로 검색도 되고 데이터도 API문서 불러와서 저장했었어
