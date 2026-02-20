@@ -18,7 +18,8 @@ st.markdown("""
     <style>
     @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
     html, body, [class*="css"] { font-family: 'Pretendard', sans-serif; }
-    .pjt-card { background-color: #ffffff; padding: 20px; border-radius: 12px; border: 1px solid #eee; margin-bottom: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    .pjt-card { background-color: #ffffff; color: #212529; padding: 20px; border-radius: 12px; border: 1px solid #eee; margin-bottom: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+    .pjt-card h4 { color: #222222 !important; font-weight: 700; margin-top: 0; }
     .footer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: #f1f1f1; color: #555; text-align: center; padding: 5px; font-size: 11px; z-index: 100; }
     .weekly-box { background-color: #f8f9fa; padding: 12px; border-radius: 6px; margin-top: 10px; font-size: 13px; line-height: 1.6; color: #333; border: 1px solid #edf0f2; white-space: pre-wrap; }
     .history-box { background-color: #e3f2fd; padding: 15px; border-radius: 8px; border-left: 5px solid #2196f3; margin-bottom: 20px; }
@@ -131,8 +132,8 @@ def view_dashboard(sh, pjt_list):
                 
                 st.markdown(f'''
                     <div class="{c_style}">
-                        <h4>🏗️ {p_name} <span class="pm-tag">PM: {pm_name}</span> <span style="font-size:14px; float:right;">{status_ui}</span></h4>
-                        <p style="font-size:13px; color:#666;">계획: {avg_plan}% | 실적: {avg_act}%</p>
+                        <h4 style="color:#212529; margin-bottom:5px;">🏗️ {p_name} <span class="pm-tag">PM: {pm_name}</span> <span style="font-size:14px; float:right;">{status_ui}</span></h4>
+                        <p style="font-size:13px; color:#666; margin-top:0;">계획: {avg_plan}% | 실적: {avg_act}%</p>
                         <div class="weekly-box"><b>[금주]</b> {this_w}<br><b>[차주]</b> {next_w}</div>
                     </div>
                 ''', unsafe_allow_html=True)
