@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import datetime
 import gspread
+from gspread.exceptions import APIError, WorksheetNotFound
 from google.oauth2.service_account import Credentials
 import requests
 import time
@@ -10,7 +11,7 @@ import plotly.graph_objects as go
 import io
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v4.4.5", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v4.4.6", page_icon="🏗️", layout="wide")
 
 # --- [UI] 스타일 ---
 st.markdown("""
@@ -19,13 +20,12 @@ st.markdown("""
     html, body, [class*="css"] { font-family: 'Pretendard', sans-serif; }
     .pjt-card { background-color: #ffffff; padding: 20px; border-radius: 12px; border: 1px solid #eee; margin-bottom: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
     .footer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: #f1f1f1; color: #555; text-align: center; padding: 5px; font-size: 11px; z-index: 100; }
-    .risk-high { border-left: 5px solid #ff4b4b !important; }
-    .risk-normal { border-left: 5px solid #1f77b4 !important; }
     .weekly-box { background-color: #f8f9fa; padding: 12px; border-radius: 6px; margin-top: 10px; font-size: 13px; line-height: 1.6; color: #333; border: 1px solid #edf0f2; white-space: pre-wrap; }
     .history-box { background-color: #e3f2fd; padding: 15px; border-radius: 8px; border-left: 5px solid #2196f3; margin-bottom: 20px; }
-    .status-header { background: #ffffff; padding: 15px; border-radius: 8px; border: 1px solid #e9ecef; border-left: 5px solid #007bff; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+    .risk-high { border-left: 5px solid #ff4b4b !important; }
+    .risk-normal { border-left: 5px solid #1f77b4 !important; }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.4.5) | 분석 기능 및 상세페이지 히스토리 뷰어 통합 완료</div>
+    <div class="footer">시스템 상태: 정상 (v4.4.6) | 마스터 관리(생성/수정/삭제) 기능 복구 완료</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -53,7 +53,9 @@ def get_client():
         if "private_key" in key_dict: key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
         creds = Credentials.from_service_account_info(key_dict, scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
         return gspread.authorize(creds)
-    except: return None
+    except Exception as e:
+        st.error(f"구글 클라우드 연결 실패: {e}")
+        return None
 
 def calc_planned_progress(start, end, target_date=None):
     if target_date is None: target_date = datetime.date.today()
@@ -91,10 +93,9 @@ def view_dashboard(sh, pjt_list):
                 avg_act = round(pd.to_numeric(df['진행률'], errors='coerce').mean(), 1) if not df.empty else 0
                 avg_plan = round(df.apply(lambda r: calc_planned_progress(r.get('시작일'), r.get('종료일')), axis=1).mean(), 1) if not df.empty else 0
                 
-                delay = avg_plan - avg_act
                 status_ui = "🟢 정상"
                 c_style = "pjt-card risk-normal"
-                if delay >= 10:
+                if (avg_plan - avg_act) >= 10:
                     status_ui = "🔴 지연"
                     c_style = "pjt-card risk-high"
                 elif avg_act >= 100: status_ui = "🔵 완료"
@@ -115,7 +116,7 @@ def view_dashboard(sh, pjt_list):
                 st.progress(min(1.0, max(0.0, avg_act/100)))
             except: pass
 
-# 2. 프로젝트 상세 관리 (히스토리 뷰어 통합)
+# 2. 프로젝트 상세 관리
 def view_project_detail(sh, pjt_list):
     st.title("🏗️ 프로젝트 상세 관리")
     selected_pjt = st.selectbox("현장 선택", ["선택"] + pjt_list)
@@ -123,9 +124,9 @@ def view_project_detail(sh, pjt_list):
         ws = sh.worksheet(selected_pjt)
         df = pd.DataFrame(ws.get_all_records())
         
-        tab_gantt, tab_scurve, tab_weekly = st.tabs(["📊 간트 차트", "📈 S-Curve 분석", "📝 주간 업무 보고"])
+        tab1, tab2, tab3 = st.tabs(["📊 간트 차트", "📈 S-Curve 분석", "📝 주간 업무 보고"])
         
-        with tab_gantt:
+        with tab1:
             st.subheader(f"📅 {selected_pjt} 타임라인")
             try:
                 cdf = df.copy()
@@ -141,7 +142,7 @@ def view_project_detail(sh, pjt_list):
                 else: st.warning("표시할 날짜 데이터가 없습니다.")
             except Exception as e: st.error(f"간트차트 로드 실패: {e}")
 
-        with tab_scurve:
+        with tab2:
             try:
                 sdf = df.copy()
                 sdf['시작일'] = pd.to_datetime(sdf['시작일'], errors='coerce').dt.date
@@ -159,9 +160,8 @@ def view_project_detail(sh, pjt_list):
                     st.plotly_chart(fig_s, use_container_width=True)
             except: pass
 
-        with tab_weekly:
-            # [기능 복구/추가] 저장된 최신 주간 업무 현황 보여주기
-            st.subheader("📋 저장된 주간 업무 현황")
+        with tab3:
+            st.subheader("📋 현재 저장된 주간 업무 현황")
             try:
                 h_ws = sh.worksheet('weekly_history')
                 h_df = pd.DataFrame(h_ws.get_all_records())
@@ -172,13 +172,13 @@ def view_project_detail(sh, pjt_list):
                         latest = p_match.iloc[-1]
                         st.markdown(f"""
                         <div class="history-box">
-                            <p style="font-size:14px; color:#555; margin-bottom:10px;">📅 <b>최종 업데이트:</b> {latest.get('날짜', '-')}</p>
+                            <p style="font-size:14px; color:#555; margin-bottom:10px;">📅 <b>최종 보고일:</b> {latest.get('날짜', '-')}</p>
                             <p style="margin-bottom:12px;"><b>✔️ 금주 주요 업무:</b><br>{latest.get('금주업무', latest.get('주요현황', '-'))}</p>
                             <p style="margin-bottom:0;"><b>🔜 차주 주요 업무:</b><br>{latest.get('차주업무', '-')}</p>
                         </div>
                         """, unsafe_allow_html=True)
                     else: st.info("아직 등록된 주간 업무 기록이 없습니다.")
-            except: st.warning("히스토리 데이터를 불러오는 중 오류가 발생했습니다.")
+            except: st.warning("데이터를 불러오는 중 오류가 발생했습니다.")
 
             st.divider()
             st.subheader("📝 신규 주간 업무 보고 작성")
@@ -196,7 +196,7 @@ def view_project_detail(sh, pjt_list):
             ws.clear(); ws.update([edited.columns.values.tolist()] + edited.fillna("").astype(str).values.tolist())
             st.success("데이터가 성공적으로 저장되었습니다!"); st.rerun()
 
-# 3. 일 발전량 분석 (복구)
+# 3. 일 발전량 분석
 def view_solar(sh):
     st.title("☀️ 일 발전량 및 일조 분석")
     try:
@@ -208,17 +208,16 @@ def view_solar(sh):
             m_avg = df_db.groupby(df_db['날짜'].dt.month)['발전시간'].mean().reset_index()
             st.plotly_chart(px.bar(m_avg, x='날짜', y='발전시간', labels={'날짜':'월'}, color_discrete_sequence=['#ffca28']), use_container_width=True)
             st.dataframe(df_db.tail(15), use_container_width=True)
-        else: st.info("Solar_DB 시트가 비어있습니다.")
-    except: st.warning("데이터 시트를 찾을 수 없습니다.")
+    except: st.info("Solar_DB 시트를 찾을 수 없습니다.")
 
-# 4. 경영지표 KPI (복구)
+# 4. 경영지표 KPI
 def view_kpi(sh):
     st.title("📉 경영 실적 및 KPI")
     try:
         df = pd.DataFrame(sh.worksheet('KPI').get_all_records())
         st.subheader("전사 주요 경영지표 현황")
         st.dataframe(df, use_container_width=True)
-    except: st.warning("KPI 시트가 없습니다.")
+    except: st.warning("KPI 데이터 시트를 찾을 수 없습니다.")
 
 # 5. 리스크 현황
 def view_risk_dashboard(sh, pjt_list):
@@ -237,18 +236,53 @@ def view_risk_dashboard(sh, pjt_list):
     if all_issues: st.dataframe(pd.concat(all_issues), use_container_width=True)
     else: st.success("🎉 현재 진행 중인 리스크 공정이 없습니다.")
 
-# 6. 마스터 관리
+# 6. 마스터 관리 (복구 완료)
 def view_project_admin(sh, pjt_list):
     st.title("⚙️ 마스터 관리")
-    t1, t2 = st.tabs(["🔄 엑셀 업로드", "📥 마스터 다운로드"])
+    t1, t2, t3, t4, t5 = st.tabs(["➕ 등록", "✏️ 수정", "🗑️ 삭제", "🔄 엑셀 업로드", "📥 마스터 다운로드"])
+    
     with t1:
-        target = st.selectbox("현장 선택", ["선택"] + pjt_list)
-        file = st.file_uploader("엑셀 파일", type=['xlsx', 'xlsm'])
-        if target != "선택" and file and st.button("구글 시트 동기화"):
-            df_up = pd.read_excel(file).fillna("").astype(str)
-            ws = sh.worksheet(target); ws.clear(); ws.update([df_up.columns.values.tolist()] + df_up.values.tolist())
-            st.success("동기화 완료!")
+        st.subheader("➕ 신규 프로젝트 등록")
+        new_name = st.text_input("새 프로젝트 명칭 입력")
+        if st.button("프로젝트 생성", type="primary") and new_name:
+            if new_name not in pjt_list:
+                with st.spinner("생성 중..."):
+                    new_ws = sh.add_worksheet(title=new_name, rows="100", cols="20")
+                    headers = ["시작일", "종료일", "대분류", "구분", "진행상태", "비고", "진행률", "담당자"]
+                    new_ws.append_row(headers)
+                    st.success(f"'{new_name}' 프로젝트가 성공적으로 생성되었습니다!"); time.sleep(1); st.rerun()
+            else: st.error("이미 존재하는 프로젝트 명칭입니다.")
+            
     with t2:
+        st.subheader("✏️ 프로젝트 이름 수정")
+        target_ren = st.selectbox("수정할 프로젝트 선택", ["선택"] + pjt_list, key="ren_sel")
+        new_ren_name = st.text_input("새로운 명칭")
+        if st.button("이름 변경 실행") and target_ren != "선택" and new_ren_name:
+            with st.spinner("수정 중..."):
+                sh.worksheet(target_ren).update_title(new_ren_name)
+                st.success(f"'{target_ren}' -> '{new_ren_name}' 수정 완료!"); time.sleep(1); st.rerun()
+
+    with t3:
+        st.subheader("🗑️ 프로젝트 삭제")
+        target_del = st.selectbox("삭제할 프로젝트 선택", ["선택"] + pjt_list, key="del_sel")
+        st.warning("※ 삭제 시 모든 공정 데이터가 영구적으로 사라집니다.")
+        confirm_del = st.checkbox(f"'{target_del}' 프로젝트를 영구 삭제함에 동의합니다.")
+        if st.button("영구 삭제 수행", type="secondary") and target_del != "선택" and confirm_del:
+            with st.spinner("삭제 중..."):
+                sh.del_worksheet(sh.worksheet(target_del))
+                st.success("프로젝트가 삭제되었습니다!"); time.sleep(1); st.rerun()
+
+    with t4:
+        st.subheader("🔄 엑셀 데이터 동기화")
+        target_sync = st.selectbox("업데이트 프로젝트 선택", ["선택"] + pjt_list, key="sync_sel")
+        file = st.file_uploader("엑셀 파일 선택", type=['xlsx', 'xlsm'])
+        if target_sync != "선택" and file and st.button("데이터 덮어쓰기"):
+            df_up = pd.read_excel(file).fillna("").astype(str)
+            ws = sh.worksheet(target_sync); ws.clear(); ws.update([df_up.columns.values.tolist()] + df_up.values.tolist())
+            st.success("동기화 완료!")
+
+    with t5:
+        st.subheader("📥 마스터 다운로드")
         if st.button("📚 전 프로젝트 통합 마스터 엑셀 생성", type="primary", use_container_width=True):
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -257,7 +291,7 @@ def view_project_admin(sh, pjt_list):
                     except: pass
                 try: pd.DataFrame(sh.worksheet('weekly_history').get_all_records()).to_excel(writer, index=False, sheet_name='weekly_history')
                 except: pass
-            st.download_button("📥 통합 파일 받기", output.getvalue(), f"PMO_Master_{datetime.date.today()}.xlsx")
+            st.download_button("📥 통합 파일 받기", output.getvalue(), f"PMO_Total_Master_{datetime.date.today()}.xlsx")
 
 # ---------------------------------------------------------
 # [SECTION 3] 메인 컨트롤러
