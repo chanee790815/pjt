@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 import io
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v4.4.8", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v4.4.8 Final", page_icon="🏗️", layout="wide")
 
 # --- [UI] 스타일 ---
 st.markdown("""
@@ -26,7 +26,7 @@ st.markdown("""
     .risk-high { border-left: 5px solid #ff4b4b !important; }
     .risk-normal { border-left: 5px solid #1f77b4 !important; }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.4.8) | 진행률 편집 수정 및 담당 PM 기능 추가</div>
+    <div class="footer">시스템 상태: 정상 (v4.4.8 Final) | 웹페이지 최종 통합 버전 활성화</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -231,11 +231,10 @@ def view_project_detail(sh, pjt_list):
         if st.button("💾 공정표 데이터 저장"):
             # 저장 전 데이터 타입 정리
             final_df = edited.copy()
-            # 전체 공정 데이터 업데이트 (PM 정보인 J1을 보존하기 위해 범위 지정 업데이트 권장되나 단순화를 위해 전체 업데이트 후 PM 재입력)
             header = final_df.columns.values.tolist()
             rows = final_df.fillna("").astype(str).values.tolist()
             ws.update([header] + rows)
-            # PM 정보 복구
+            # PM 정보 복구 (J1 셀)
             ws.update('J1', [[new_pm]])
             st.success("데이터가 성공적으로 저장되었습니다!"); time.sleep(1); st.rerun()
 
