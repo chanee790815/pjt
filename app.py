@@ -18,17 +18,17 @@ st.markdown("""
     <style>
     @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
     html, body, [class*="css"] { font-family: 'Pretendard', sans-serif; }
-    .pjt-card { background-color: #ffffff; color: #212529; padding: 20px; border-radius: 12px; border: 1px solid #eee; margin-bottom: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-    .pjt-card h4 { color: #222222 !important; font-weight: 700; margin-top: 0; }
+    .pjt-card { background-color: #ffffff; color: #212529; padding: 12px 15px; border-radius: 10px; border: 1px solid #eee; margin-bottom: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+    .pjt-card h4 { color: #222222 !important; font-weight: 700; margin-top: 0; margin-bottom: 2px; font-size: 15px; }
     .footer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: #f1f1f1; color: #555; text-align: center; padding: 5px; font-size: 11px; z-index: 100; }
-    .weekly-box { background-color: #f8f9fa; padding: 12px; border-radius: 6px; margin-top: 10px; font-size: 13px; line-height: 1.6; color: #333; border: 1px solid #edf0f2; white-space: pre-wrap; }
+    .weekly-box { background-color: #f8f9fa; padding: 8px 10px; border-radius: 6px; margin-top: 4px; font-size: 12px; line-height: 1.4; color: #333; border: 1px solid #edf0f2; white-space: pre-wrap; }
     .history-box { background-color: #e3f2fd; padding: 15px; border-radius: 8px; border-left: 5px solid #2196f3; margin-bottom: 20px; }
-    .pm-tag { background-color: #e7f5ff; color: #1971c2; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; margin-left: 10px; border: 1px solid #a5d8ff; }
+    .pm-tag { background-color: #e7f5ff; color: #1971c2; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; margin-left: 8px; border: 1px solid #a5d8ff; vertical-align: middle; }
     .risk-high { border-left: 5px solid #ff4b4b !important; }
     .risk-normal { border-left: 5px solid #1f77b4 !important; }
     .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; border: 1px solid #eee; }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.5.5) | 주간업무 히스토리 저장 및 상세페이지 표시 기능 추가</div>
+    <div class="footer">시스템 상태: 정상 (v4.5.5) | 대시보드 카드 레이아웃 컴팩트화 완료</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -132,8 +132,8 @@ def view_dashboard(sh, pjt_list):
                 
                 st.markdown(f'''
                     <div class="{c_style}">
-                        <h4 style="color:#212529; margin-bottom:5px;">🏗️ {p_name} <span class="pm-tag">PM: {pm_name}</span> <span style="font-size:14px; float:right;">{status_ui}</span></h4>
-                        <p style="font-size:13px; color:#666; margin-top:0;">계획: {avg_plan}% | 실적: {avg_act}%</p>
+                        <h4>🏗️ {p_name} <span class="pm-tag">PM: {pm_name}</span> <span style="font-size:13px; font-weight:normal; float:right;">{status_ui}</span></h4>
+                        <p style="font-size:12px; color:#666; margin-top:0; margin-bottom:4px;">계획: {avg_plan}% | 실적: {avg_act}%</p>
                         <div class="weekly-box"><b>[금주]</b> {this_w}<br><b>[차주]</b> {next_w}</div>
                     </div>
                 ''', unsafe_allow_html=True)
