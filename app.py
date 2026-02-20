@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 import io
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v4.5.10", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v4.5.11", page_icon="🏗️", layout="wide")
 
 # --- [UI] 스타일 ---
 st.markdown("""
@@ -53,7 +53,7 @@ st.markdown("""
     /* 진행바 마진 최적화 */
     div[data-testid="stProgressBar"] { margin-bottom: 0px !important; margin-top: 5px !important; }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.5.10) | 상세보기 버튼 타이틀 측면 배치 최적화 완료</div>
+    <div class="footer">시스템 상태: 정상 (v4.5.11) | 프로젝트명 모바일 반응형 글꼴 크기 적용 완료</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -161,14 +161,15 @@ def view_dashboard(sh, pjt_list):
                         status_ui = "🔵 완료"
                         b_style = "status-done"
                     
-                    # [핵심 수정] 헤더 영역을 3개의 구역으로 나누어 같은 줄에 배치
+                    # 헤더 영역을 3개의 구역으로 나누어 같은 줄에 배치
                     h_col1, h_col2, h_col3 = st.columns([5.5, 2.8, 1.7], gap="small")
                     
                     with h_col1:
+                        # [핵심 수정] 글자가 화면 크기에 따라 줄어들도록 반응형 clamp 폰트 적용 & 자동 줄바꿈 허용
                         st.markdown(f"""
-                            <h4 style="color:#222222; font-weight:700; margin-top:2px; margin-bottom:0; font-size:15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+                            <h4 style="color:#222222; font-weight:700; margin-top:2px; margin-bottom:0; font-size:clamp(13px, 3.5vw, 16px); word-break:keep-all; line-height:1.2;">
                                 🏗️ {p_name} 
-                                <span class="pm-tag">PM: {pm_name}</span>
+                                <span class="pm-tag" style="font-size:clamp(10px, 2.5vw, 11px);">PM: {pm_name}</span>
                             </h4>
                         """, unsafe_allow_html=True)
                         
