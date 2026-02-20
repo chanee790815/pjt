@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 import io
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v4.5.8", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v4.5.9", page_icon="🏗️", layout="wide")
 
 # --- [UI] 스타일 ---
 st.markdown("""
@@ -19,27 +19,39 @@ st.markdown("""
     @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
     html, body, [class*="css"] { font-family: 'Pretendard', sans-serif; }
     
-    /* 메인 제목(h1) 반응형 폰트 크기 및 줄바꿈 최적화 */
+    /* 메인 제목 반응형 최적화 */
     h1 {
         font-size: clamp(1.5rem, 6vw, 2.5rem) !important; 
         word-break: keep-all !important; 
         line-height: 1.3 !important;
     }
     
-    .pjt-card { background-color: #ffffff; color: #212529; padding: 12px 15px; border-radius: 10px; border: 1px solid #eee; margin-bottom: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
-    .pjt-card h4 { color: #222222 !important; font-weight: 700; margin-top: 0; margin-bottom: 2px; font-size: 15px; }
     .footer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: #f1f1f1; color: #555; text-align: center; padding: 5px; font-size: 11px; z-index: 100; }
     .weekly-box { background-color: #f8f9fa; padding: 8px 10px; border-radius: 6px; margin-top: 4px; font-size: 12px; line-height: 1.4; color: #333; border: 1px solid #edf0f2; white-space: pre-wrap; }
     .history-box { background-color: #e3f2fd; padding: 15px; border-radius: 8px; border-left: 5px solid #2196f3; margin-bottom: 20px; }
     .pm-tag { background-color: #e7f5ff; color: #1971c2; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; margin-left: 8px; border: 1px solid #a5d8ff; vertical-align: middle; }
-    .risk-high { border-left: 5px solid #ff4b4b !important; }
-    .risk-normal { border-left: 5px solid #1f77b4 !important; }
     .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; border: 1px solid #eee; }
     
-    /* 버튼과 진행바 사이 간격 최소화 */
-    div[data-testid="stProgressBar"] { margin-bottom: 5px; }
+    /* 상태 뱃지 디자인 */
+    .status-badge { padding: 3px 8px; border-radius: 12px; font-size: 12px; font-weight: 700; display: inline-block; float: right; }
+    .status-normal { background-color: #e3f2fd; color: #1976d2; border: 1px solid #bbdefb; }
+    .status-delay { background-color: #ffebee; color: #c62828; border: 1px solid #ffcdd2; }
+    .status-done { background-color: #e8f5e9; color: #2e7d32; border: 1px solid #c8e6c9; }
+    
+    /* 컴팩트 버튼 (화면 차지 최소화) */
+    div[data-testid="stButton"] button {
+        min-height: 32px !important;
+        height: 32px !important;
+        padding: 0px 10px !important;
+        font-size: 13px !important;
+        border-radius: 6px !important;
+        font-weight: 600 !important;
+    }
+    
+    /* 진행바 마진 최적화 */
+    div[data-testid="stProgressBar"] { margin-bottom: 0px !important; margin-top: 5px !important; }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.5.8) | 상세페이지 다이렉트 콜백 라우팅 적용</div>
+    <div class="footer">시스템 상태: 정상 (v4.5.9) | 대시보드 카드 레이아웃 컨테이너 내장화 완료</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -113,58 +125,67 @@ def view_dashboard(sh, pjt_list):
     cols = st.columns(2)
     for idx, p_name in enumerate(pjt_list):
         with cols[idx % 2]:
-            try:
-                ws = safe_api_call(sh.worksheet, p_name)
-                # 단 1번의 API 호출로 모든 데이터를 가져옴 (429 에러 방지)
-                data = safe_api_call(ws.get_all_values)
-                
-                pm_name = "미지정"
-                this_w = "금주 실적 미입력"
-                next_w = "차주 계획 미입력"
-                
-                if len(data) > 0:
-                    header = data[0][:8]
-                    df = pd.DataFrame([r[:8] for r in data[1:]], columns=header) if len(data) > 1 else pd.DataFrame(columns=header)
+            # [수정] 둥근 박스(Container) 안에 모든 요소를 예쁘게 묶음
+            with st.container(border=True):
+                try:
+                    ws = safe_api_call(sh.worksheet, p_name)
+                    data = safe_api_call(ws.get_all_values)
                     
-                    # I1(8), J2(9), K2(10) 인덱스로 직접 추출
-                    if len(data[0]) > 8 and str(data[0][8]).strip(): pm_name = str(data[0][8]).strip()
-                    if len(data) > 1 and len(data[1]) > 9 and str(data[1][9]).strip(): this_w = str(data[1][9]).strip()
-                    if len(data) > 1 and len(data[1]) > 10 and str(data[1][10]).strip(): next_w = str(data[1][10]).strip()
-                else:
-                    df = pd.DataFrame()
+                    pm_name = "미지정"
+                    this_w = "금주 실적 미입력"
+                    next_w = "차주 계획 미입력"
+                    
+                    if len(data) > 0:
+                        header = data[0][:8]
+                        df = pd.DataFrame([r[:8] for r in data[1:]], columns=header) if len(data) > 1 else pd.DataFrame(columns=header)
+                        
+                        if len(data[0]) > 8 and str(data[0][8]).strip(): pm_name = str(data[0][8]).strip()
+                        if len(data) > 1 and len(data[1]) > 9 and str(data[1][9]).strip(): this_w = str(data[1][9]).strip()
+                        if len(data) > 1 and len(data[1]) > 10 and str(data[1][10]).strip(): next_w = str(data[1][10]).strip()
+                    else:
+                        df = pd.DataFrame()
 
-                if not df.empty and '진행률' in df.columns:
-                    avg_act = round(pd.to_numeric(df['진행률'], errors='coerce').fillna(0).mean(), 1)
-                    avg_plan = round(df.apply(lambda r: calc_planned_progress(r.get('시작일'), r.get('종료일')), axis=1).mean(), 1)
-                else:
-                    avg_act = 0.0; avg_plan = 0.0
-                
-                status_ui = "🟢 정상"
-                c_style = "pjt-card risk-normal"
-                if (avg_plan - avg_act) >= 10:
-                    status_ui = "🔴 지연"
-                    c_style = "pjt-card risk-high"
-                elif avg_act >= 100: status_ui = "🔵 완료"
-                
-                st.markdown(f'''
-                    <div class="{c_style}">
-                        <h4>🏗️ {p_name} <span class="pm-tag">PM: {pm_name}</span> <span style="font-size:13px; font-weight:normal; float:right;">{status_ui}</span></h4>
-                        <p style="font-size:12px; color:#666; margin-top:0; margin-bottom:4px;">계획: {avg_plan}% | 실적: {avg_act}%</p>
-                        <div class="weekly-box"><b>[금주]</b> {this_w}<br><b>[차주]</b> {next_w}</div>
-                    </div>
-                ''', unsafe_allow_html=True)
-                st.progress(min(1.0, max(0.0, avg_act/100)))
-                
-                # [수정] 콜백 함수(on_click)를 사용하여 하이퍼링크처럼 빠르고 부드럽게 이동
-                st.button(
-                    "🔗 프로젝트 상세 보기", 
-                    key=f"btn_go_{p_name}", 
-                    on_click=navigate_to_project, 
-                    args=(p_name,), 
-                    use_container_width=True
-                )
-            except Exception as e:
-                st.warning(f"'{p_name}' 데이터를 로드하지 못했습니다.")
+                    if not df.empty and '진행률' in df.columns:
+                        avg_act = round(pd.to_numeric(df['진행률'], errors='coerce').fillna(0).mean(), 1)
+                        avg_plan = round(df.apply(lambda r: calc_planned_progress(r.get('시작일'), r.get('종료일')), axis=1).mean(), 1)
+                    else:
+                        avg_act = 0.0; avg_plan = 0.0
+                    
+                    status_ui = "🟢 정상"
+                    b_style = "status-normal"
+                    if (avg_plan - avg_act) >= 10:
+                        status_ui = "🔴 지연"
+                        b_style = "status-delay"
+                    elif avg_act >= 100: 
+                        status_ui = "🔵 완료"
+                        b_style = "status-done"
+                    
+                    # 정보 표시 영역
+                    st.markdown(f'''
+                        <div style="margin-bottom:8px;">
+                            <h4 style="color:#222222; font-weight:700; margin-top:0; margin-bottom:4px; font-size:15.5px;">
+                                🏗️ {p_name} 
+                                <span class="pm-tag">PM: {pm_name}</span> 
+                                <span class="status-badge {b_style}">{status_ui}</span>
+                            </h4>
+                            <p style="font-size:12.5px; color:#666; margin-top:0; margin-bottom:5px;">계획: {avg_plan}% | 실적: {avg_act}%</p>
+                            <div class="weekly-box" style="margin-top:0;"><b>[금주]</b> {this_w}<br><b>[차주]</b> {next_w}</div>
+                        </div>
+                    ''', unsafe_allow_html=True)
+                    
+                    # 진행바 표시
+                    st.progress(min(1.0, max(0.0, avg_act/100)))
+                    
+                    # 버튼 표시 (박스 안에 위치, CSS로 작고 얇게 만들어짐)
+                    st.button(
+                        "🔍 상세 보기", 
+                        key=f"btn_go_{p_name}", 
+                        on_click=navigate_to_project, 
+                        args=(p_name,), 
+                        use_container_width=True
+                    )
+                except Exception as e:
+                    st.warning(f"'{p_name}' 데이터를 로드하지 못했습니다.")
 
 # 2. 프로젝트 상세 관리
 def view_project_detail(sh, pjt_list):
