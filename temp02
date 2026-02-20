@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 import io
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v4.5.9", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v4.5.11", page_icon="🏗️", layout="wide")
 
 # --- [UI] 스타일 ---
 st.markdown("""
@@ -32,26 +32,28 @@ st.markdown("""
     .pm-tag { background-color: #e7f5ff; color: #1971c2; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; margin-left: 8px; border: 1px solid #a5d8ff; vertical-align: middle; }
     .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; border: 1px solid #eee; }
     
-    /* 상태 뱃지 디자인 */
-    .status-badge { padding: 3px 8px; border-radius: 12px; font-size: 12px; font-weight: 700; display: inline-block; float: right; }
+    /* 상태 뱃지 디자인 (우측 정렬용) */
+    .status-badge { padding: 3px 8px; border-radius: 12px; font-size: 11.5px; font-weight: 700; display: inline-block; white-space: nowrap; }
     .status-normal { background-color: #e3f2fd; color: #1976d2; border: 1px solid #bbdefb; }
     .status-delay { background-color: #ffebee; color: #c62828; border: 1px solid #ffcdd2; }
     .status-done { background-color: #e8f5e9; color: #2e7d32; border: 1px solid #c8e6c9; }
     
-    /* 컴팩트 버튼 (화면 차지 최소화) */
+    /* 컴팩트 버튼 (제목 옆으로 배치하기 위한 최적화) */
     div[data-testid="stButton"] button {
-        min-height: 32px !important;
-        height: 32px !important;
-        padding: 0px 10px !important;
-        font-size: 13px !important;
+        min-height: 26px !important;
+        height: 26px !important;
+        padding: 0px 8px !important;
+        font-size: 12px !important;
         border-radius: 6px !important;
         font-weight: 600 !important;
+        line-height: 1 !important;
+        margin-top: -2px !important;
     }
     
     /* 진행바 마진 최적화 */
     div[data-testid="stProgressBar"] { margin-bottom: 0px !important; margin-top: 5px !important; }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.5.9) | 대시보드 카드 레이아웃 컨테이너 내장화 완료</div>
+    <div class="footer">시스템 상태: 정상 (v4.5.11) | 프로젝트명 모바일 반응형 글꼴 크기 적용 완료</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -125,7 +127,6 @@ def view_dashboard(sh, pjt_list):
     cols = st.columns(2)
     for idx, p_name in enumerate(pjt_list):
         with cols[idx % 2]:
-            # [수정] 둥근 박스(Container) 안에 모든 요소를 예쁘게 묶음
             with st.container(border=True):
                 try:
                     ws = safe_api_call(sh.worksheet, p_name)
@@ -160,30 +161,45 @@ def view_dashboard(sh, pjt_list):
                         status_ui = "🔵 완료"
                         b_style = "status-done"
                     
+                    # 헤더 영역을 3개의 구역으로 나누어 같은 줄에 배치
+                    h_col1, h_col2, h_col3 = st.columns([5.5, 2.8, 1.7], gap="small")
+                    
+                    with h_col1:
+                        # [핵심 수정] 글자가 화면 크기에 따라 줄어들도록 반응형 clamp 폰트 적용 & 자동 줄바꿈 허용
+                        st.markdown(f"""
+                            <h4 style="color:#222222; font-weight:700; margin-top:2px; margin-bottom:0; font-size:clamp(13px, 3.5vw, 16px); word-break:keep-all; line-height:1.2;">
+                                🏗️ {p_name} 
+                                <span class="pm-tag" style="font-size:clamp(10px, 2.5vw, 11px);">PM: {pm_name}</span>
+                            </h4>
+                        """, unsafe_allow_html=True)
+                        
+                    with h_col2:
+                        st.button(
+                            "🔍 상세 보기", 
+                            key=f"btn_go_{p_name}", 
+                            on_click=navigate_to_project, 
+                            args=(p_name,), 
+                            use_container_width=True
+                        )
+                        
+                    with h_col3:
+                        st.markdown(f"""
+                            <div style="text-align:right; margin-top:3px;">
+                                <span class="status-badge {b_style}">{status_ui}</span>
+                            </div>
+                        """, unsafe_allow_html=True)
+                    
                     # 정보 표시 영역
                     st.markdown(f'''
-                        <div style="margin-bottom:8px;">
-                            <h4 style="color:#222222; font-weight:700; margin-top:0; margin-bottom:4px; font-size:15.5px;">
-                                🏗️ {p_name} 
-                                <span class="pm-tag">PM: {pm_name}</span> 
-                                <span class="status-badge {b_style}">{status_ui}</span>
-                            </h4>
-                            <p style="font-size:12.5px; color:#666; margin-top:0; margin-bottom:5px;">계획: {avg_plan}% | 실적: {avg_act}%</p>
+                        <div style="margin-bottom:4px; margin-top:-5px;">
+                            <p style="font-size:12.5px; color:#666; margin-top:0; margin-bottom:4px;">계획: {avg_plan}% | 실적: {avg_act}%</p>
                             <div class="weekly-box" style="margin-top:0;"><b>[금주]</b> {this_w}<br><b>[차주]</b> {next_w}</div>
                         </div>
                     ''', unsafe_allow_html=True)
                     
-                    # 진행바 표시
+                    # 진행바 표시 (맨 아래로 배치)
                     st.progress(min(1.0, max(0.0, avg_act/100)))
                     
-                    # 버튼 표시 (박스 안에 위치, CSS로 작고 얇게 만들어짐)
-                    st.button(
-                        "🔍 상세 보기", 
-                        key=f"btn_go_{p_name}", 
-                        on_click=navigate_to_project, 
-                        args=(p_name,), 
-                        use_container_width=True
-                    )
                 except Exception as e:
                     st.warning(f"'{p_name}' 데이터를 로드하지 못했습니다.")
 
@@ -191,14 +207,12 @@ def view_dashboard(sh, pjt_list):
 def view_project_detail(sh, pjt_list):
     st.title("🏗️ 프로젝트 상세 관리")
     
-    # 세션 상태(selected_pjt)와 selectbox를 동기화
     selected_pjt = st.selectbox("현장 선택", ["선택"] + pjt_list, key="selected_pjt")
     
     if selected_pjt != "선택":
         ws = safe_api_call(sh.worksheet, selected_pjt)
         data = safe_api_call(ws.get_all_values)
         
-        # 데이터 분리 (A~H열은 공정표, I/J/K는 메타데이터)
         current_pm = ""
         this_val = ""
         next_val = ""
@@ -215,7 +229,6 @@ def view_project_detail(sh, pjt_list):
         if '진행률' in df.columns:
             df['진행률'] = pd.to_numeric(df['진행률'], errors='coerce').fillna(0)
 
-        # 상단 PM 입력부
         col_pm1, col_pm2 = st.columns([3, 1])
         with col_pm1:
             new_pm = st.text_input("프로젝트 담당 PM (I1 셀)", value=current_pm)
@@ -300,11 +313,10 @@ def view_project_detail(sh, pjt_list):
         st.subheader("📝 상세 공정표 편집 (A~H열 전용)")
         edited = st.data_editor(df, use_container_width=True, num_rows="dynamic")
         if st.button("💾 변경사항 전체 저장"):
-            # A~H 편집 내용과 I, J, K 메타데이터를 하나의 배열로 병합하여 안전하게 저장
             full_data = []
             header_8 = edited.columns.values.tolist()[:8]
             while len(header_8) < 8: header_8.append("")
-            full_data.append(header_8 + [new_pm]) # Row 1
+            full_data.append(header_8 + [new_pm])
             
             edited_rows = edited.fillna("").astype(str).values.tolist()
             if len(edited_rows) > 0:
@@ -312,7 +324,7 @@ def view_project_detail(sh, pjt_list):
                     r_8 = r[:8]
                     while len(r_8) < 8: r_8.append("")
                     if i == 0:
-                        r_8.extend(["", in_this, in_next]) # Row 2에 주간업무 삽입
+                        r_8.extend(["", in_this, in_next])
                     full_data.append(r_8)
             else:
                 full_data.append([""] * 8 + ["", in_this, in_next])
@@ -445,7 +457,6 @@ if check_login():
             sys_names = ['weekly_history', 'Solar_DB', 'KPI', 'Sheet1', 'Control_Center', 'Dashboard_Control', '통합 대시보드']
             pjt_list = [ws.title for ws in sh.worksheets() if ws.title not in sys_names]
             
-            # [추가/수정] 화면 간 이동을 위한 Session State 동기화 처리
             if "selected_menu" not in st.session_state:
                 st.session_state.selected_menu = "통합 대시보드"
             if "selected_pjt" not in st.session_state:
