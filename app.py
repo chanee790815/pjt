@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 import io
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v4.5.11", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v4.5.12", page_icon="🏗️", layout="wide")
 
 # --- [UI] 스타일 ---
 st.markdown("""
@@ -29,31 +29,31 @@ st.markdown("""
     .footer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: #f1f1f1; color: #555; text-align: center; padding: 5px; font-size: 11px; z-index: 100; }
     .weekly-box { background-color: #f8f9fa; padding: 8px 10px; border-radius: 6px; margin-top: 4px; font-size: 12px; line-height: 1.4; color: #333; border: 1px solid #edf0f2; white-space: pre-wrap; }
     .history-box { background-color: #e3f2fd; padding: 15px; border-radius: 8px; border-left: 5px solid #2196f3; margin-bottom: 20px; }
-    .pm-tag { background-color: #e7f5ff; color: #1971c2; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; margin-left: 8px; border: 1px solid #a5d8ff; vertical-align: middle; }
     .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; border: 1px solid #eee; }
     
-    /* 상태 뱃지 디자인 (우측 정렬용) */
-    .status-badge { padding: 3px 8px; border-radius: 12px; font-size: 11.5px; font-weight: 700; display: inline-block; white-space: nowrap; }
+    /* 태그 및 뱃지 Flex 정렬용 최적화 */
+    .pm-tag { background-color: #e7f5ff; color: #1971c2; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; border: 1px solid #a5d8ff; display: inline-block; }
+    .status-badge { padding: 3px 8px; border-radius: 12px; font-size: 11px; font-weight: 700; display: inline-block; white-space: nowrap; }
     .status-normal { background-color: #e3f2fd; color: #1976d2; border: 1px solid #bbdefb; }
     .status-delay { background-color: #ffebee; color: #c62828; border: 1px solid #ffcdd2; }
     .status-done { background-color: #e8f5e9; color: #2e7d32; border: 1px solid #c8e6c9; }
     
-    /* 컴팩트 버튼 (제목 옆으로 배치하기 위한 최적화) */
+    /* 컴팩트 버튼 (얇고 예쁘게) */
     div[data-testid="stButton"] button {
-        min-height: 26px !important;
-        height: 26px !important;
+        min-height: 28px !important;
+        height: 28px !important;
         padding: 0px 8px !important;
         font-size: 12px !important;
         border-radius: 6px !important;
         font-weight: 600 !important;
         line-height: 1 !important;
-        margin-top: -2px !important;
+        margin: 0 !important;
     }
     
     /* 진행바 마진 최적화 */
     div[data-testid="stProgressBar"] { margin-bottom: 0px !important; margin-top: 5px !important; }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.5.11) | 프로젝트명 모바일 반응형 글꼴 크기 적용 완료</div>
+    <div class="footer">시스템 상태: 정상 (v4.5.12) | 모바일 화면 세로 분할 방지 및 플렉스박스 최적화</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -161,16 +161,18 @@ def view_dashboard(sh, pjt_list):
                         status_ui = "🔵 완료"
                         b_style = "status-done"
                     
-                    # 헤더 영역을 3개의 구역으로 나누어 같은 줄에 배치
-                    h_col1, h_col2, h_col3 = st.columns([5.5, 2.8, 1.7], gap="small")
+                    # [핵심 수정] 모바일 세로 쪼개짐 방지: 헤더를 2단으로 줄이고 Flexbox로 제목+뱃지를 묶음
+                    h_col1, h_col2 = st.columns([7.3, 2.7], gap="small")
                     
                     with h_col1:
-                        # [핵심 수정] 글자가 화면 크기에 따라 줄어들도록 반응형 clamp 폰트 적용 & 자동 줄바꿈 허용
                         st.markdown(f"""
-                            <h4 style="color:#222222; font-weight:700; margin-top:2px; margin-bottom:0; font-size:clamp(13px, 3.5vw, 16px); word-break:keep-all; line-height:1.2;">
-                                🏗️ {p_name} 
-                                <span class="pm-tag" style="font-size:clamp(10px, 2.5vw, 11px);">PM: {pm_name}</span>
-                            </h4>
+                            <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 2px;">
+                                <h4 style="color:#222222; font-weight:700; margin:0; font-size:clamp(13.5px, 3.5vw, 16px); word-break:keep-all; line-height:1.2;">
+                                    🏗️ {p_name}
+                                </h4>
+                                <span class="pm-tag" style="margin:0;">PM: {pm_name}</span>
+                                <span class="status-badge {b_style}" style="margin:0;">{status_ui}</span>
+                            </div>
                         """, unsafe_allow_html=True)
                         
                     with h_col2:
@@ -181,23 +183,16 @@ def view_dashboard(sh, pjt_list):
                             args=(p_name,), 
                             use_container_width=True
                         )
-                        
-                    with h_col3:
-                        st.markdown(f"""
-                            <div style="text-align:right; margin-top:3px;">
-                                <span class="status-badge {b_style}">{status_ui}</span>
-                            </div>
-                        """, unsafe_allow_html=True)
                     
                     # 정보 표시 영역
                     st.markdown(f'''
-                        <div style="margin-bottom:4px; margin-top:-5px;">
+                        <div style="margin-bottom:4px; margin-top:2px;">
                             <p style="font-size:12.5px; color:#666; margin-top:0; margin-bottom:4px;">계획: {avg_plan}% | 실적: {avg_act}%</p>
                             <div class="weekly-box" style="margin-top:0;"><b>[금주]</b> {this_w}<br><b>[차주]</b> {next_w}</div>
                         </div>
                     ''', unsafe_allow_html=True)
                     
-                    # 진행바 표시 (맨 아래로 배치)
+                    # 진행바 표시
                     st.progress(min(1.0, max(0.0, avg_act/100)))
                     
                 except Exception as e:
