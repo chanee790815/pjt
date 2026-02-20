@@ -11,13 +11,21 @@ import plotly.graph_objects as go
 import io
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v4.5.5", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v4.5.6", page_icon="🏗️", layout="wide")
 
 # --- [UI] 스타일 ---
 st.markdown("""
     <style>
     @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
     html, body, [class*="css"] { font-family: 'Pretendard', sans-serif; }
+    
+    /* 메인 제목(h1) 반응형 폰트 크기 및 줄바꿈 최적화 */
+    h1 {
+        font-size: clamp(1.5rem, 6vw, 2.5rem) !important; 
+        word-break: keep-all !important; 
+        line-height: 1.3 !important;
+    }
+    
     .pjt-card { background-color: #ffffff; color: #212529; padding: 12px 15px; border-radius: 10px; border: 1px solid #eee; margin-bottom: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
     .pjt-card h4 { color: #222222 !important; font-weight: 700; margin-top: 0; margin-bottom: 2px; font-size: 15px; }
     .footer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: #f1f1f1; color: #555; text-align: center; padding: 5px; font-size: 11px; z-index: 100; }
@@ -28,7 +36,7 @@ st.markdown("""
     .risk-normal { border-left: 5px solid #1f77b4 !important; }
     .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; border: 1px solid #eee; }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.5.5) | 대시보드 카드 레이아웃 컴팩트화 완료</div>
+    <div class="footer">시스템 상태: 정상 (v4.5.6) | 모바일 메인 제목 반응형 최적화 완료</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
