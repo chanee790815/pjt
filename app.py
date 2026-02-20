@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 import io
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v4.4.6", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v4.4.7", page_icon="🏗️", layout="wide")
 
 # --- [UI] 스타일 ---
 st.markdown("""
@@ -25,7 +25,7 @@ st.markdown("""
     .risk-high { border-left: 5px solid #ff4b4b !important; }
     .risk-normal { border-left: 5px solid #1f77b4 !important; }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.4.6) | 마스터 관리(생성/수정/삭제) 기능 복구 완료</div>
+    <div class="footer">시스템 상태: 정상 (v4.4.7) | 전체 공정률 계산 로직 최적화 완료</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -90,8 +90,14 @@ def view_dashboard(sh, pjt_list):
         with cols[idx % 2]:
             try:
                 df = pd.DataFrame(sh.worksheet(p_name).get_all_records())
-                avg_act = round(pd.to_numeric(df['진행률'], errors='coerce').mean(), 1) if not df.empty else 0
-                avg_plan = round(df.apply(lambda r: calc_planned_progress(r.get('시작일'), r.get('종료일')), axis=1).mean(), 1) if not df.empty else 0
+                
+                # [수정] 빈 셀(NaN)을 0으로 처리하여 정확한 가중 평균 계산
+                if not df.empty and '진행률' in df.columns:
+                    avg_act = round(pd.to_numeric(df['진행률'], errors='coerce').fillna(0).mean(), 1)
+                    avg_plan = round(df.apply(lambda r: calc_planned_progress(r.get('시작일'), r.get('종료일')), axis=1).mean(), 1)
+                else:
+                    avg_act = 0.0
+                    avg_plan = 0.0
                 
                 status_ui = "🟢 정상"
                 c_style = "pjt-card risk-normal"
@@ -152,6 +158,7 @@ def view_project_detail(sh, pjt_list):
                     min_d, max_d = sdf['시작일'].min(), sdf['종료일'].max()
                     d_range = pd.date_range(min_d, max_d, freq='W-MON').date.tolist()
                     p_trend = [sdf.apply(lambda r: calc_planned_progress(r['시작일'], r['종료일'], d), axis=1).mean() for d in d_range]
+                    # [수정] 실적 계산 시에도 NaN은 0으로 처리
                     a_prog = pd.to_numeric(sdf['진행률'], errors='coerce').fillna(0).mean()
                     fig_s = go.Figure()
                     fig_s.add_trace(go.Scatter(x=[d.strftime("%Y-%m-%d") for d in d_range], y=p_trend, mode='lines+markers', name='계획'))
@@ -236,7 +243,7 @@ def view_risk_dashboard(sh, pjt_list):
     if all_issues: st.dataframe(pd.concat(all_issues), use_container_width=True)
     else: st.success("🎉 현재 진행 중인 리스크 공정이 없습니다.")
 
-# 6. 마스터 관리 (복구 완료)
+# 6. 마스터 관리
 def view_project_admin(sh, pjt_list):
     st.title("⚙️ 마스터 관리")
     t1, t2, t3, t4, t5 = st.tabs(["➕ 등록", "✏️ 수정", "🗑️ 삭제", "🔄 엑셀 업로드", "📥 마스터 다운로드"])
