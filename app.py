@@ -79,9 +79,11 @@ st.markdown("""
             flex: 0 0 75px !important;
             min-width: 75px !important;
         }
+        /* 모바일 상단 메트릭 줄바꿈 */
+        .metric-container { flex-wrap: wrap; }
     }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.5.15) | 담당자 열 삭제 및 배열 오류 완벽 수정 완료</div>
+    <div class="footer">시스템 상태: 정상 (v4.5.15) | 대시보드 PM 필터 및 상태 카운트 기능 추가 완료</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -140,7 +142,6 @@ def calc_planned_progress(start, end, target_date=None):
         return min(100.0, max(0.0, (passed_days / total_days) * 100))
     except: return 0.0
 
-# 콜백 함수: 하이퍼링크처럼 상세페이지로 부드럽게 이동
 def navigate_to_project(p_name):
     st.session_state.selected_menu = "프로젝트 상세"
     st.session_state.selected_pjt = p_name
@@ -149,81 +150,139 @@ def navigate_to_project(p_name):
 # [SECTION 2] 뷰(View) 함수
 # ---------------------------------------------------------
 
-# 1. 통합 대시보드
+# 1. 통합 대시보드 (필터 추가 버전)
 def view_dashboard(sh, pjt_list):
     st.title("📊 통합 대시보드 (현황 브리핑)")
-    cols = st.columns(2)
-    for idx, p_name in enumerate(pjt_list):
-        with cols[idx % 2]:
-            with st.container(border=True):
-                try:
-                    ws = safe_api_call(sh.worksheet, p_name)
-                    data = safe_api_call(ws.get_all_values)
+    
+    # 1. 모든 프로젝트 데이터를 먼저 로드 (필터링 및 개수 집계용)
+    dashboard_data = []
+    
+    with st.spinner("프로젝트 데이터를 분석 중입니다..."):
+        for p_name in pjt_list:
+            try:
+                ws = safe_api_call(sh.worksheet, p_name)
+                data = safe_api_call(ws.get_all_values)
+                
+                pm_name = "미지정"
+                this_w = "금주 실적 미입력"
+                next_w = "차주 계획 미입력"
+                
+                if len(data) > 0:
+                    header = data[0][:7]
+                    df = pd.DataFrame([r[:7] for r in data[1:]], columns=header) if len(data) > 1 else pd.DataFrame(columns=header)
                     
-                    pm_name = "미지정"
-                    this_w = "금주 실적 미입력"
-                    next_w = "차주 계획 미입력"
-                    
-                    if len(data) > 0:
-                        # [수정] A~G열(인덱스 0~6)까지만 불러옵니다.
-                        header = data[0][:7]
-                        df = pd.DataFrame([r[:7] for r in data[1:]], columns=header) if len(data) > 1 else pd.DataFrame(columns=header)
-                        
-                        # [수정] PM은 H열(7), 금주는 I열(8), 차주는 J열(9)로 변경되었습니다.
-                        if len(data) > 1 and len(data[1]) > 7 and str(data[1][7]).strip(): pm_name = str(data[1][7]).strip()
-                        if len(data) > 1 and len(data[1]) > 8 and str(data[1][8]).strip(): this_w = str(data[1][8]).strip()
-                        if len(data) > 1 and len(data[1]) > 9 and str(data[1][9]).strip(): next_w = str(data[1][9]).strip()
-                    else:
-                        df = pd.DataFrame()
+                    if len(data) > 1 and len(data[1]) > 7 and str(data[1][7]).strip(): pm_name = str(data[1][7]).strip()
+                    if len(data) > 1 and len(data[1]) > 8 and str(data[1][8]).strip(): this_w = str(data[1][8]).strip()
+                    if len(data) > 1 and len(data[1]) > 9 and str(data[1][9]).strip(): next_w = str(data[1][9]).strip()
+                else:
+                    df = pd.DataFrame()
 
-                    if not df.empty and '진행률' in df.columns:
-                        avg_act = round(pd.to_numeric(df['진행률'], errors='coerce').fillna(0).mean(), 1)
-                        avg_plan = round(df.apply(lambda r: calc_planned_progress(r.get('시작일'), r.get('종료일')), axis=1).mean(), 1)
-                    else:
-                        avg_act = 0.0; avg_plan = 0.0
-                    
-                    status_ui = "🟢 정상"
-                    b_style = "status-normal"
-                    if (avg_plan - avg_act) >= 10:
-                        status_ui = "🔴 지연"
-                        b_style = "status-delay"
-                    elif avg_act >= 100: 
-                        status_ui = "🔵 완료"
-                        b_style = "status-done"
-                    
+                if not df.empty and '진행률' in df.columns:
+                    avg_act = round(pd.to_numeric(df['진행률'], errors='coerce').fillna(0).mean(), 1)
+                    avg_plan = round(df.apply(lambda r: calc_planned_progress(r.get('시작일'), r.get('종료일')), axis=1).mean(), 1)
+                else:
+                    avg_act = 0.0; avg_plan = 0.0
+                
+                status_ui = "🟢 정상"
+                b_style = "status-normal"
+                if (avg_plan - avg_act) >= 10:
+                    status_ui = "🔴 지연"
+                    b_style = "status-delay"
+                elif avg_act >= 100: 
+                    status_ui = "🔵 완료"
+                    b_style = "status-done"
+                
+                dashboard_data.append({
+                    "p_name": p_name,
+                    "pm_name": pm_name,
+                    "this_w": this_w,
+                    "next_w": next_w,
+                    "avg_act": avg_act,
+                    "avg_plan": avg_plan,
+                    "status_ui": status_ui,
+                    "b_style": b_style
+                })
+            except Exception as e:
+                pass # 에러 발생 프로젝트는 일단 스킵
+
+    # 2. 담당자(PM) 필터 생성
+    all_pms = sorted(list(set([d["pm_name"] for d in dashboard_data])))
+    
+    f_col1, f_col2 = st.columns([1, 3])
+    with f_col1:
+        selected_pm = st.selectbox("👤 담당자 조회", ["전체"] + all_pms)
+        
+    # 3. 데이터 필터링 적용
+    if selected_pm != "전체":
+        filtered_data = [d for d in dashboard_data if d["pm_name"] == selected_pm]
+    else:
+        filtered_data = dashboard_data
+
+    # 4. 상태별 개수 집계
+    total_cnt = len(filtered_data)
+    normal_cnt = len([d for d in filtered_data if d['status_ui'] == "🟢 정상"])
+    delay_cnt = len([d for d in filtered_data if d['status_ui'] == "🔴 지연"])
+    done_cnt = len([d for d in filtered_data if d['status_ui'] == "🔵 완료"])
+
+    with f_col2:
+        # 요약 정보 메트릭스 (가로 배치)
+        st.markdown(f"""
+            <div class="metric-container" style="display: flex; gap: 10px; align-items: center; height: 100%; padding-top: 28px;">
+                <div style="background: rgba(128,128,128,0.1); padding: 7px 12px; border-radius: 6px; font-weight: bold; font-size: 13px;">
+                    📊 조회된 프로젝트: <span style="color: #2196f3; font-size: 15px;">{total_cnt}</span>건
+                </div>
+                <div style="background: rgba(33,150,243,0.1); padding: 7px 12px; border-radius: 6px; font-weight: bold; font-size: 13px; color: #1976d2;">
+                    🟢 정상: {normal_cnt}건
+                </div>
+                <div style="background: rgba(244,67,54,0.1); padding: 7px 12px; border-radius: 6px; font-weight: bold; font-size: 13px; color: #d32f2f;">
+                    🔴 지연: {delay_cnt}건
+                </div>
+                <div style="background: rgba(76,175,80,0.1); padding: 7px 12px; border-radius: 6px; font-weight: bold; font-size: 13px; color: #388e3c;">
+                    🔵 완료: {done_cnt}건
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
+        
+    st.divider()
+
+    # 5. 필터링된 프로젝트 카드 렌더링
+    if total_cnt == 0:
+        st.info("선택된 담당자의 프로젝트가 없습니다.")
+    else:
+        cols = st.columns(2)
+        for idx, d in enumerate(filtered_data):
+            with cols[idx % 2]:
+                with st.container(border=True):
                     h_col1, h_col2 = st.columns([7.5, 2.5], gap="small")
                     
                     with h_col1:
                         st.markdown(f"""
                             <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 2px;">
                                 <h4 style="font-weight:700; margin:0; font-size:clamp(13.5px, 3.5vw, 16px); word-break:keep-all; line-height:1.2;">
-                                    🏗️ {p_name}
+                                    🏗️ {d['p_name']}
                                 </h4>
-                                <span class="pm-tag" style="margin:0;">PM: {pm_name}</span>
-                                <span class="status-badge {b_style}" style="margin:0;">{status_ui}</span>
+                                <span class="pm-tag" style="margin:0;">PM: {d['pm_name']}</span>
+                                <span class="status-badge {d['b_style']}" style="margin:0;">{d['status_ui']}</span>
                             </div>
                         """, unsafe_allow_html=True)
                         
                     with h_col2:
                         st.button(
                             "🔍 상세", 
-                            key=f"btn_go_{p_name}", 
+                            key=f"btn_go_{d['p_name']}", 
                             on_click=navigate_to_project, 
-                            args=(p_name,), 
+                            args=(d['p_name'],), 
                             use_container_width=True
                         )
                     
                     st.markdown(f'''
                         <div style="margin-bottom:4px; margin-top:2px;">
-                            <p style="font-size:12.5px; opacity: 0.7; margin-top:0; margin-bottom:4px;">계획: {avg_plan}% | 실적: {avg_act}%</p>
-                            <div class="weekly-box" style="margin-top:0;"><b>[금주]</b> {this_w}<br><b>[차주]</b> {next_w}</div>
+                            <p style="font-size:12.5px; opacity: 0.7; margin-top:0; margin-bottom:4px;">계획: {d['avg_plan']}% | 실적: {d['avg_act']}%</p>
+                            <div class="weekly-box" style="margin-top:0;"><b>[금주]</b> {d['this_w']}<br><b>[차주]</b> {d['next_w']}</div>
                         </div>
                     ''', unsafe_allow_html=True)
                     
-                    st.progress(min(1.0, max(0.0, avg_act/100)))
-                    
-                except Exception as e:
-                    st.warning(f"'{p_name}' 데이터를 로드하지 못했습니다.")
+                    st.progress(min(1.0, max(0.0, d['avg_act']/100)))
 
 # 2. 프로젝트 상세 관리
 def view_project_detail(sh, pjt_list):
@@ -240,23 +299,26 @@ def view_project_detail(sh, pjt_list):
         next_val = ""
         
         if len(data) > 0:
-            # [수정] A~G열까지만 에디터 용으로 읽음
             header = data[0][:7]
             df = pd.DataFrame([r[:7] for r in data[1:]], columns=header) if len(data) > 1 else pd.DataFrame(columns=header)
             
-            # [수정] 인덱스 H(7), I(8), J(9)
             if len(data) > 1 and len(data[1]) > 7: current_pm = str(data[1][7]).strip()
             if len(data) > 1 and len(data[1]) > 8: this_val = str(data[1][8]).strip()
             if len(data) > 1 and len(data[1]) > 9: next_val = str(data[1][9]).strip()
         else:
             df = pd.DataFrame(columns=["시작일", "종료일", "대분류", "구분", "진행상태", "비고", "진행률"])
 
+        # [시간 삭제 로직] 에디터에서 00:00:00이 보이지 않도록 문자열로 잘라서 날짜만 킵
+        if '시작일' in df.columns:
+            df['시작일'] = df['시작일'].astype(str).str.split().str[0]
+        if '종료일' in df.columns:
+            df['종료일'] = df['종료일'].astype(str).str.split().str[0]
+
         if '진행률' in df.columns:
             df['진행률'] = pd.to_numeric(df['진행률'], errors='coerce').fillna(0)
 
         col_pm1, col_pm2 = st.columns([3, 1])
         with col_pm1:
-            # [수정] H2 셀로 안내 변경
             new_pm = st.text_input("프로젝트 담당 PM (H2 셀)", value=current_pm)
         with col_pm2:
             st.write("")
@@ -274,12 +336,57 @@ def view_project_detail(sh, pjt_list):
                 cdf['시작일'] = pd.to_datetime(cdf['시작일'], errors='coerce')
                 cdf['종료일'] = pd.to_datetime(cdf['종료일'], errors='coerce')
                 cdf = cdf.dropna(subset=['시작일', '종료일'])
+                
+                if '대분류' in cdf.columns:
+                    cdf['대분류'] = cdf['대분류'].astype(str).replace({'nan': '미지정', '': '미지정'})
+                
                 if not cdf.empty:
                     fig = px.timeline(cdf, x_start="시작일", x_end="종료일", y="대분류", color="진행률", 
                                      color_continuous_scale='RdYlGn', range_color=[0, 100])
                     fig.update_yaxes(autorange="reversed")
+                    
+                    # [호버 개선] 마우스 올렸을 때 00:00:00 삭제하고 연-월-일만 노출
+                    fig.update_traces(
+                        hovertemplate="<b>%{y}</b><br>시작일: %{base|%Y-%m-%d}<br>종료일: %{x|%Y-%m-%d}<br>진행률: %{marker.color}%<extra></extra>"
+                    )
+                    
+                    today_str = datetime.date.today().strftime("%Y-%m-%d")
+                    fig.add_vline(x=today_str, line_width=2.5, line_color="purple", 
+                                  annotation_text="오늘", annotation_position="top",
+                                  annotation_font=dict(color="purple", size=13, weight="bold"))
+                    
+                    # [표 모양 디자인 적용] 흰색 배경, 회색 테두리, 25.1 형식 렌더링
+                    fig.update_xaxes(
+                        type="date",             
+                        dtick="M1",              
+                        tickformat="%y.%-m",     # '25.1' 형태로 포맷 변경
+                        tickangle=0,             
+                        showgrid=True,           
+                        gridwidth=1,
+                        gridcolor='rgba(200, 200, 200, 0.6)',
+                        showline=True, linewidth=1, linecolor='rgba(200, 200, 200, 0.6)', mirror=True
+                    )
+                    
+                    fig.update_yaxes(
+                        showgrid=True,
+                        gridwidth=1,
+                        gridcolor='rgba(200, 200, 200, 0.6)',
+                        showline=True, linewidth=1, linecolor='rgba(200, 200, 200, 0.6)', mirror=True
+                    )
+                    
+                    unique_cat_count = len(cdf['대분류'].unique()) if '대분류' in cdf.columns else 1
+                    fig.update_layout(
+                        height=max(400, unique_cat_count * 50),
+                        plot_bgcolor='white',  
+                        paper_bgcolor='white',
+                        margin=dict(l=20, r=20, t=40, b=20)
+                    )
+                    
                     st.plotly_chart(fig, use_container_width=True)
-            except: st.warning("차트를 표시할 데이터가 부족합니다.")
+                else:
+                    st.info("차트를 그릴 수 있는 유효한 날짜 데이터가 없습니다.")
+            except Exception as e:
+                st.error(f"차트를 그리는 중 오류가 발생했습니다: {e}")
 
         with tab2:
             try:
@@ -322,7 +429,6 @@ def view_project_detail(sh, pjt_list):
 
             st.divider()
 
-            # [수정] 입력 안내 셀 위치 I2, J2
             st.subheader("📝 주간 업무 작성 및 동기화 (I2, J2 셀 & 히스토리)")
             with st.form("weekly_sync_form"):
                 in_this = st.text_area("✔️ 금주 주요 업무 (I2)", value=this_val, height=120)
@@ -337,7 +443,6 @@ def view_project_detail(sh, pjt_list):
                     st.success("성공적으로 업데이트 및 저장되었습니다!"); time.sleep(1); st.rerun()
 
         st.write("---")
-        # [수정] A~G열 편집기로 제한
         st.subheader("📝 상세 공정표 편집 (A~G열 전용)")
         edited = st.data_editor(df, use_container_width=True, num_rows="dynamic")
         
@@ -346,7 +451,6 @@ def view_project_detail(sh, pjt_list):
             header_7 = edited.columns.values.tolist()[:7]
             while len(header_7) < 7: header_7.append("")
             
-            # [수정] 헤더 행 (총 10개 열: A~G + PM, 금주, 차주)
             full_data.append(header_7 + ["PM", "금주", "차주"])
             
             edited_rows = edited.fillna("").astype(str).values.tolist()
@@ -356,15 +460,12 @@ def view_project_detail(sh, pjt_list):
                     while len(r_7) < 7: r_7.append("")
                     
                     if i == 0:
-                        # 2번째 행(데이터 첫 줄)에는 PM, 금주, 차주 모두 입력
                         r_7.extend([new_pm, in_this, in_next])
                     else:
-                        # [핵심 오류 수정!] 배열의 크기를 무조건 10칸(A~J)으로 일정하게 맞추기 위해 빈 문자열 추가
                         r_7.extend([new_pm, "", ""])
                         
                     full_data.append(r_7)
             else:
-                # 데이터가 텅 비었을 때도 10칸 유지
                 full_data.append([""] * 7 + [new_pm, in_this, in_next])
                 
             safe_api_call(ws.clear)
@@ -443,7 +544,6 @@ def view_project_admin(sh, pjt_list):
         new_n = st.text_input("신규 프로젝트명")
         if st.button("생성") and new_n:
             new_ws = safe_api_call(sh.add_worksheet, title=new_n, rows="100", cols="20")
-            # [수정] 생성 시 컬럼 변경: 담당자 삭제 -> PM, 금주, 차주 추가
             safe_api_call(new_ws.append_row, ["시작일", "종료일", "대분류", "구분", "진행상태", "비고", "진행률", "PM", "금주", "차주"])
             st.success("생성 완료!"); st.rerun()
             
