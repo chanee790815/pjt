@@ -81,7 +81,7 @@ st.markdown("""
         }
     }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.5.15) | 간트 차트 일별 그리드 및 오늘 기준선 추가 완료</div>
+    <div class="footer">시스템 상태: 정상 (v4.5.15) | 간트 차트 일별 그리드 에러 패치 및 오늘 기준선 완벽 적용</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -264,37 +264,41 @@ def view_project_detail(sh, pjt_list):
         tab1, tab2, tab3 = st.tabs(["📊 간트 차트", "📈 S-Curve 분석", "📝 주간 업무 보고"])
         
         with tab1:
-            try:
-                cdf = df.copy()
-                cdf['시작일'] = pd.to_datetime(cdf['시작일'], errors='coerce')
-                cdf['종료일'] = pd.to_datetime(cdf['종료일'], errors='coerce')
-                cdf = cdf.dropna(subset=['시작일', '종료일'])
-                if not cdf.empty:
+            cdf = df.copy()
+            cdf['시작일'] = pd.to_datetime(cdf['시작일'], errors='coerce')
+            cdf['종료일'] = pd.to_datetime(cdf['종료일'], errors='coerce')
+            cdf = cdf.dropna(subset=['시작일', '종료일'])
+            cdf['대분류'] = cdf['대분류'].fillna('미지정') # 빈칸 에러 방지
+            
+            if not cdf.empty:
+                try:
                     fig = px.timeline(cdf, x_start="시작일", x_end="종료일", y="대분류", color="진행률", 
                                      color_continuous_scale='RdYlGn', range_color=[0, 100])
                     fig.update_yaxes(autorange="reversed")
                     
-                    # --- [추가] 1. 오늘 날짜 기준선 추가 (보라색) ---
-                    today_str = datetime.date.today().strftime("%Y-%m-%d")
-                    fig.add_vline(x=today_str, line_width=2.5, line_color="purple", 
+                    # 1. 오늘 날짜 기준선 추가 (안전한 datetime 객체 사용)
+                    today_date = datetime.date.today()
+                    fig.add_vline(x=today_date, line_width=2.5, line_color="purple", 
                                   annotation_text="오늘", annotation_position="top",
                                   annotation_font=dict(color="purple", size=13, weight="bold"))
                     
-                    # --- [추가] 2. 일별 눈금 및 그리드 표시 ---
+                    # 2. 에러 없는 일별 눈금 및 그리드 표시 ("D1" 포맷 사용)
                     fig.update_xaxes(
-                        dtick=86400000,           # 86400000 milliseconds = 1일 간격
-                        tickformat="%m/%d",       # 라벨 포맷: 월/일
-                        tickangle=-45,            # 글자 겹치지 않게 기울임
-                        showgrid=True,            # 그리드선 표시
+                        dtick="D1",
+                        tickformat="%m/%d",
+                        tickangle=-45,
+                        showgrid=True,
                         gridwidth=1,
-                        gridcolor='rgba(200, 200, 200, 0.4)' # 엑셀처럼 흐린 세로선 추가
+                        gridcolor='rgba(200, 200, 200, 0.4)'
                     )
                     
-                    # 항목 개수에 따라 차트 높이를 자동으로 늘려줘서 막대가 너무 얇아지는 것을 방지
                     fig.update_layout(height=max(400, len(cdf) * 45))
-                    
                     st.plotly_chart(fig, use_container_width=True)
-            except: st.warning("차트를 표시할 데이터가 부족합니다.")
+                except Exception as e:
+                    # 에러 발생 시 원인을 화면에 띄워줍니다.
+                    st.error(f"차트를 그리는 중 오류가 발생했습니다: {e}")
+            else:
+                st.info("차트를 표시할 정상적인 날짜 데이터가 없습니다. 편집기에서 시작일/종료일을 입력해 주세요.")
 
         with tab2:
             try:
