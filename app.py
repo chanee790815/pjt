@@ -82,7 +82,7 @@ st.markdown("""
         .metric-container { flex-wrap: wrap; }
     }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.5.15) | 대분류-구분 멀티 카테고리(그룹화) 차트 엔진 적용 완료</div>
+    <div class="footer">시스템 상태: 정상 (v4.5.15) | 차트 Y축 구획 분리 및 세로선/왼쪽 정렬 기능 활성화</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -330,7 +330,6 @@ def view_project_detail(sh, pjt_list):
                     st.warning(f"⚠️ 날짜 형식 오류(예: 2월 30일 등 존재하지 않는 날짜)로 인해 {dropped_len}개의 항목이 차트에서 제외되었습니다.")
                 
                 if not cdf.empty:
-                    # 인덱스 초기화로 완벽한 순서 보장
                     cdf = cdf.reset_index(drop=True)
                     
                     if '대분류' in cdf.columns:
@@ -340,22 +339,33 @@ def view_project_detail(sh, pjt_list):
                         
                     cdf['진행률'] = pd.to_numeric(cdf['진행률'], errors='coerce').fillna(0).astype(float)
                     
-                    # [핵심] 겹침 방지를 위해 '구분' 텍스트 앞에 순번을 은밀하게 붙여 고유값을 생성
+                    # 1. '구분' 텍스트 앞에 순번을 붙여 고유값 생성
                     cdf['구분_고유'] = cdf.apply(lambda r: f"{r.name + 1}. {str(r['구분']).strip()}", axis=1)
                     
-                    # 기간을 밀리초(ms)로 환산 (0일이어도 최소 1일 두께를 가짐)
-                    cdf['duration'] = (cdf['종료일'] - cdf['시작일']).dt.total_seconds() * 1000
-                    cdf['duration'] = cdf['duration'].apply(lambda d: 86400000.0 if d <= 0 else d)
+                    # 2. [핵심] 차트 Y축 왼쪽 정렬을 위한 공간(padding) 계산 로직
+                    # 한글은 넓게(너비 2), 영문/숫자는 좁게(너비 1) 차지하는 특성을 반영해 시각적 너비를 계산
+                    def calc_text_width(text):
+                        return sum(2 if ord(c) > 127 else 1 for c in str(text))
                     
+                    max_width = cdf['구분_고유'].apply(calc_text_width).max()
+                    
+                    # 빈 공간만큼 HTML 공백문자(&nbsp;)를 우측에 채워 넣어, Plotly의 강제 우측정렬을 왼쪽 정렬처럼 속임
+                    cdf['구분_고유'] = cdf['구분_고유'].apply(
+                        lambda x: str(x) + "&nbsp;" * int((max_width - calc_text_width(x)) * 2.5)
+                    )
+                    
+                    cdf['duration'] = (cdf['종료일'] - cdf['시작일']).dt.total_seconds() * 1000
+                    cdf['duration'] = cdf['duration'].apply(lambda d: 86400000.0 if d <= 0 else d) # 0일이어도 1일 두께 보장
+                    
+                    # 툴팁용 원본 데이터 보존
                     cdf['시작일_str'] = cdf['시작일'].dt.strftime('%Y-%m-%d')
                     cdf['종료일_str'] = cdf['종료일'].dt.strftime('%Y-%m-%d')
                     
-                    # [핵심] 멀티카테고리를 위해 go.Bar 엔진으로 교체 (px.timeline 대체)
                     fig = go.Figure()
                     fig.add_trace(go.Bar(
                         base=cdf['시작일'],
                         x=cdf['duration'],
-                        # Y축에 리스트 2개를 넘겨 [대분류, 구분] 구조의 엑셀 그룹화 테이블을 생성합니다!
+                        # [핵심] Y축을 [대분류, 구분] 2차원 리스트로 넣어 '병합된 셀 모양' 그룹화 생성
                         y=[cdf['대분류'].tolist(), cdf['구분_고유'].tolist()],
                         orientation='h',
                         marker=dict(
@@ -366,21 +376,20 @@ def view_project_detail(sh, pjt_list):
                             showscale=True,
                             colorbar=dict(title="진행률(%)")
                         ),
+                        # 툴팁(호버)에는 스페이스가 잔뜩 들어간 '구분_고유' 대신 원본 '구분'을 보여주도록 설정
                         customdata=cdf[['시작일_str', '종료일_str', '대분류', '구분']].values,
                         hovertemplate="<b>[%{customdata[2]}] %{customdata[3]}</b><br>시작일: %{customdata[0]}<br>종료일: %{customdata[1]}<br>진행률: %{marker.color}%<extra></extra>"
                     ))
                     
-                    # 오늘 날짜 보라색 기준선
                     today_ms = pd.Timestamp.now().normalize().timestamp() * 1000
                     fig.add_vline(x=today_ms, line_width=2.5, line_color="purple", 
                                   annotation_text="오늘", annotation_position="top",
                                   annotation_font=dict(color="purple", size=13, weight="bold"))
                     
-                    # X축: 표 디자인 & 25.1 포맷 설정
                     fig.update_xaxes(
                         type="date",             
                         dtick="M1",              
-                        tickformat="%y.%-m",     
+                        tickformat="%y.%-m",     # '25.8' 연.월 표기
                         tickangle=0,             
                         showgrid=True,           
                         gridwidth=1,
@@ -389,15 +398,17 @@ def view_project_detail(sh, pjt_list):
                         title_text=""
                     )
                     
-                    # Y축: 대분류/구분 그룹화 및 표 모양 그리드 활성화
                     fig.update_yaxes(
                         autorange="reversed",
-                        type="multicategory",    # 그룹화 핵심 설정
-                        categoryorder="trace",   # 엑셀에 입력된 순서를 무조건 유지
+                        type="multicategory",    # 멀티 카테고리 (대분류-구분 분리)
+                        categoryorder="trace",   
                         showgrid=True,
                         gridwidth=1,
                         gridcolor='rgba(200, 200, 200, 0.6)',
                         showline=True, linewidth=1, linecolor='rgba(200, 200, 200, 0.6)', mirror=True,
+                        # [핵심] 대분류와 구분 사이에 뚜렷한 세로선(디바이더) 추가
+                        dividercolor='rgba(150, 150, 150, 0.8)',
+                        dividerwidth=1,
                         title_text=""
                     )
                     
