@@ -168,7 +168,8 @@ def view_dashboard(sh, pjt_list):
                         header = data[0][:8]
                         df = pd.DataFrame([r[:8] for r in data[1:]], columns=header) if len(data) > 1 else pd.DataFrame(columns=header)
                         
-                        if len(data[0]) > 8 and str(data[0][8]).strip(): pm_name = str(data[0][8]).strip()
+                        # [수정됨] PM 이름을 I열 2행(index 1)에서 가져옵니다.
+                        if len(data) > 1 and len(data[1]) > 8 and str(data[1][8]).strip(): pm_name = str(data[1][8]).strip()
                         if len(data) > 1 and len(data[1]) > 9 and str(data[1][9]).strip(): this_w = str(data[1][9]).strip()
                         if len(data) > 1 and len(data[1]) > 10 and str(data[1][10]).strip(): next_w = str(data[1][10]).strip()
                     else:
@@ -243,7 +244,9 @@ def view_project_detail(sh, pjt_list):
         if len(data) > 0:
             header = data[0][:8]
             df = pd.DataFrame([r[:8] for r in data[1:]], columns=header) if len(data) > 1 else pd.DataFrame(columns=header)
-            if len(data[0]) > 8: current_pm = str(data[0][8]).strip()
+            
+            # [수정됨] PM 이름을 I열 2행(index 1)에서 가져옵니다.
+            if len(data) > 1 and len(data[1]) > 8: current_pm = str(data[1][8]).strip()
             if len(data) > 1 and len(data[1]) > 9: this_val = str(data[1][9]).strip()
             if len(data) > 1 and len(data[1]) > 10: next_val = str(data[1][10]).strip()
         else:
@@ -254,11 +257,13 @@ def view_project_detail(sh, pjt_list):
 
         col_pm1, col_pm2 = st.columns([3, 1])
         with col_pm1:
-            new_pm = st.text_input("프로젝트 담당 PM (I1 셀)", value=current_pm)
+            # [수정됨] UI 라벨 변경 I1 -> I2
+            new_pm = st.text_input("프로젝트 담당 PM (I2 셀)", value=current_pm)
         with col_pm2:
             st.write("")
             if st.button("PM 성함 저장"):
-                safe_api_call(ws.update, 'I1', [[new_pm]])
+                # [수정됨] 저장 위치 I1 -> I2
+                safe_api_call(ws.update, 'I2', [[new_pm]])
                 st.success("PM이 업데이트되었습니다!")
         
         st.divider()
@@ -339,7 +344,9 @@ def view_project_detail(sh, pjt_list):
             full_data = []
             header_8 = edited.columns.values.tolist()[:8]
             while len(header_8) < 8: header_8.append("")
-            full_data.append(header_8 + [new_pm])
+            
+            # [수정됨] I1 자리는 이제 헤더인 "PM"으로 고정시킵니다.
+            full_data.append(header_8 + ["PM"])
             
             edited_rows = edited.fillna("").astype(str).values.tolist()
             if len(edited_rows) > 0:
@@ -347,10 +354,14 @@ def view_project_detail(sh, pjt_list):
                     r_8 = r[:8]
                     while len(r_8) < 8: r_8.append("")
                     if i == 0:
-                        r_8.extend(["", in_this, in_next])
+                        # [수정됨] 2행(데이터 1행) I열에 PM 이름을 넣습니다.
+                        r_8.extend([new_pm, in_this, in_next])
+                    else:
+                        # [수정됨] 사용자들이 하단에도 모두 기입하는 편의를 위해 나머지 행(I열)도 PM 이름으로 채워줍니다.
+                        r_8.extend([new_pm])
                     full_data.append(r_8)
             else:
-                full_data.append([""] * 8 + ["", in_this, in_next])
+                full_data.append([""] * 8 + [new_pm, in_this, in_next])
                 
             safe_api_call(ws.clear)
             safe_api_call(ws.update, 'A1', full_data)
@@ -378,8 +389,6 @@ def view_solar(sh):
                 locs = sorted(df_db['지점'].unique().tolist())
                 sel_locs = st.multiselect("조회 지역 선택", locs, default=locs[:3] if len(locs)>3 else locs)
             with f2:
-                # dr = st.date_input("조회 기간", [df_db['날짜'].min().date(), df_db['날짜'].max().date()])
-                # [수정] 2025년 1월 1일 ~ 2025년 12월 31일을 기본값으로 설정
                 default_start = datetime.date(2025, 1, 1)
                 default_end = datetime.date(2025, 12, 31)
                 dr = st.date_input("조회 기간", [default_start, default_end])
