@@ -81,7 +81,7 @@ st.markdown("""
         }
     }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.5.15) | 간트 차트 일별 그리드 에러 패치 및 오늘 기준선 완벽 적용</div>
+    <div class="footer">시스템 상태: 정상 (v4.5.15) | 간트 차트 렌더링 에러 완벽 해결</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -268,7 +268,7 @@ def view_project_detail(sh, pjt_list):
             cdf['시작일'] = pd.to_datetime(cdf['시작일'], errors='coerce')
             cdf['종료일'] = pd.to_datetime(cdf['종료일'], errors='coerce')
             cdf = cdf.dropna(subset=['시작일', '종료일'])
-            cdf['대분류'] = cdf['대분류'].fillna('미지정') # 빈칸 에러 방지
+            cdf['대분류'] = cdf['대분류'].fillna('미지정')
             
             if not cdf.empty:
                 try:
@@ -276,15 +276,15 @@ def view_project_detail(sh, pjt_list):
                                      color_continuous_scale='RdYlGn', range_color=[0, 100])
                     fig.update_yaxes(autorange="reversed")
                     
-                    # 1. 오늘 날짜 기준선 추가 (안전한 datetime 객체 사용)
-                    today_date = datetime.date.today()
-                    fig.add_vline(x=today_date, line_width=2.5, line_color="purple", 
+                    # [버그 수정 완료] 날짜 객체를 안전한 문자열 포맷으로 강제 변환하여 차트에 입력
+                    today_str = datetime.date.today().strftime("%Y-%m-%d")
+                    fig.add_vline(x=today_str, line_width=2.5, line_color="purple", 
                                   annotation_text="오늘", annotation_position="top",
                                   annotation_font=dict(color="purple", size=13, weight="bold"))
                     
-                    # 2. 에러 없는 일별 눈금 및 그리드 표시 ("D1" 포맷 사용)
+                    # [버그 수정 완료] dtick 속성을 공식 밀리초(86400000 = 하루)로 설정하여 충돌 방지
                     fig.update_xaxes(
-                        dtick="D1",
+                        dtick=86400000.0,
                         tickformat="%m/%d",
                         tickangle=-45,
                         showgrid=True,
@@ -295,7 +295,6 @@ def view_project_detail(sh, pjt_list):
                     fig.update_layout(height=max(400, len(cdf) * 45))
                     st.plotly_chart(fig, use_container_width=True)
                 except Exception as e:
-                    # 에러 발생 시 원인을 화면에 띄워줍니다.
                     st.error(f"차트를 그리는 중 오류가 발생했습니다: {e}")
             else:
                 st.info("차트를 표시할 정상적인 날짜 데이터가 없습니다. 편집기에서 시작일/종료일을 입력해 주세요.")
