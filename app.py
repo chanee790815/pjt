@@ -79,11 +79,10 @@ st.markdown("""
             flex: 0 0 75px !important;
             min-width: 75px !important;
         }
-        /* 모바일 상단 메트릭 줄바꿈 */
         .metric-container { flex-wrap: wrap; }
     }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.5.15) | 대시보드 PM 필터 및 상태 카운트 기능 추가 완료</div>
+    <div class="footer">시스템 상태: 정상 (v4.5.15) | 차트 렌더링 타입 에러 완벽 차단 완료</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -150,11 +149,10 @@ def navigate_to_project(p_name):
 # [SECTION 2] 뷰(View) 함수
 # ---------------------------------------------------------
 
-# 1. 통합 대시보드 (필터 추가 버전)
+# 1. 통합 대시보드
 def view_dashboard(sh, pjt_list):
     st.title("📊 통합 대시보드 (현황 브리핑)")
     
-    # 1. 모든 프로젝트 데이터를 먼저 로드 (필터링 및 개수 집계용)
     dashboard_data = []
     
     with st.spinner("프로젝트 데이터를 분석 중입니다..."):
@@ -203,29 +201,25 @@ def view_dashboard(sh, pjt_list):
                     "b_style": b_style
                 })
             except Exception as e:
-                pass # 에러 발생 프로젝트는 일단 스킵
+                pass
 
-    # 2. 담당자(PM) 필터 생성
     all_pms = sorted(list(set([d["pm_name"] for d in dashboard_data])))
     
     f_col1, f_col2 = st.columns([1, 3])
     with f_col1:
         selected_pm = st.selectbox("👤 담당자 조회", ["전체"] + all_pms)
         
-    # 3. 데이터 필터링 적용
     if selected_pm != "전체":
         filtered_data = [d for d in dashboard_data if d["pm_name"] == selected_pm]
     else:
         filtered_data = dashboard_data
 
-    # 4. 상태별 개수 집계
     total_cnt = len(filtered_data)
     normal_cnt = len([d for d in filtered_data if d['status_ui'] == "🟢 정상"])
     delay_cnt = len([d for d in filtered_data if d['status_ui'] == "🔴 지연"])
     done_cnt = len([d for d in filtered_data if d['status_ui'] == "🔵 완료"])
 
     with f_col2:
-        # 요약 정보 메트릭스 (가로 배치)
         st.markdown(f"""
             <div class="metric-container" style="display: flex; gap: 10px; align-items: center; height: 100%; padding-top: 28px;">
                 <div style="background: rgba(128,128,128,0.1); padding: 7px 12px; border-radius: 6px; font-weight: bold; font-size: 13px;">
@@ -245,7 +239,6 @@ def view_dashboard(sh, pjt_list):
         
     st.divider()
 
-    # 5. 필터링된 프로젝트 카드 렌더링
     if total_cnt == 0:
         st.info("선택된 담당자의 프로젝트가 없습니다.")
     else:
@@ -267,13 +260,7 @@ def view_dashboard(sh, pjt_list):
                         """, unsafe_allow_html=True)
                         
                     with h_col2:
-                        st.button(
-                            "🔍 상세", 
-                            key=f"btn_go_{d['p_name']}", 
-                            on_click=navigate_to_project, 
-                            args=(d['p_name'],), 
-                            use_container_width=True
-                        )
+                        st.button("🔍 상세", key=f"btn_go_{d['p_name']}", on_click=navigate_to_project, args=(d['p_name'],), use_container_width=True)
                     
                     st.markdown(f'''
                         <div style="margin-bottom:4px; margin-top:2px;">
@@ -308,11 +295,11 @@ def view_project_detail(sh, pjt_list):
         else:
             df = pd.DataFrame(columns=["시작일", "종료일", "대분류", "구분", "진행상태", "비고", "진행률"])
 
-        # [시간 삭제 로직] 에디터에서 00:00:00이 보이지 않도록 문자열로 잘라서 날짜만 킵
+        # 데이터 에디터에 '00:00:00' 시간 단위 노출 방지
         if '시작일' in df.columns:
-            df['시작일'] = df['시작일'].astype(str).str.split().str[0]
+            df['시작일'] = df['시작일'].astype(str).str.split().str[0].replace('nan', '')
         if '종료일' in df.columns:
-            df['종료일'] = df['종료일'].astype(str).str.split().str[0]
+            df['종료일'] = df['종료일'].astype(str).str.split().str[0].replace('nan', '')
 
         if '진행률' in df.columns:
             df['진행률'] = pd.to_numeric(df['진행률'], errors='coerce').fillna(0)
@@ -333,33 +320,47 @@ def view_project_detail(sh, pjt_list):
         with tab1:
             try:
                 cdf = df.copy()
+                
+                # [강력 방어] 타입 변환 중 생기는 잔여 오류를 원천 차단
                 cdf['시작일'] = pd.to_datetime(cdf['시작일'], errors='coerce')
                 cdf['종료일'] = pd.to_datetime(cdf['종료일'], errors='coerce')
                 cdf = cdf.dropna(subset=['시작일', '종료일'])
                 
-                if '대분류' in cdf.columns:
-                    cdf['대분류'] = cdf['대분류'].astype(str).replace({'nan': '미지정', '': '미지정'})
-                
                 if not cdf.empty:
-                    fig = px.timeline(cdf, x_start="시작일", x_end="종료일", y="대분류", color="진행률", 
-                                     color_continuous_scale='RdYlGn', range_color=[0, 100])
-                    fig.update_yaxes(autorange="reversed")
+                    # 인덱스 초기화 및 타입 강제 변환
+                    cdf = cdf.reset_index(drop=True)
+                    if '대분류' in cdf.columns:
+                        cdf['대분류'] = cdf['대분류'].astype(str).replace({'nan': '미지정', '': '미지정'})
+                    cdf['진행률'] = pd.to_numeric(cdf['진행률'], errors='coerce').fillna(0).astype(float)
                     
-                    # [호버 개선] 마우스 올렸을 때 00:00:00 삭제하고 연-월-일만 노출
+                    # 호버 전용 깨끗한 날짜 문자열 컬럼 생성 (내부 계산용 데이터와 분리)
+                    cdf['시작일_str'] = cdf['시작일'].dt.strftime('%Y-%m-%d')
+                    cdf['종료일_str'] = cdf['종료일'].dt.strftime('%Y-%m-%d')
+                    
+                    # 렌더링
+                    fig = px.timeline(cdf, x_start="시작일", x_end="종료일", y="대분류", color="진행률", 
+                                     color_continuous_scale='RdYlGn', range_color=[0, 100],
+                                     custom_data=['시작일_str', '종료일_str']) # 호버 변수 연결
+                    
+                    # 카테고리 순서를 데이터프레임 원래 순서대로 고정시켜 꼬임 방지
+                    fig.update_yaxes(autorange="reversed", categoryorder="array", categoryarray=cdf['대분류'].unique())
+                    
+                    # 툴팁(호버)에서 시간(00:00:00) 삭제 및 포맷팅 적용
                     fig.update_traces(
-                        hovertemplate="<b>%{y}</b><br>시작일: %{base|%Y-%m-%d}<br>종료일: %{x|%Y-%m-%d}<br>진행률: %{marker.color}%<extra></extra>"
+                        hovertemplate="<b>%{y}</b><br>시작일: %{customdata[0]}<br>종료일: %{customdata[1]}<br>진행률: %{marker.color}%<extra></extra>"
                     )
                     
-                    today_str = datetime.date.today().strftime("%Y-%m-%d")
-                    fig.add_vline(x=today_str, line_width=2.5, line_color="purple", 
+                    # 오늘 날짜 기준선 (안전한 Timestamp 밀리초 방식 적용)
+                    today_ms = pd.Timestamp.now().normalize().timestamp() * 1000
+                    fig.add_vline(x=today_ms, line_width=2.5, line_color="purple", 
                                   annotation_text="오늘", annotation_position="top",
                                   annotation_font=dict(color="purple", size=13, weight="bold"))
                     
-                    # [표 모양 디자인 적용] 흰색 배경, 회색 테두리, 25.1 형식 렌더링
+                    # 엑셀 스타일 테두리 및 월별 그리드 (YY.MM 형식 표기)
                     fig.update_xaxes(
                         type="date",             
                         dtick="M1",              
-                        tickformat="%y.%-m",     # '25.1' 형태로 포맷 변경
+                        tickformat="%y.%m",      # 25.01 형태로 깔끔하게 표시
                         tickangle=0,             
                         showgrid=True,           
                         gridwidth=1,
@@ -374,7 +375,7 @@ def view_project_detail(sh, pjt_list):
                         showline=True, linewidth=1, linecolor='rgba(200, 200, 200, 0.6)', mirror=True
                     )
                     
-                    unique_cat_count = len(cdf['대분류'].unique()) if '대분류' in cdf.columns else 1
+                    unique_cat_count = len(cdf['대분류'].unique())
                     fig.update_layout(
                         height=max(400, unique_cat_count * 50),
                         plot_bgcolor='white',  
@@ -384,9 +385,9 @@ def view_project_detail(sh, pjt_list):
                     
                     st.plotly_chart(fig, use_container_width=True)
                 else:
-                    st.info("차트를 그릴 수 있는 유효한 날짜 데이터가 없습니다.")
+                    st.info("차트를 그릴 수 있는 유효한 날짜 데이터가 부족합니다. 편집기에서 날짜를 확인해 주세요.")
             except Exception as e:
-                st.error(f"차트를 그리는 중 오류가 발생했습니다: {e}")
+                st.error(f"차트를 그리는 중 세부 오류가 발생했습니다: {e}")
 
         with tab2:
             try:
