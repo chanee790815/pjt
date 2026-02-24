@@ -82,7 +82,7 @@ st.markdown("""
         .metric-container { flex-wrap: wrap; }
     }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.5.15) | 동일 대분류 겹침 누락 현상 고유 인덱싱으로 완벽 해결</div>
+    <div class="footer">시스템 상태: 정상 (v4.5.15) | 대분류-구분 멀티 카테고리(그룹화) 차트 엔진 적용 완료</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -295,7 +295,6 @@ def view_project_detail(sh, pjt_list):
         else:
             df = pd.DataFrame(columns=["시작일", "종료일", "대분류", "구분", "진행상태", "비고", "진행률"])
 
-        # 데이터 에디터에 '00:00:00' 시간 단위 노출 방지
         if '시작일' in df.columns:
             df['시작일'] = df['시작일'].astype(str).str.split().str[0].replace('nan', '')
         if '종료일' in df.columns:
@@ -320,14 +319,18 @@ def view_project_detail(sh, pjt_list):
         with tab1:
             try:
                 cdf = df.copy()
+                original_len = len(cdf)
                 
-                # 타입 변환 중 생기는 잔여 오류 원천 차단
                 cdf['시작일'] = pd.to_datetime(cdf['시작일'], errors='coerce')
                 cdf['종료일'] = pd.to_datetime(cdf['종료일'], errors='coerce')
                 cdf = cdf.dropna(subset=['시작일', '종료일'])
                 
+                dropped_len = original_len - len(cdf)
+                if dropped_len > 0:
+                    st.warning(f"⚠️ 날짜 형식 오류(예: 2월 30일 등 존재하지 않는 날짜)로 인해 {dropped_len}개의 항목이 차트에서 제외되었습니다.")
+                
                 if not cdf.empty:
-                    # 인덱스를 초기화하여 엑셀의 행 번호와 일치하도록 구성
+                    # 인덱스 초기화로 완벽한 순서 보장
                     cdf = cdf.reset_index(drop=True)
                     
                     if '대분류' in cdf.columns:
@@ -337,42 +340,43 @@ def view_project_detail(sh, pjt_list):
                         
                     cdf['진행률'] = pd.to_numeric(cdf['진행률'], errors='coerce').fillna(0).astype(float)
                     
-                    # [핵심 방어코드] 데이터 중복(1구역, 2구역 등)으로 인해 한 줄에 겹쳐서 숨겨지는 현상을
-                    # 행 번호(index)를 추가한 고유한 Y축 라벨 생성으로 완벽히 독립된 바(Bar)로 분리함.
-                    def make_y_label(row):
-                        cat = str(row['대분류']).strip()
-                        sub = str(row['구분']).strip()
-                        if cat and cat not in ['미지정', 'nan', 'None']:
-                            return f"{row.name + 1}. [{cat}] {sub}"
-                        else:
-                            return f"{row.name + 1}. {sub}"
-                            
-                    cdf['Y_Label'] = cdf.apply(make_y_label, axis=1)
+                    # [핵심] 겹침 방지를 위해 '구분' 텍스트 앞에 순번을 은밀하게 붙여 고유값을 생성
+                    cdf['구분_고유'] = cdf.apply(lambda r: f"{r.name + 1}. {str(r['구분']).strip()}", axis=1)
                     
-                    # 호버 전용 깨끗한 날짜 문자열 컬럼 생성
+                    # 기간을 밀리초(ms)로 환산 (0일이어도 최소 1일 두께를 가짐)
+                    cdf['duration'] = (cdf['종료일'] - cdf['시작일']).dt.total_seconds() * 1000
+                    cdf['duration'] = cdf['duration'].apply(lambda d: 86400000.0 if d <= 0 else d)
+                    
                     cdf['시작일_str'] = cdf['시작일'].dt.strftime('%Y-%m-%d')
                     cdf['종료일_str'] = cdf['종료일'].dt.strftime('%Y-%m-%d')
                     
-                    # 렌더링 (y축을 고유 라벨인 Y_Label로 지정)
-                    fig = px.timeline(cdf, x_start="시작일", x_end="종료일", y="Y_Label", color="진행률", 
-                                     color_continuous_scale='RdYlGn', range_color=[0, 100],
-                                     custom_data=['시작일_str', '종료일_str', '대분류', '구분']) 
-                    
-                    # 카테고리 순서를 엑셀과 완전히 똑같게 강제 고정
-                    fig.update_yaxes(autorange="reversed", categoryorder="array", categoryarray=cdf['Y_Label'].tolist())
-                    
-                    # 툴팁(호버)에서 시간(00:00:00) 삭제 및 보기 좋게 포맷팅
-                    fig.update_traces(
+                    # [핵심] 멀티카테고리를 위해 go.Bar 엔진으로 교체 (px.timeline 대체)
+                    fig = go.Figure()
+                    fig.add_trace(go.Bar(
+                        base=cdf['시작일'],
+                        x=cdf['duration'],
+                        # Y축에 리스트 2개를 넘겨 [대분류, 구분] 구조의 엑셀 그룹화 테이블을 생성합니다!
+                        y=[cdf['대분류'].tolist(), cdf['구분_고유'].tolist()],
+                        orientation='h',
+                        marker=dict(
+                            color=cdf['진행률'],
+                            colorscale='RdYlGn',
+                            cmin=0,
+                            cmax=100,
+                            showscale=True,
+                            colorbar=dict(title="진행률(%)")
+                        ),
+                        customdata=cdf[['시작일_str', '종료일_str', '대분류', '구분']].values,
                         hovertemplate="<b>[%{customdata[2]}] %{customdata[3]}</b><br>시작일: %{customdata[0]}<br>종료일: %{customdata[1]}<br>진행률: %{marker.color}%<extra></extra>"
-                    )
+                    ))
                     
-                    # 오늘 날짜 기준선 (안전한 Timestamp 방식)
+                    # 오늘 날짜 보라색 기준선
                     today_ms = pd.Timestamp.now().normalize().timestamp() * 1000
                     fig.add_vline(x=today_ms, line_width=2.5, line_color="purple", 
                                   annotation_text="오늘", annotation_position="top",
                                   annotation_font=dict(color="purple", size=13, weight="bold"))
                     
-                    # [표 모양 디자인 적용] 흰색 배경, 회색 테두리, 25.1 형식 렌더링
+                    # X축: 표 디자인 & 25.1 포맷 설정
                     fig.update_xaxes(
                         type="date",             
                         dtick="M1",              
@@ -385,7 +389,11 @@ def view_project_detail(sh, pjt_list):
                         title_text=""
                     )
                     
+                    # Y축: 대분류/구분 그룹화 및 표 모양 그리드 활성화
                     fig.update_yaxes(
+                        autorange="reversed",
+                        type="multicategory",    # 그룹화 핵심 설정
+                        categoryorder="trace",   # 엑셀에 입력된 순서를 무조건 유지
                         showgrid=True,
                         gridwidth=1,
                         gridcolor='rgba(200, 200, 200, 0.6)',
@@ -393,7 +401,6 @@ def view_project_detail(sh, pjt_list):
                         title_text=""
                     )
                     
-                    # 행 개수에 비례하여 차트 세로 길이 넉넉하게 자동 조절 (항목당 35px 부여)
                     fig.update_layout(
                         height=max(400, len(cdf) * 35),
                         plot_bgcolor='white',  
