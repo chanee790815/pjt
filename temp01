@@ -81,7 +81,7 @@ st.markdown("""
         }
     }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.5.15) | 모바일 세로모드 버튼 줄바꿈 강제 고정 완료</div>
+    <div class="footer">시스템 상태: 정상 (v4.5.15) | 일괄 업로드 자동 매칭 적용 완료</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -168,7 +168,6 @@ def view_dashboard(sh, pjt_list):
                         header = data[0][:8]
                         df = pd.DataFrame([r[:8] for r in data[1:]], columns=header) if len(data) > 1 else pd.DataFrame(columns=header)
                         
-                        # [수정됨] PM 이름을 I열 2행(index 1)에서 가져옵니다.
                         if len(data) > 1 and len(data[1]) > 8 and str(data[1][8]).strip(): pm_name = str(data[1][8]).strip()
                         if len(data) > 1 and len(data[1]) > 9 and str(data[1][9]).strip(): this_w = str(data[1][9]).strip()
                         if len(data) > 1 and len(data[1]) > 10 and str(data[1][10]).strip(): next_w = str(data[1][10]).strip()
@@ -190,7 +189,6 @@ def view_dashboard(sh, pjt_list):
                         status_ui = "🔵 완료"
                         b_style = "status-done"
                     
-                    # 헤더: 2단 구성 (비율 수정)
                     h_col1, h_col2 = st.columns([7.5, 2.5], gap="small")
                     
                     with h_col1:
@@ -213,7 +211,6 @@ def view_dashboard(sh, pjt_list):
                             use_container_width=True
                         )
                     
-                    # 정보 표시 영역
                     st.markdown(f'''
                         <div style="margin-bottom:4px; margin-top:2px;">
                             <p style="font-size:12.5px; opacity: 0.7; margin-top:0; margin-bottom:4px;">계획: {avg_plan}% | 실적: {avg_act}%</p>
@@ -221,7 +218,6 @@ def view_dashboard(sh, pjt_list):
                         </div>
                     ''', unsafe_allow_html=True)
                     
-                    # 진행바 표시
                     st.progress(min(1.0, max(0.0, avg_act/100)))
                     
                 except Exception as e:
@@ -245,7 +241,6 @@ def view_project_detail(sh, pjt_list):
             header = data[0][:8]
             df = pd.DataFrame([r[:8] for r in data[1:]], columns=header) if len(data) > 1 else pd.DataFrame(columns=header)
             
-            # [수정됨] PM 이름을 I열 2행(index 1)에서 가져옵니다.
             if len(data) > 1 and len(data[1]) > 8: current_pm = str(data[1][8]).strip()
             if len(data) > 1 and len(data[1]) > 9: this_val = str(data[1][9]).strip()
             if len(data) > 1 and len(data[1]) > 10: next_val = str(data[1][10]).strip()
@@ -257,12 +252,10 @@ def view_project_detail(sh, pjt_list):
 
         col_pm1, col_pm2 = st.columns([3, 1])
         with col_pm1:
-            # [수정됨] UI 라벨 변경 I1 -> I2
             new_pm = st.text_input("프로젝트 담당 PM (I2 셀)", value=current_pm)
         with col_pm2:
             st.write("")
             if st.button("PM 성함 저장"):
-                # [수정됨] 저장 위치 I1 -> I2
                 safe_api_call(ws.update, 'I2', [[new_pm]])
                 st.success("PM이 업데이트되었습니다!")
         
@@ -345,7 +338,6 @@ def view_project_detail(sh, pjt_list):
             header_8 = edited.columns.values.tolist()[:8]
             while len(header_8) < 8: header_8.append("")
             
-            # [수정됨] I1 자리는 이제 헤더인 "PM"으로 고정시킵니다.
             full_data.append(header_8 + ["PM"])
             
             edited_rows = edited.fillna("").astype(str).values.tolist()
@@ -354,10 +346,8 @@ def view_project_detail(sh, pjt_list):
                     r_8 = r[:8]
                     while len(r_8) < 8: r_8.append("")
                     if i == 0:
-                        # [수정됨] 2행(데이터 1행) I열에 PM 이름을 넣습니다.
                         r_8.extend([new_pm, in_this, in_next])
                     else:
-                        # [수정됨] 사용자들이 하단에도 모두 기입하는 편의를 위해 나머지 행(I열)도 PM 이름으로 채워줍니다.
                         r_8.extend([new_pm])
                     full_data.append(r_8)
             else:
@@ -458,15 +448,46 @@ def view_project_admin(sh, pjt_list):
             safe_api_call(sh.del_worksheet, ws)
             st.success("삭제 완료!"); st.rerun()
 
+    # --- [수정됨] 엑셀 내 모든 시트를 순회하며 자동으로 매칭하여 일괄 업로드합니다. ---
     with t4:
-        target_up = st.selectbox("업로드 대상", ["선택"] + pjt_list, key="up")
-        file = st.file_uploader("엑셀 파일", type=['xlsx'])
-        if target_up != "선택" and file and st.button("동기화"):
-            df_up = pd.read_excel(file).fillna("").astype(str)
-            ws = safe_api_call(sh.worksheet, target_up)
-            safe_api_call(ws.clear)
-            safe_api_call(ws.update, [df_up.columns.values.tolist()] + df_up.values.tolist())
-            st.success("완료!")
+        st.info("💡 엑셀 파일 내의 '시트 이름'이 구글 시트의 '프로젝트명'과 일치하면 한 번에 모두 업데이트됩니다.")
+        file = st.file_uploader("통합 엑셀 파일 업로드", type=['xlsx'])
+        
+        if file and st.button("🔄 일괄 동기화 (자동 매칭)"):
+            try:
+                # sheet_name=None 으로 설정하여 엑셀 내 모든 시트를 딕셔너리 형태로 읽어옵니다.
+                all_sheets = pd.read_excel(file, sheet_name=None, engine='openpyxl')
+                
+                updated_count = 0
+                skipped_sheets = []
+                
+                with st.spinner("데이터를 매칭하여 일괄 업데이트 중입니다..."):
+                    for sheet_name, df_up in all_sheets.items():
+                        s_name = sheet_name.strip() # 공백 제거
+                        
+                        # 구글 시트에 해당 이름이 있는지 확인
+                        if s_name in pjt_list:
+                            ws = safe_api_call(sh.worksheet, s_name)
+                            df_up = df_up.fillna("").astype(str)
+                            
+                            safe_api_call(ws.clear)
+                            safe_api_call(ws.update, [df_up.columns.values.tolist()] + df_up.values.tolist())
+                            updated_count += 1
+                        else:
+                            skipped_sheets.append(s_name)
+                
+                # 결과 피드백
+                if updated_count > 0:
+                    st.success(f"🎉 총 {updated_count}개의 프로젝트가 성공적으로 일괄 업데이트되었습니다!")
+                else:
+                    st.warning("⚠️ 일치하는 시트 이름이 없어 업데이트된 항목이 없습니다.")
+                    
+                if skipped_sheets:
+                    st.caption(f"건너뛴 시트 (이름 불일치 또는 시스템 시트): {', '.join(skipped_sheets)}")
+                    
+            except Exception as e:
+                st.error(f"파일 처리 중 오류가 발생했습니다: {e}")
+    # ---------------------------------------------------------------------------------
 
     with t5:
         if st.button("📚 통합 백업 엑셀 생성"):
