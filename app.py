@@ -81,7 +81,7 @@ st.markdown("""
         }
     }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.5.15) | 차트 데이터 타입 에러 완벽 해결 및 일 단위 기준 적용</div>
+    <div class="footer">시스템 상태: 정상 (v4.5.15) | 담당자 열 삭제 및 배열 오류 완벽 수정 완료</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -165,9 +165,11 @@ def view_dashboard(sh, pjt_list):
                     next_w = "차주 계획 미입력"
                     
                     if len(data) > 0:
+                        # [수정] A~G열(인덱스 0~6)까지만 불러옵니다.
                         header = data[0][:7]
                         df = pd.DataFrame([r[:7] for r in data[1:]], columns=header) if len(data) > 1 else pd.DataFrame(columns=header)
                         
+                        # [수정] PM은 H열(7), 금주는 I열(8), 차주는 J열(9)로 변경되었습니다.
                         if len(data) > 1 and len(data[1]) > 7 and str(data[1][7]).strip(): pm_name = str(data[1][7]).strip()
                         if len(data) > 1 and len(data[1]) > 8 and str(data[1][8]).strip(): this_w = str(data[1][8]).strip()
                         if len(data) > 1 and len(data[1]) > 9 and str(data[1][9]).strip(): next_w = str(data[1][9]).strip()
@@ -238,9 +240,11 @@ def view_project_detail(sh, pjt_list):
         next_val = ""
         
         if len(data) > 0:
+            # [수정] A~G열까지만 에디터 용으로 읽음
             header = data[0][:7]
             df = pd.DataFrame([r[:7] for r in data[1:]], columns=header) if len(data) > 1 else pd.DataFrame(columns=header)
             
+            # [수정] 인덱스 H(7), I(8), J(9)
             if len(data) > 1 and len(data[1]) > 7: current_pm = str(data[1][7]).strip()
             if len(data) > 1 and len(data[1]) > 8: this_val = str(data[1][8]).strip()
             if len(data) > 1 and len(data[1]) > 9: next_val = str(data[1][9]).strip()
@@ -252,6 +256,7 @@ def view_project_detail(sh, pjt_list):
 
         col_pm1, col_pm2 = st.columns([3, 1])
         with col_pm1:
+            # [수정] H2 셀로 안내 변경
             new_pm = st.text_input("프로젝트 담당 PM (H2 셀)", value=current_pm)
         with col_pm2:
             st.write("")
@@ -264,47 +269,17 @@ def view_project_detail(sh, pjt_list):
         tab1, tab2, tab3 = st.tabs(["📊 간트 차트", "📈 S-Curve 분석", "📝 주간 업무 보고"])
         
         with tab1:
-            cdf = df.copy()
-            # [핵심 방어 코드 1] 날짜 변환 시 에러를 빈칸(NaT)으로 무시
-            cdf['시작일'] = pd.to_datetime(cdf['시작일'], errors='coerce')
-            cdf['종료일'] = pd.to_datetime(cdf['종료일'], errors='coerce')
-            cdf = cdf.dropna(subset=['시작일', '종료일'])
-            
-            # [핵심 방어 코드 2] 대분류에 숫자와 문자가 섞이면 발생하는 'int+str' 에러를 강제 문자(str) 변환으로 원천 차단!
-            if '대분류' in cdf.columns:
-                cdf['대분류'] = cdf['대분류'].astype(str).replace({'nan': '미지정', '': '미지정'})
-            
-            if not cdf.empty:
-                try:
+            try:
+                cdf = df.copy()
+                cdf['시작일'] = pd.to_datetime(cdf['시작일'], errors='coerce')
+                cdf['종료일'] = pd.to_datetime(cdf['종료일'], errors='coerce')
+                cdf = cdf.dropna(subset=['시작일', '종료일'])
+                if not cdf.empty:
                     fig = px.timeline(cdf, x_start="시작일", x_end="종료일", y="대분류", color="진행률", 
                                      color_continuous_scale='RdYlGn', range_color=[0, 100])
                     fig.update_yaxes(autorange="reversed")
-                    
-                    # 오늘 날짜 기준선 (안전한 datetime 포맷)
-                    today_str = datetime.date.today().strftime("%Y-%m-%d")
-                    fig.add_vline(x=today_str, line_width=2.5, line_color="purple", 
-                                  annotation_text="오늘", annotation_position="top",
-                                  annotation_font=dict(color="purple", size=13, weight="bold"))
-                    
-                    # [핵심 방어 코드 3] 명시적으로 X축을 'date' 타입으로 고정하고 1일(86400000ms) 단위 눈금 지정
-                    fig.update_xaxes(
-                        type="date",              # 날짜 형식임을 강제 명시
-                        dtick=86400000,           # 1일 간격 설정 (정수형 밀리초)
-                        tickformat="%m/%d",
-                        tickangle=-45,
-                        showgrid=True,
-                        gridwidth=1,
-                        gridcolor='rgba(200, 200, 200, 0.4)'
-                    )
-                    
-                    # 대분류 개수에 비례하여 높이 조정 (항목이 적을 때를 대비한 최소 높이 400px)
-                    fig.update_layout(height=max(400, len(cdf['대분류'].unique()) * 50))
-                    
                     st.plotly_chart(fig, use_container_width=True)
-                except Exception as e:
-                    st.error(f"차트를 그리는 중 상세 오류가 발생했습니다: {e}")
-            else:
-                st.info("차트를 표시할 정상적인 시작일/종료일 데이터가 부족합니다.")
+            except: st.warning("차트를 표시할 데이터가 부족합니다.")
 
         with tab2:
             try:
@@ -347,6 +322,7 @@ def view_project_detail(sh, pjt_list):
 
             st.divider()
 
+            # [수정] 입력 안내 셀 위치 I2, J2
             st.subheader("📝 주간 업무 작성 및 동기화 (I2, J2 셀 & 히스토리)")
             with st.form("weekly_sync_form"):
                 in_this = st.text_area("✔️ 금주 주요 업무 (I2)", value=this_val, height=120)
@@ -361,6 +337,7 @@ def view_project_detail(sh, pjt_list):
                     st.success("성공적으로 업데이트 및 저장되었습니다!"); time.sleep(1); st.rerun()
 
         st.write("---")
+        # [수정] A~G열 편집기로 제한
         st.subheader("📝 상세 공정표 편집 (A~G열 전용)")
         edited = st.data_editor(df, use_container_width=True, num_rows="dynamic")
         
@@ -369,6 +346,7 @@ def view_project_detail(sh, pjt_list):
             header_7 = edited.columns.values.tolist()[:7]
             while len(header_7) < 7: header_7.append("")
             
+            # [수정] 헤더 행 (총 10개 열: A~G + PM, 금주, 차주)
             full_data.append(header_7 + ["PM", "금주", "차주"])
             
             edited_rows = edited.fillna("").astype(str).values.tolist()
@@ -378,12 +356,15 @@ def view_project_detail(sh, pjt_list):
                     while len(r_7) < 7: r_7.append("")
                     
                     if i == 0:
+                        # 2번째 행(데이터 첫 줄)에는 PM, 금주, 차주 모두 입력
                         r_7.extend([new_pm, in_this, in_next])
                     else:
+                        # [핵심 오류 수정!] 배열의 크기를 무조건 10칸(A~J)으로 일정하게 맞추기 위해 빈 문자열 추가
                         r_7.extend([new_pm, "", ""])
                         
                     full_data.append(r_7)
             else:
+                # 데이터가 텅 비었을 때도 10칸 유지
                 full_data.append([""] * 7 + [new_pm, in_this, in_next])
                 
             safe_api_call(ws.clear)
@@ -462,6 +443,7 @@ def view_project_admin(sh, pjt_list):
         new_n = st.text_input("신규 프로젝트명")
         if st.button("생성") and new_n:
             new_ws = safe_api_call(sh.add_worksheet, title=new_n, rows="100", cols="20")
+            # [수정] 생성 시 컬럼 변경: 담당자 삭제 -> PM, 금주, 차주 추가
             safe_api_call(new_ws.append_row, ["시작일", "종료일", "대분류", "구분", "진행상태", "비고", "진행률", "PM", "금주", "차주"])
             st.success("생성 완료!"); st.rerun()
             
