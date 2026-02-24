@@ -81,7 +81,7 @@ st.markdown("""
         }
     }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.5.15) | 일괄 업로드 자동 매칭 적용 완료</div>
+    <div class="footer">시스템 상태: 정상 (v4.5.15) | 담당자 열 삭제 및 배열 오류 완벽 수정 완료</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -165,12 +165,14 @@ def view_dashboard(sh, pjt_list):
                     next_w = "차주 계획 미입력"
                     
                     if len(data) > 0:
-                        header = data[0][:8]
-                        df = pd.DataFrame([r[:8] for r in data[1:]], columns=header) if len(data) > 1 else pd.DataFrame(columns=header)
+                        # [수정] A~G열(인덱스 0~6)까지만 불러옵니다.
+                        header = data[0][:7]
+                        df = pd.DataFrame([r[:7] for r in data[1:]], columns=header) if len(data) > 1 else pd.DataFrame(columns=header)
                         
-                        if len(data) > 1 and len(data[1]) > 8 and str(data[1][8]).strip(): pm_name = str(data[1][8]).strip()
-                        if len(data) > 1 and len(data[1]) > 9 and str(data[1][9]).strip(): this_w = str(data[1][9]).strip()
-                        if len(data) > 1 and len(data[1]) > 10 and str(data[1][10]).strip(): next_w = str(data[1][10]).strip()
+                        # [수정] PM은 H열(7), 금주는 I열(8), 차주는 J열(9)로 변경되었습니다.
+                        if len(data) > 1 and len(data[1]) > 7 and str(data[1][7]).strip(): pm_name = str(data[1][7]).strip()
+                        if len(data) > 1 and len(data[1]) > 8 and str(data[1][8]).strip(): this_w = str(data[1][8]).strip()
+                        if len(data) > 1 and len(data[1]) > 9 and str(data[1][9]).strip(): next_w = str(data[1][9]).strip()
                     else:
                         df = pd.DataFrame()
 
@@ -238,25 +240,28 @@ def view_project_detail(sh, pjt_list):
         next_val = ""
         
         if len(data) > 0:
-            header = data[0][:8]
-            df = pd.DataFrame([r[:8] for r in data[1:]], columns=header) if len(data) > 1 else pd.DataFrame(columns=header)
+            # [수정] A~G열까지만 에디터 용으로 읽음
+            header = data[0][:7]
+            df = pd.DataFrame([r[:7] for r in data[1:]], columns=header) if len(data) > 1 else pd.DataFrame(columns=header)
             
-            if len(data) > 1 and len(data[1]) > 8: current_pm = str(data[1][8]).strip()
-            if len(data) > 1 and len(data[1]) > 9: this_val = str(data[1][9]).strip()
-            if len(data) > 1 and len(data[1]) > 10: next_val = str(data[1][10]).strip()
+            # [수정] 인덱스 H(7), I(8), J(9)
+            if len(data) > 1 and len(data[1]) > 7: current_pm = str(data[1][7]).strip()
+            if len(data) > 1 and len(data[1]) > 8: this_val = str(data[1][8]).strip()
+            if len(data) > 1 and len(data[1]) > 9: next_val = str(data[1][9]).strip()
         else:
-            df = pd.DataFrame(columns=["시작일", "종료일", "대분류", "구분", "진행상태", "비고", "진행률", "담당자"])
+            df = pd.DataFrame(columns=["시작일", "종료일", "대분류", "구분", "진행상태", "비고", "진행률"])
 
         if '진행률' in df.columns:
             df['진행률'] = pd.to_numeric(df['진행률'], errors='coerce').fillna(0)
 
         col_pm1, col_pm2 = st.columns([3, 1])
         with col_pm1:
-            new_pm = st.text_input("프로젝트 담당 PM (I2 셀)", value=current_pm)
+            # [수정] H2 셀로 안내 변경
+            new_pm = st.text_input("프로젝트 담당 PM (H2 셀)", value=current_pm)
         with col_pm2:
             st.write("")
             if st.button("PM 성함 저장"):
-                safe_api_call(ws.update, 'I2', [[new_pm]])
+                safe_api_call(ws.update, 'H2', [[new_pm]])
                 st.success("PM이 업데이트되었습니다!")
         
         st.divider()
@@ -317,13 +322,14 @@ def view_project_detail(sh, pjt_list):
 
             st.divider()
 
-            st.subheader("📝 주간 업무 작성 및 동기화 (J2, K2 셀 & 히스토리)")
+            # [수정] 입력 안내 셀 위치 I2, J2
+            st.subheader("📝 주간 업무 작성 및 동기화 (I2, J2 셀 & 히스토리)")
             with st.form("weekly_sync_form"):
-                in_this = st.text_area("✔️ 금주 주요 업무 (J2)", value=this_val, height=120)
-                in_next = st.text_area("🔜 차주 주요 업무 (K2)", value=next_val, height=120)
+                in_this = st.text_area("✔️ 금주 주요 업무 (I2)", value=this_val, height=120)
+                in_next = st.text_area("🔜 차주 주요 업무 (J2)", value=next_val, height=120)
                 if st.form_submit_button("시트 데이터 업데이트 및 이력 저장"):
-                    safe_api_call(ws.update, 'J2', [[in_this]])
-                    safe_api_call(ws.update, 'K2', [[in_next]])
+                    safe_api_call(ws.update, 'I2', [[in_this]])
+                    safe_api_call(ws.update, 'J2', [[in_next]])
                     try:
                         h_ws = safe_api_call(sh.worksheet, 'weekly_history')
                         safe_api_call(h_ws.append_row, [datetime.date.today().strftime("%Y-%m-%d"), selected_pjt, in_this, in_next, st.session_state.user_id])
@@ -331,27 +337,35 @@ def view_project_detail(sh, pjt_list):
                     st.success("성공적으로 업데이트 및 저장되었습니다!"); time.sleep(1); st.rerun()
 
         st.write("---")
-        st.subheader("📝 상세 공정표 편집 (A~H열 전용)")
+        # [수정] A~G열 편집기로 제한
+        st.subheader("📝 상세 공정표 편집 (A~G열 전용)")
         edited = st.data_editor(df, use_container_width=True, num_rows="dynamic")
+        
         if st.button("💾 변경사항 전체 저장"):
             full_data = []
-            header_8 = edited.columns.values.tolist()[:8]
-            while len(header_8) < 8: header_8.append("")
+            header_7 = edited.columns.values.tolist()[:7]
+            while len(header_7) < 7: header_7.append("")
             
-            full_data.append(header_8 + ["PM"])
+            # [수정] 헤더 행 (총 10개 열: A~G + PM, 금주, 차주)
+            full_data.append(header_7 + ["PM", "금주", "차주"])
             
             edited_rows = edited.fillna("").astype(str).values.tolist()
             if len(edited_rows) > 0:
                 for i, r in enumerate(edited_rows):
-                    r_8 = r[:8]
-                    while len(r_8) < 8: r_8.append("")
+                    r_7 = r[:7]
+                    while len(r_7) < 7: r_7.append("")
+                    
                     if i == 0:
-                        r_8.extend([new_pm, in_this, in_next])
+                        # 2번째 행(데이터 첫 줄)에는 PM, 금주, 차주 모두 입력
+                        r_7.extend([new_pm, in_this, in_next])
                     else:
-                        r_8.extend([new_pm])
-                    full_data.append(r_8)
+                        # [핵심 오류 수정!] 배열의 크기를 무조건 10칸(A~J)으로 일정하게 맞추기 위해 빈 문자열 추가
+                        r_7.extend([new_pm, "", ""])
+                        
+                    full_data.append(r_7)
             else:
-                full_data.append([""] * 8 + [new_pm, in_this, in_next])
+                # 데이터가 텅 비었을 때도 10칸 유지
+                full_data.append([""] * 7 + [new_pm, in_this, in_next])
                 
             safe_api_call(ws.clear)
             safe_api_call(ws.update, 'A1', full_data)
@@ -429,7 +443,8 @@ def view_project_admin(sh, pjt_list):
         new_n = st.text_input("신규 프로젝트명")
         if st.button("생성") and new_n:
             new_ws = safe_api_call(sh.add_worksheet, title=new_n, rows="100", cols="20")
-            safe_api_call(new_ws.append_row, ["시작일", "종료일", "대분류", "구분", "진행상태", "비고", "진행률", "담당자"])
+            # [수정] 생성 시 컬럼 변경: 담당자 삭제 -> PM, 금주, 차주 추가
+            safe_api_call(new_ws.append_row, ["시작일", "종료일", "대분류", "구분", "진행상태", "비고", "진행률", "PM", "금주", "차주"])
             st.success("생성 완료!"); st.rerun()
             
     with t2:
@@ -448,14 +463,12 @@ def view_project_admin(sh, pjt_list):
             safe_api_call(sh.del_worksheet, ws)
             st.success("삭제 완료!"); st.rerun()
 
-    # --- [수정됨] 엑셀 내 모든 시트를 순회하며 자동으로 매칭하여 일괄 업로드합니다. ---
     with t4:
         st.info("💡 엑셀 파일 내의 '시트 이름'이 구글 시트의 '프로젝트명'과 일치하면 한 번에 모두 업데이트됩니다.")
         file = st.file_uploader("통합 엑셀 파일 업로드", type=['xlsx'])
         
         if file and st.button("🔄 일괄 동기화 (자동 매칭)"):
             try:
-                # sheet_name=None 으로 설정하여 엑셀 내 모든 시트를 딕셔너리 형태로 읽어옵니다.
                 all_sheets = pd.read_excel(file, sheet_name=None, engine='openpyxl')
                 
                 updated_count = 0
@@ -463,9 +476,8 @@ def view_project_admin(sh, pjt_list):
                 
                 with st.spinner("데이터를 매칭하여 일괄 업데이트 중입니다..."):
                     for sheet_name, df_up in all_sheets.items():
-                        s_name = sheet_name.strip() # 공백 제거
+                        s_name = sheet_name.strip()
                         
-                        # 구글 시트에 해당 이름이 있는지 확인
                         if s_name in pjt_list:
                             ws = safe_api_call(sh.worksheet, s_name)
                             df_up = df_up.fillna("").astype(str)
@@ -476,7 +488,6 @@ def view_project_admin(sh, pjt_list):
                         else:
                             skipped_sheets.append(s_name)
                 
-                # 결과 피드백
                 if updated_count > 0:
                     st.success(f"🎉 총 {updated_count}개의 프로젝트가 성공적으로 일괄 업데이트되었습니다!")
                 else:
@@ -487,7 +498,6 @@ def view_project_admin(sh, pjt_list):
                     
             except Exception as e:
                 st.error(f"파일 처리 중 오류가 발생했습니다: {e}")
-    # ---------------------------------------------------------------------------------
 
     with t5:
         if st.button("📚 통합 백업 엑셀 생성"):
