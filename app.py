@@ -82,7 +82,7 @@ st.markdown("""
         .metric-container { flex-wrap: wrap; }
     }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.5.15) | 차트 렌더링 타입 에러 완벽 차단 완료</div>
+    <div class="footer">시스템 상태: 정상 (v4.5.15) | 동일 대분류 겹침 누락 현상 고유 인덱싱으로 완벽 해결</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -321,66 +321,84 @@ def view_project_detail(sh, pjt_list):
             try:
                 cdf = df.copy()
                 
-                # [강력 방어] 타입 변환 중 생기는 잔여 오류를 원천 차단
+                # 타입 변환 중 생기는 잔여 오류 원천 차단
                 cdf['시작일'] = pd.to_datetime(cdf['시작일'], errors='coerce')
                 cdf['종료일'] = pd.to_datetime(cdf['종료일'], errors='coerce')
                 cdf = cdf.dropna(subset=['시작일', '종료일'])
                 
                 if not cdf.empty:
-                    # 인덱스 초기화 및 타입 강제 변환
+                    # 인덱스를 초기화하여 엑셀의 행 번호와 일치하도록 구성
                     cdf = cdf.reset_index(drop=True)
+                    
                     if '대분류' in cdf.columns:
                         cdf['대분류'] = cdf['대분류'].astype(str).replace({'nan': '미지정', '': '미지정'})
+                    if '구분' not in cdf.columns:
+                        cdf['구분'] = '내용 없음'
+                        
                     cdf['진행률'] = pd.to_numeric(cdf['진행률'], errors='coerce').fillna(0).astype(float)
                     
-                    # 호버 전용 깨끗한 날짜 문자열 컬럼 생성 (내부 계산용 데이터와 분리)
+                    # [핵심 방어코드] 데이터 중복(1구역, 2구역 등)으로 인해 한 줄에 겹쳐서 숨겨지는 현상을
+                    # 행 번호(index)를 추가한 고유한 Y축 라벨 생성으로 완벽히 독립된 바(Bar)로 분리함.
+                    def make_y_label(row):
+                        cat = str(row['대분류']).strip()
+                        sub = str(row['구분']).strip()
+                        if cat and cat not in ['미지정', 'nan', 'None']:
+                            return f"{row.name + 1}. [{cat}] {sub}"
+                        else:
+                            return f"{row.name + 1}. {sub}"
+                            
+                    cdf['Y_Label'] = cdf.apply(make_y_label, axis=1)
+                    
+                    # 호버 전용 깨끗한 날짜 문자열 컬럼 생성
                     cdf['시작일_str'] = cdf['시작일'].dt.strftime('%Y-%m-%d')
                     cdf['종료일_str'] = cdf['종료일'].dt.strftime('%Y-%m-%d')
                     
-                    # 렌더링
-                    fig = px.timeline(cdf, x_start="시작일", x_end="종료일", y="대분류", color="진행률", 
+                    # 렌더링 (y축을 고유 라벨인 Y_Label로 지정)
+                    fig = px.timeline(cdf, x_start="시작일", x_end="종료일", y="Y_Label", color="진행률", 
                                      color_continuous_scale='RdYlGn', range_color=[0, 100],
-                                     custom_data=['시작일_str', '종료일_str']) # 호버 변수 연결
+                                     custom_data=['시작일_str', '종료일_str', '대분류', '구분']) 
                     
-                    # 카테고리 순서를 데이터프레임 원래 순서대로 고정시켜 꼬임 방지
-                    fig.update_yaxes(autorange="reversed", categoryorder="array", categoryarray=cdf['대분류'].unique())
+                    # 카테고리 순서를 엑셀과 완전히 똑같게 강제 고정
+                    fig.update_yaxes(autorange="reversed", categoryorder="array", categoryarray=cdf['Y_Label'].tolist())
                     
-                    # 툴팁(호버)에서 시간(00:00:00) 삭제 및 포맷팅 적용
+                    # 툴팁(호버)에서 시간(00:00:00) 삭제 및 보기 좋게 포맷팅
                     fig.update_traces(
-                        hovertemplate="<b>%{y}</b><br>시작일: %{customdata[0]}<br>종료일: %{customdata[1]}<br>진행률: %{marker.color}%<extra></extra>"
+                        hovertemplate="<b>[%{customdata[2]}] %{customdata[3]}</b><br>시작일: %{customdata[0]}<br>종료일: %{customdata[1]}<br>진행률: %{marker.color}%<extra></extra>"
                     )
                     
-                    # 오늘 날짜 기준선 (안전한 Timestamp 밀리초 방식 적용)
+                    # 오늘 날짜 기준선 (안전한 Timestamp 방식)
                     today_ms = pd.Timestamp.now().normalize().timestamp() * 1000
                     fig.add_vline(x=today_ms, line_width=2.5, line_color="purple", 
                                   annotation_text="오늘", annotation_position="top",
                                   annotation_font=dict(color="purple", size=13, weight="bold"))
                     
-                    # 엑셀 스타일 테두리 및 월별 그리드 (YY.MM 형식 표기)
+                    # [표 모양 디자인 적용] 흰색 배경, 회색 테두리, 25.1 형식 렌더링
                     fig.update_xaxes(
                         type="date",             
                         dtick="M1",              
-                        tickformat="%y.%m",      # 25.01 형태로 깔끔하게 표시
+                        tickformat="%y.%-m",     
                         tickangle=0,             
                         showgrid=True,           
                         gridwidth=1,
                         gridcolor='rgba(200, 200, 200, 0.6)',
-                        showline=True, linewidth=1, linecolor='rgba(200, 200, 200, 0.6)', mirror=True
+                        showline=True, linewidth=1, linecolor='rgba(200, 200, 200, 0.6)', mirror=True,
+                        title_text=""
                     )
                     
                     fig.update_yaxes(
                         showgrid=True,
                         gridwidth=1,
                         gridcolor='rgba(200, 200, 200, 0.6)',
-                        showline=True, linewidth=1, linecolor='rgba(200, 200, 200, 0.6)', mirror=True
+                        showline=True, linewidth=1, linecolor='rgba(200, 200, 200, 0.6)', mirror=True,
+                        title_text=""
                     )
                     
-                    unique_cat_count = len(cdf['대분류'].unique())
+                    # 행 개수에 비례하여 차트 세로 길이 넉넉하게 자동 조절 (항목당 35px 부여)
                     fig.update_layout(
-                        height=max(400, unique_cat_count * 50),
+                        height=max(400, len(cdf) * 35),
                         plot_bgcolor='white',  
                         paper_bgcolor='white',
-                        margin=dict(l=20, r=20, t=40, b=20)
+                        margin=dict(l=10, r=20, t=40, b=20)
                     )
                     
                     st.plotly_chart(fig, use_container_width=True)
