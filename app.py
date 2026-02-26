@@ -12,7 +12,7 @@ import io
 import streamlit.components.v1 as components
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v4.5.23", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v4.5.24", page_icon="🏗️", layout="wide")
 
 # --- [UI] 스타일 ---
 st.markdown("""
@@ -56,7 +56,7 @@ st.markdown("""
     }
     
     /* 진행바 마진 최적화 */
-    div[data-testid="stProgressBar"] { margin-bottom: 0px !important; margin-top: 5px !important; }
+    div[data-testid="stProgressBar"] { margin-bottom: 5px !important; margin-top: 10px !important; }
     
     /* ========================================================= */
     /* 모바일 세로 모드에서 버튼이 밑으로 떨어지는 현상 강제 차단 */
@@ -87,41 +87,61 @@ st.markdown("""
     /* [보고서 인쇄/PDF 최적화 CSS - 잘림 완벽 방지] */
     /* ========================================================= */
     @media print {
-        /* 불필요한 UI 숨기기 */
-        header[data-testid="stHeader"] { display: none !important; }
-        section[data-testid="stSidebar"] { display: none !important; }
-        .footer { display: none !important; }
-        iframe { display: none !important; } /* 인쇄 버튼 자체 숨김 */
-        button { display: none !important; } /* 화면 내 다른 버튼들 숨김 */
+        /* 1. 불필요한 UI 및 여백 숨김 */
+        header[data-testid="stHeader"], 
+        section[data-testid="stSidebar"], 
+        .footer, 
+        iframe, 
+        div[data-testid="stToolbar"],
+        div[data-testid="stButton"] { 
+            display: none !important; 
+        }
         
-        /* 스크롤바 제거 및 전체 페이지 강제 펼침 (숨겨진 요소 잘림 방지) */
-        html, body, .stApp, .main, .block-container {
+        /* 2. Flexbox 해제 (크롬 등에서 page-break 오류를 유발하는 주범) */
+        .stApp, .main, .block-container, 
+        div[data-testid="stVerticalBlock"], 
+        div[data-testid="stVerticalBlockBorderWrapper"],
+        div[data-testid="stHorizontalBlock"] {
+            display: block !important;
             height: auto !important;
             overflow: visible !important;
-            position: relative !important;
         }
         
-        /* 여백 최소화 및 배경색 강제 인쇄 설정 */
-        .block-container { max-width: 100% !important; padding: 10px 20px !important; margin: 0 !important; }
-        * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+        /* 3. 전체 폭 100% 사용 (여백 최소화 및 보고서 폭 확보) */
+        .block-container { 
+            max-width: 100% !important; 
+            width: 100% !important; 
+            padding: 10mm 15mm !important; 
+            margin: 0 !important; 
+        }
         
-        /* 카드나 박스가 페이지 중간에 반토막 나는 것(잘림)을 완벽하게 방지 */
-        div[data-testid="stContainer"],
-        .weekly-box,
-        .history-box,
-        div[data-testid="stVerticalBlock"] > div {
+        /* 4. 다단(2단) 레이아웃을 1단(Full Width)으로 풀어서 내용 압축 방지 */
+        div[data-testid="column"] {
+            width: 100% !important;
+            max-width: 100% !important;
+            flex: none !important;
+            display: block !important;
+            margin-bottom: 20px !important;
+        }
+        
+        /* 5. 카드 중간 잘림(Page-break) 완벽 방지 */
+        div[data-testid="stContainer"] {
             page-break-inside: avoid !important;
             break-inside: avoid !important;
+            -webkit-column-break-inside: avoid !important;
             display: block !important;
+            margin-bottom: 25px !important;
+            background-color: transparent !important;
         }
         
-        /* 인쇄 시 카드 아래에 여유 공간 추가 */
-        div[data-testid="stContainer"] {
-            margin-bottom: 20px !important;
+        /* 6. 배경색 강제 출력 및 보정 */
+        * { 
+            -webkit-print-color-adjust: exact !important; 
+            print-color-adjust: exact !important; 
         }
     }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.5.23) | 인쇄/PDF 페이지 잘림(Page-break) 방지 적용</div>
+    <div class="footer">시스템 상태: 정상 (v4.5.24) | 인쇄/PDF 1단 보고서 자동변환 및 잘림 완벽 방지 적용</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
