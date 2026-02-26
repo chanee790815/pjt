@@ -12,7 +12,7 @@ import io
 import streamlit.components.v1 as components
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v4.5.24", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v4.5.22", page_icon="🏗️", layout="wide")
 
 # --- [UI] 스타일 ---
 st.markdown("""
@@ -56,7 +56,7 @@ st.markdown("""
     }
     
     /* 진행바 마진 최적화 */
-    div[data-testid="stProgressBar"] { margin-bottom: 5px !important; margin-top: 10px !important; }
+    div[data-testid="stProgressBar"] { margin-bottom: 0px !important; margin-top: 5px !important; }
     
     /* ========================================================= */
     /* 모바일 세로 모드에서 버튼이 밑으로 떨어지는 현상 강제 차단 */
@@ -84,64 +84,25 @@ st.markdown("""
     }
 
     /* ========================================================= */
-    /* [보고서 인쇄/PDF 최적화 CSS - 잘림 완벽 방지] */
+    /* [보고서 인쇄/PDF 최적화 CSS] */
     /* ========================================================= */
     @media print {
-        /* 1. 불필요한 UI 및 여백 숨김 */
-        header[data-testid="stHeader"], 
-        section[data-testid="stSidebar"], 
-        .footer, 
-        iframe, 
-        div[data-testid="stToolbar"],
-        div[data-testid="stButton"] { 
-            display: none !important; 
-        }
+        /* 불필요한 UI 숨기기 */
+        header[data-testid="stHeader"] { display: none !important; }
+        section[data-testid="stSidebar"] { display: none !important; }
+        .footer { display: none !important; }
+        iframe { display: none !important; } /* 인쇄 버튼 자체 숨김 */
+        button { display: none !important; } /* 화면 내 다른 버튼들 숨김 */
         
-        /* 2. Flexbox 해제 (크롬 등에서 page-break 오류를 유발하는 주범) */
-        .stApp, .main, .block-container, 
-        div[data-testid="stVerticalBlock"], 
-        div[data-testid="stVerticalBlockBorderWrapper"],
-        div[data-testid="stHorizontalBlock"] {
-            display: block !important;
-            height: auto !important;
-            overflow: visible !important;
-        }
+        /* 여백 최소화 및 배경색 강제 인쇄 설정 */
+        .block-container { max-width: 100% !important; padding: 10px !important; margin: 0 !important; }
+        * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
         
-        /* 3. 전체 폭 100% 사용 (여백 최소화 및 보고서 폭 확보) */
-        .block-container { 
-            max-width: 100% !important; 
-            width: 100% !important; 
-            padding: 10mm 15mm !important; 
-            margin: 0 !important; 
-        }
-        
-        /* 4. 다단(2단) 레이아웃을 1단(Full Width)으로 풀어서 내용 압축 방지 */
-        div[data-testid="column"] {
-            width: 100% !important;
-            max-width: 100% !important;
-            flex: none !important;
-            display: block !important;
-            margin-bottom: 20px !important;
-        }
-        
-        /* 5. 카드 중간 잘림(Page-break) 완벽 방지 */
-        div[data-testid="stContainer"] {
-            page-break-inside: avoid !important;
-            break-inside: avoid !important;
-            -webkit-column-break-inside: avoid !important;
-            display: block !important;
-            margin-bottom: 25px !important;
-            background-color: transparent !important;
-        }
-        
-        /* 6. 배경색 강제 출력 및 보정 */
-        * { 
-            -webkit-print-color-adjust: exact !important; 
-            print-color-adjust: exact !important; 
-        }
+        /* 카드가 페이지 중간에 잘리는 것 방지 */
+        div[data-testid="stContainer"] { page-break-inside: avoid; }
     }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.5.24) | 인쇄/PDF 1단 보고서 자동변환 및 잘림 완벽 방지 적용</div>
+    <div class="footer">시스템 상태: 정상 (v4.5.22) | PDF/보고서 인쇄 기능 추가</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -685,7 +646,6 @@ def view_solar(sh):
             ))
             
             # 3. 예측 발전시간 추세 (빨간색 두꺼운 선) - 2차 Y축
-            # 예측 발전시간 = (일사량 / 3.6) * 0.8(효율 80%) 계산 후 14일 이동평균선 적용하여 스무딩 처리
             f_df['예측_발전시간'] = (f_df['일사량합계'] / 3.6) * 0.8
             f_df['예측_추세선'] = f_df['예측_발전시간'].rolling(window=14, min_periods=1, center=True).mean()
             
@@ -698,7 +658,6 @@ def view_solar(sh):
                 yaxis='y2'
             ))
 
-            # [오류 해결] 최신 문법으로 title_font 속성 적용
             fig_solar.update_layout(
                 title=f"[{sel_loc}] 일사량 및 실제/예측 발전시간 추이 비교",
                 xaxis=dict(title="날짜"),
