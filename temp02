@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 import io
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v4.5.15", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v4.5.19", page_icon="🏗️", layout="wide")
 
 # --- [UI] 스타일 ---
 st.markdown("""
@@ -82,7 +82,7 @@ st.markdown("""
         .metric-container { flex-wrap: wrap; }
     }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.5.16) | 발전량 막대차트 전환 및 주간업무 줄바꿈/텍스트박스 개선 적용</div>
+    <div class="footer">시스템 상태: 정상 (v4.5.19) | 예측 발전량(Red Line) 차트 추가 및 폰트 에러 완벽 해결</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -262,7 +262,6 @@ def view_dashboard(sh, pjt_list):
                     with h_col2:
                         st.button("🔍 상세", key=f"btn_go_{d['p_name']}", on_click=navigate_to_project, args=(d['p_name'],), use_container_width=True)
                     
-                    # [개선] 대시보드 카드 내부 주간업무도 정확히 줄바꿈 처리
                     this_w_html = str(d['this_w']).replace('\n', '<br>')
                     next_w_html = str(d['next_w']).replace('\n', '<br>')
 
@@ -451,7 +450,6 @@ def view_project_detail(sh, pjt_list):
                     if not p_match.empty:
                         latest = p_match.iloc[-1]
                         
-                        # [개선] 이력 박스 안에서도 줄바꿈(\n)을 HTML(<br>)로 완벽 처리
                         hist_this_w = str(latest.get('금주업무', latest.get('주요현황', '-'))).replace('\n', '<br>')
                         hist_next_w = str(latest.get('차주업무', '-')).replace('\n', '<br>')
                         
@@ -469,7 +467,6 @@ def view_project_detail(sh, pjt_list):
 
             st.subheader("📝 주간 업무 작성 및 동기화 (I2, J2 셀 & 히스토리)")
             
-            # [개선] 텍스트 에디터 창 사이즈 대폭 상향 (height=120 -> 250). 마우스로 추가 조절(드래그) 가능.
             st.info("💡 우측 하단 모서리를 마우스로 드래그하면 입력 창의 크기를 자유롭게 늘리거나 줄일 수 있습니다.")
             with st.form("weekly_sync_form"):
                 in_this = st.text_area("✔️ 금주 주요 업무 (I2)", value=this_val, height=250)
@@ -533,12 +530,13 @@ def view_solar(sh):
             f1, f2 = st.columns(2)
             with f1:
                 locs = sorted(df_db['지점'].unique().tolist())
-                sel_locs = st.multiselect("조회 지역 선택", locs, default=locs[:3] if len(locs)>3 else locs)
+                sel_loc = st.selectbox("조회 지역 선택", locs)
             with f2:
                 default_start = datetime.date(2025, 1, 1)
                 default_end = datetime.date(2025, 12, 31)
                 dr = st.date_input("조회 기간", [default_start, default_end])
-        mask = (df_db['지점'].isin(sel_locs))
+        
+        mask = (df_db['지점'] == sel_loc)
         if len(dr) == 2:
             mask = mask & (df_db['날짜'].dt.date >= dr[0]) & (df_db['날짜'].dt.date <= dr[1])
         
@@ -547,25 +545,92 @@ def view_solar(sh):
         if not f_df.empty:
             m1, m2, m3 = st.columns(3)
             m1.metric("평균 발전 시간", f"{f_df['발전시간'].mean():.2f} h")
-            m2.metric("최대 발전량 지역", f_df.loc[f_df['발전시간'].idxmax(), '지점'])
+            m2.metric("평균 일사량", f"{f_df['일사량합계'].mean():.2f} MJ/m²")
             m3.metric("검색 데이터 수", f"{len(f_df)} 건")
 
-            c1, c2 = st.columns(2)
-            with c1:
-                # [개선] 라인 차트(px.line)에서 겹치지 않는 막대 차트(px.bar)로 변경
-                fig_solar = px.bar(f_df, x='날짜', y='발전시간', color='지점', barmode='group', title="일별 발전 시간 추이")
-                st.plotly_chart(fig_solar, use_container_width=True)
-            with c2:
-                avg_comp = f_df.groupby('지점')['발전시간'].mean().reset_index()
-                st.plotly_chart(px.bar(avg_comp, x='지점', y='발전시간', color='발전시간', title="지역별 평균 효율 비교"), use_container_width=True)
+            # --- [핵심] 일사량(막대), 발전시간(선), 예측추세(빨간선) 혼합 차트 ---
+            fig_solar = go.Figure()
             
+            # 1. 일사량합계 (주황색 막대) - 1차 Y축
+            fig_solar.add_trace(go.Bar(
+                x=f_df['날짜'], 
+                y=f_df['일사량합계'], 
+                name='일사량 (기상청)', 
+                marker_color='rgba(255, 165, 0, 0.6)', 
+                yaxis='y1'
+            ))
+            
+            # 2. 실제 발전시간 (파란색 선) - 2차 Y축
+            fig_solar.add_trace(go.Scatter(
+                x=f_df['날짜'], 
+                y=f_df['발전시간'], 
+                name='실제 발전시간', 
+                mode='lines+markers', 
+                line=dict(color='rgba(33, 150, 243, 1)', width=2), 
+                marker=dict(size=4),
+                yaxis='y2'
+            ))
+            
+            # 3. 예측 발전시간 추세 (빨간색 두꺼운 선) - 2차 Y축
+            # 예측 발전시간 = (일사량 / 3.6) * 0.8(효율 80%) 계산 후 14일 이동평균선 적용하여 스무딩 처리
+            f_df['예측_발전시간'] = (f_df['일사량합계'] / 3.6) * 0.8
+            f_df['예측_추세선'] = f_df['예측_발전시간'].rolling(window=14, min_periods=1, center=True).mean()
+            
+            fig_solar.add_trace(go.Scatter(
+                x=f_df['날짜'], 
+                y=f_df['예측_추세선'], 
+                name='예측 발전량 (Trend)', 
+                mode='lines', 
+                line=dict(color='red', width=4), 
+                yaxis='y2'
+            ))
+
+            # [오류 해결] 최신 문법으로 title_font 속성 적용
+            fig_solar.update_layout(
+                title=f"[{sel_loc}] 일사량 및 실제/예측 발전시간 추이 비교",
+                xaxis=dict(title="날짜"),
+                yaxis=dict(
+                    title=dict(text="일사량 (MJ/m²)", font=dict(color="orange")), 
+                    tickfont=dict(color="orange")
+                ),
+                yaxis2=dict(
+                    title=dict(text="발전시간 (h)", font=dict(color="blue")), 
+                    tickfont=dict(color="blue"), 
+                    anchor="free", 
+                    overlaying="y", 
+                    side="right"
+                ),
+                hovermode="x unified",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            )
+            
+            st.plotly_chart(fig_solar, use_container_width=True)
+            # --------------------------------------------------------------------------------
+
             st.subheader("📊 검색 결과 상세 내역")
+            
+            output_solar = io.BytesIO()
+            with pd.ExcelWriter(output_solar, engine='openpyxl') as writer:
+                export_df = f_df.copy()
+                export_df['날짜'] = export_df['날짜'].dt.strftime('%Y-%m-%d')
+                export_df.to_excel(writer, index=False, sheet_name='발전량_검색결과')
+            
+            col_down1, col_down2 = st.columns([8, 2])
+            with col_down2:
+                st.download_button(
+                    label="📥 데이터 엑셀 다운로드",
+                    data=output_solar.getvalue(),
+                    file_name=f"일일발전량_조회결과_{datetime.date.today()}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+            
             st.dataframe(f_df, use_container_width=True)
         else:
             st.warning("조건에 맞는 데이터가 없습니다.")
 
     except Exception as e:
-        st.error("분석 데이터를 불러올 수 없습니다.")
+        st.error(f"분석 데이터를 불러올 수 없습니다: {e}")
 
 # 4. 경영지표 KPI
 def view_kpi(sh):
