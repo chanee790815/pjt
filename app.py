@@ -82,7 +82,7 @@ st.markdown("""
         .metric-container { flex-wrap: wrap; }
     }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.5.15) | 차트 Y축 구획 분리 및 세로선/왼쪽 정렬 기능 활성화</div>
+    <div class="footer">시스템 상태: 정상 (v4.5.16) | 발전량 막대차트 전환 및 주간업무 줄바꿈/텍스트박스 개선 적용</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -262,10 +262,14 @@ def view_dashboard(sh, pjt_list):
                     with h_col2:
                         st.button("🔍 상세", key=f"btn_go_{d['p_name']}", on_click=navigate_to_project, args=(d['p_name'],), use_container_width=True)
                     
+                    # [개선] 대시보드 카드 내부 주간업무도 정확히 줄바꿈 처리
+                    this_w_html = str(d['this_w']).replace('\n', '<br>')
+                    next_w_html = str(d['next_w']).replace('\n', '<br>')
+
                     st.markdown(f'''
                         <div style="margin-bottom:4px; margin-top:2px;">
                             <p style="font-size:12.5px; opacity: 0.7; margin-top:0; margin-bottom:4px;">계획: {d['avg_plan']}% | 실적: {d['avg_act']}%</p>
-                            <div class="weekly-box" style="margin-top:0;"><b>[금주]</b> {d['this_w']}<br><b>[차주]</b> {d['next_w']}</div>
+                            <div class="weekly-box" style="margin-top:0; line-height: 1.5;"><b>[금주]</b> {this_w_html}<br><b>[차주]</b> {next_w_html}</div>
                         </div>
                     ''', unsafe_allow_html=True)
                     
@@ -339,25 +343,20 @@ def view_project_detail(sh, pjt_list):
                         
                     cdf['진행률'] = pd.to_numeric(cdf['진행률'], errors='coerce').fillna(0).astype(float)
                     
-                    # 1. '구분' 텍스트 앞에 순번을 붙여 고유값 생성
                     cdf['구분_고유'] = cdf.apply(lambda r: f"{r.name + 1}. {str(r['구분']).strip()}", axis=1)
                     
-                    # 2. [핵심] 차트 Y축 왼쪽 정렬을 위한 공간(padding) 계산 로직
-                    # 한글은 넓게(너비 2), 영문/숫자는 좁게(너비 1) 차지하는 특성을 반영해 시각적 너비를 계산
                     def calc_text_width(text):
                         return sum(2 if ord(c) > 127 else 1 for c in str(text))
                     
                     max_width = cdf['구분_고유'].apply(calc_text_width).max()
                     
-                    # 빈 공간만큼 HTML 공백문자(&nbsp;)를 우측에 채워 넣어, Plotly의 강제 우측정렬을 왼쪽 정렬처럼 속임
                     cdf['구분_고유'] = cdf['구분_고유'].apply(
                         lambda x: str(x) + "&nbsp;" * int((max_width - calc_text_width(x)) * 2.5)
                     )
                     
                     cdf['duration'] = (cdf['종료일'] - cdf['시작일']).dt.total_seconds() * 1000
-                    cdf['duration'] = cdf['duration'].apply(lambda d: 86400000.0 if d <= 0 else d) # 0일이어도 1일 두께 보장
+                    cdf['duration'] = cdf['duration'].apply(lambda d: 86400000.0 if d <= 0 else d)
                     
-                    # 툴팁용 원본 데이터 보존
                     cdf['시작일_str'] = cdf['시작일'].dt.strftime('%Y-%m-%d')
                     cdf['종료일_str'] = cdf['종료일'].dt.strftime('%Y-%m-%d')
                     
@@ -365,7 +364,6 @@ def view_project_detail(sh, pjt_list):
                     fig.add_trace(go.Bar(
                         base=cdf['시작일'],
                         x=cdf['duration'],
-                        # [핵심] Y축을 [대분류, 구분] 2차원 리스트로 넣어 '병합된 셀 모양' 그룹화 생성
                         y=[cdf['대분류'].tolist(), cdf['구분_고유'].tolist()],
                         orientation='h',
                         marker=dict(
@@ -376,7 +374,6 @@ def view_project_detail(sh, pjt_list):
                             showscale=True,
                             colorbar=dict(title="진행률(%)")
                         ),
-                        # 툴팁(호버)에는 스페이스가 잔뜩 들어간 '구분_고유' 대신 원본 '구분'을 보여주도록 설정
                         customdata=cdf[['시작일_str', '종료일_str', '대분류', '구분']].values,
                         hovertemplate="<b>[%{customdata[2]}] %{customdata[3]}</b><br>시작일: %{customdata[0]}<br>종료일: %{customdata[1]}<br>진행률: %{marker.color}%<extra></extra>"
                     ))
@@ -389,7 +386,7 @@ def view_project_detail(sh, pjt_list):
                     fig.update_xaxes(
                         type="date",             
                         dtick="M1",              
-                        tickformat="%y.%-m",     # '25.8' 연.월 표기
+                        tickformat="%y.%-m",     
                         tickangle=0,             
                         showgrid=True,           
                         gridwidth=1,
@@ -400,13 +397,12 @@ def view_project_detail(sh, pjt_list):
                     
                     fig.update_yaxes(
                         autorange="reversed",
-                        type="multicategory",    # 멀티 카테고리 (대분류-구분 분리)
+                        type="multicategory",    
                         categoryorder="trace",   
                         showgrid=True,
                         gridwidth=1,
                         gridcolor='rgba(200, 200, 200, 0.6)',
                         showline=True, linewidth=1, linecolor='rgba(200, 200, 200, 0.6)', mirror=True,
-                        # [핵심] 대분류와 구분 사이에 뚜렷한 세로선(디바이더) 추가
                         dividercolor='rgba(150, 150, 150, 0.8)',
                         dividerwidth=1,
                         title_text=""
@@ -454,11 +450,16 @@ def view_project_detail(sh, pjt_list):
                     p_match = h_df[h_df['프로젝트명'] == selected_pjt.strip()]
                     if not p_match.empty:
                         latest = p_match.iloc[-1]
+                        
+                        # [개선] 이력 박스 안에서도 줄바꿈(\n)을 HTML(<br>)로 완벽 처리
+                        hist_this_w = str(latest.get('금주업무', latest.get('주요현황', '-'))).replace('\n', '<br>')
+                        hist_next_w = str(latest.get('차주업무', '-')).replace('\n', '<br>')
+                        
                         st.markdown(f"""
                         <div class="history-box">
                             <p style="font-size:14px; opacity: 0.7; margin-bottom:10px;">📅 <b>최종 보고일:</b> {latest.get('날짜', '-')}</p>
-                            <p style="margin-bottom:12px;"><b>✔️ 금주 주요 업무:</b><br>{latest.get('금주업무', latest.get('주요현황', '-'))}</p>
-                            <p style="margin-bottom:0;"><b>🔜 차주 주요 업무:</b><br>{latest.get('차주업무', '-')}</p>
+                            <p style="margin-bottom:12px; line-height: 1.6;"><b>✔️ 금주 주요 업무:</b><br>{hist_this_w}</p>
+                            <p style="margin-bottom:0; line-height: 1.6;"><b>🔜 차주 주요 업무:</b><br>{hist_next_w}</p>
                         </div>
                         """, unsafe_allow_html=True)
                     else: st.info("아직 등록된 주간 업무 기록이 없습니다.")
@@ -467,9 +468,12 @@ def view_project_detail(sh, pjt_list):
             st.divider()
 
             st.subheader("📝 주간 업무 작성 및 동기화 (I2, J2 셀 & 히스토리)")
+            
+            # [개선] 텍스트 에디터 창 사이즈 대폭 상향 (height=120 -> 250). 마우스로 추가 조절(드래그) 가능.
+            st.info("💡 우측 하단 모서리를 마우스로 드래그하면 입력 창의 크기를 자유롭게 늘리거나 줄일 수 있습니다.")
             with st.form("weekly_sync_form"):
-                in_this = st.text_area("✔️ 금주 주요 업무 (I2)", value=this_val, height=120)
-                in_next = st.text_area("🔜 차주 주요 업무 (J2)", value=next_val, height=120)
+                in_this = st.text_area("✔️ 금주 주요 업무 (I2)", value=this_val, height=250)
+                in_next = st.text_area("🔜 차주 주요 업무 (J2)", value=next_val, height=250)
                 if st.form_submit_button("시트 데이터 업데이트 및 이력 저장"):
                     safe_api_call(ws.update, 'I2', [[in_this]])
                     safe_api_call(ws.update, 'J2', [[in_next]])
@@ -548,7 +552,9 @@ def view_solar(sh):
 
             c1, c2 = st.columns(2)
             with c1:
-                st.plotly_chart(px.line(f_df, x='날짜', y='발전시간', color='지점', title="일별 발전 시간 추이"), use_container_width=True)
+                # [개선] 라인 차트(px.line)에서 겹치지 않는 막대 차트(px.bar)로 변경
+                fig_solar = px.bar(f_df, x='날짜', y='발전시간', color='지점', barmode='group', title="일별 발전 시간 추이")
+                st.plotly_chart(fig_solar, use_container_width=True)
             with c2:
                 avg_comp = f_df.groupby('지점')['발전시간'].mean().reset_index()
                 st.plotly_chart(px.bar(avg_comp, x='지점', y='발전시간', color='발전시간', title="지역별 평균 효율 비교"), use_container_width=True)
