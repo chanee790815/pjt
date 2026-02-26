@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 import io
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v4.5.18", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v4.5.19", page_icon="🏗️", layout="wide")
 
 # --- [UI] 스타일 ---
 st.markdown("""
@@ -82,7 +82,7 @@ st.markdown("""
         .metric-container { flex-wrap: wrap; }
     }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.5.18) | 단일 지역 일사량(막대) & 발전량(선) 혼합 차트 적용 완벽수정</div>
+    <div class="footer">시스템 상태: 정상 (v4.5.19) | 예측 발전량(Red Line) 차트 추가 및 폰트 에러 완벽 해결</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -548,9 +548,10 @@ def view_solar(sh):
             m2.metric("평균 일사량", f"{f_df['일사량합계'].mean():.2f} MJ/m²")
             m3.metric("검색 데이터 수", f"{len(f_df)} 건")
 
-            # --- [수정] 일사량(막대) & 발전량(선) 혼합 차트 및 titlefont 오류 수정 ---
+            # --- [핵심] 일사량(막대), 발전시간(선), 예측추세(빨간선) 혼합 차트 ---
             fig_solar = go.Figure()
             
+            # 1. 일사량합계 (주황색 막대) - 1차 Y축
             fig_solar.add_trace(go.Bar(
                 x=f_df['날짜'], 
                 y=f_df['일사량합계'], 
@@ -559,18 +560,34 @@ def view_solar(sh):
                 yaxis='y1'
             ))
             
+            # 2. 실제 발전시간 (파란색 선) - 2차 Y축
             fig_solar.add_trace(go.Scatter(
                 x=f_df['날짜'], 
                 y=f_df['발전시간'], 
-                name='발전시간', 
+                name='실제 발전시간', 
                 mode='lines+markers', 
                 line=dict(color='rgba(33, 150, 243, 1)', width=2), 
                 marker=dict(size=4),
                 yaxis='y2'
             ))
+            
+            # 3. 예측 발전시간 추세 (빨간색 두꺼운 선) - 2차 Y축
+            # 예측 발전시간 = (일사량 / 3.6) * 0.8(효율 80%) 계산 후 14일 이동평균선 적용하여 스무딩 처리
+            f_df['예측_발전시간'] = (f_df['일사량합계'] / 3.6) * 0.8
+            f_df['예측_추세선'] = f_df['예측_발전시간'].rolling(window=14, min_periods=1, center=True).mean()
+            
+            fig_solar.add_trace(go.Scatter(
+                x=f_df['날짜'], 
+                y=f_df['예측_추세선'], 
+                name='예측 발전량 (Trend)', 
+                mode='lines', 
+                line=dict(color='red', width=4), 
+                yaxis='y2'
+            ))
 
+            # [오류 해결] 최신 문법으로 title_font 속성 적용
             fig_solar.update_layout(
-                title=f"[{sel_loc}] 일사량 및 발전시간 추이 비교",
+                title=f"[{sel_loc}] 일사량 및 실제/예측 발전시간 추이 비교",
                 xaxis=dict(title="날짜"),
                 yaxis=dict(
                     title=dict(text="일사량 (MJ/m²)", font=dict(color="orange")), 
