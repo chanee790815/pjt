@@ -9,9 +9,10 @@ import time
 import plotly.express as px
 import plotly.graph_objects as go
 import io
+import streamlit.components.v1 as components
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v4.5.21", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v4.5.22", page_icon="🏗️", layout="wide")
 
 # --- [UI] 스타일 ---
 st.markdown("""
@@ -28,7 +29,7 @@ st.markdown("""
     
     .footer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: rgba(128, 128, 128, 0.15); backdrop-filter: blur(5px); text-align: center; padding: 5px; font-size: 11px; z-index: 100; }
     
-    /* [수정] 박스 디자인 - 한글 단어 잘림 방지(keep-all) 및 줄간격/여백 상세페이지와 동일하게 최적화 */
+    /* 박스 디자인 (반투명 회색 배경) 및 자동 줄바꿈 최적화 */
     .weekly-box { background-color: rgba(128, 128, 128, 0.1); padding: 10px 12px; border-radius: 6px; margin-top: 4px; font-size: 12.5px; line-height: 1.6; border: 1px solid rgba(128, 128, 128, 0.2); white-space: normal; word-break: keep-all; word-wrap: break-word; }
     .history-box { background-color: rgba(128, 128, 128, 0.1); padding: 15px; border-radius: 8px; border-left: 5px solid #2196f3; margin-bottom: 20px; white-space: normal; word-break: keep-all; word-wrap: break-word; }
     .stMetric { background-color: rgba(128, 128, 128, 0.05); padding: 15px; border-radius: 10px; border: 1px solid rgba(128, 128, 128, 0.2); }
@@ -81,8 +82,27 @@ st.markdown("""
         }
         .metric-container { flex-wrap: wrap; }
     }
+
+    /* ========================================================= */
+    /* [보고서 인쇄/PDF 최적화 CSS] */
+    /* ========================================================= */
+    @media print {
+        /* 불필요한 UI 숨기기 */
+        header[data-testid="stHeader"] { display: none !important; }
+        section[data-testid="stSidebar"] { display: none !important; }
+        .footer { display: none !important; }
+        iframe { display: none !important; } /* 인쇄 버튼 자체 숨김 */
+        button { display: none !important; } /* 화면 내 다른 버튼들 숨김 */
+        
+        /* 여백 최소화 및 배경색 강제 인쇄 설정 */
+        .block-container { max-width: 100% !important; padding: 10px !important; margin: 0 !important; }
+        * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+        
+        /* 카드가 페이지 중간에 잘리는 것 방지 */
+        div[data-testid="stContainer"] { page-break-inside: avoid; }
+    }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.5.21) | 대시보드 주간보고 가독성(단어잘림 방지 및 줄바꿈) 최적화</div>
+    <div class="footer">시스템 상태: 정상 (v4.5.22) | PDF/보고서 인쇄 기능 추가</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -145,13 +165,53 @@ def navigate_to_project(p_name):
     st.session_state.selected_menu = "프로젝트 상세"
     st.session_state.selected_pjt = p_name
 
+def render_print_button():
+    """자바스크립트를 이용해 브라우저 인쇄(PDF 저장) 창을 띄우는 버튼"""
+    components.html(
+        """
+        <script>
+            function printApp() {
+                window.parent.print();
+            }
+        </script>
+        <style>
+            body { margin: 0; padding: 0; background-color: transparent; }
+            .print-btn {
+                float: right;
+                background-color: #f8f9fa;
+                color: #212529;
+                border: 1px solid #dee2e6;
+                padding: 6px 14px;
+                border-radius: 6px;
+                font-size: 13px;
+                font-weight: bold;
+                cursor: pointer;
+                font-family: sans-serif;
+                box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+                transition: all 0.2s;
+            }
+            .print-btn:hover {
+                background-color: #e9ecef;
+                border-color: #ced4da;
+            }
+        </style>
+        <button class="print-btn" onclick="printApp()">🖨️ PDF 저장 / 인쇄</button>
+        """,
+        height=40
+    )
+
 # ---------------------------------------------------------
 # [SECTION 2] 뷰(View) 함수
 # ---------------------------------------------------------
 
 # 1. 통합 대시보드
 def view_dashboard(sh, pjt_list):
-    st.title("📊 통합 대시보드 (현황 브리핑)")
+    col_title, col_btn = st.columns([8, 2])
+    with col_title:
+        st.title("📊 통합 대시보드 (현황 브리핑)")
+    with col_btn:
+        st.write("") # 줄맞춤 여백
+        render_print_button()
     
     dashboard_data = []
     
@@ -265,7 +325,6 @@ def view_dashboard(sh, pjt_list):
                     this_w_html = str(d['this_w']).replace('\n', '<br>')
                     next_w_html = str(d['next_w']).replace('\n', '<br>')
 
-                    # [수정] 금주, 차주 타이틀 아래에 <br> 추가하여 다음 줄부터 내용이 시작되도록 정렬
                     st.markdown(f'''
                         <div style="margin-bottom:4px; margin-top:2px;">
                             <p style="font-size:12.5px; opacity: 0.7; margin-top:0; margin-bottom:4px;">계획: {d['avg_plan']}% | 실적: {d['avg_act']}%</p>
@@ -280,7 +339,12 @@ def view_dashboard(sh, pjt_list):
 
 # 2. 프로젝트 상세 관리
 def view_project_detail(sh, pjt_list):
-    st.title("🏗️ 프로젝트 상세 관리")
+    col_title, col_btn = st.columns([8, 2])
+    with col_title:
+        st.title("🏗️ 프로젝트 상세 관리")
+    with col_btn:
+        st.write("")
+        render_print_button()
     
     selected_pjt = st.selectbox("현장 선택", ["선택"] + pjt_list, key="selected_pjt")
     
@@ -516,7 +580,13 @@ def view_project_detail(sh, pjt_list):
 
 # 3. 일 발전량 및 일조 분석
 def view_solar(sh):
-    st.title("☀️ 일 발전량 및 일조 분석")
+    col_title, col_btn = st.columns([8, 2])
+    with col_title:
+        st.title("☀️ 일 발전량 및 일조 분석")
+    with col_btn:
+        st.write("")
+        render_print_button()
+        
     try:
         db_ws = safe_api_call(sh.worksheet, 'Solar_DB')
         raw = safe_api_call(db_ws.get_all_records)
@@ -576,7 +646,6 @@ def view_solar(sh):
             ))
             
             # 3. 예측 발전시간 추세 (빨간색 두꺼운 선) - 2차 Y축
-            # 예측 발전시간 = (일사량 / 3.6) * 0.8(효율 80%) 계산 후 14일 이동평균선 적용하여 스무딩 처리
             f_df['예측_발전시간'] = (f_df['일사량합계'] / 3.6) * 0.8
             f_df['예측_추세선'] = f_df['예측_발전시간'].rolling(window=14, min_periods=1, center=True).mean()
             
@@ -589,7 +658,6 @@ def view_solar(sh):
                 yaxis='y2'
             ))
 
-            # [오류 해결] 최신 문법으로 title_font 속성 적용
             fig_solar.update_layout(
                 title=f"[{sel_loc}] 일사량 및 실제/예측 발전시간 추이 비교",
                 xaxis=dict(title="날짜"),
@@ -638,7 +706,13 @@ def view_solar(sh):
 
 # 4. 경영지표 KPI
 def view_kpi(sh):
-    st.title("📉 경영 실적 및 KPI")
+    col_title, col_btn = st.columns([8, 2])
+    with col_title:
+        st.title("📉 경영 실적 및 KPI")
+    with col_btn:
+        st.write("")
+        render_print_button()
+        
     try:
         ws = safe_api_call(sh.worksheet, 'KPI')
         df = pd.DataFrame(safe_api_call(ws.get_all_records))
@@ -649,7 +723,13 @@ def view_kpi(sh):
 
 # 5. 마스터 관리
 def view_project_admin(sh, pjt_list):
-    st.title("⚙️ 마스터 관리")
+    col_title, col_btn = st.columns([8, 2])
+    with col_title:
+        st.title("⚙️ 마스터 관리")
+    with col_btn:
+        st.write("")
+        render_print_button()
+        
     t1, t2, t3, t4, t5 = st.tabs(["➕ 등록", "✏️ 수정", "🗑️ 삭제", "🔄 업로드", "📥 다운로드"])
     
     with t1:
