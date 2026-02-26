@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 import io
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v4.5.17", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v4.5.18", page_icon="🏗️", layout="wide")
 
 # --- [UI] 스타일 ---
 st.markdown("""
@@ -82,7 +82,7 @@ st.markdown("""
         .metric-container { flex-wrap: wrap; }
     }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.5.17) | 일일 발전량 엑셀 다운로드 기능 추가 완료</div>
+    <div class="footer">시스템 상태: 정상 (v4.5.18) | 단일 지역 일사량(막대) & 발전량(선) 혼합 차트 적용</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -530,12 +530,15 @@ def view_solar(sh):
             f1, f2 = st.columns(2)
             with f1:
                 locs = sorted(df_db['지점'].unique().tolist())
-                sel_locs = st.multiselect("조회 지역 선택", locs, default=locs[:3] if len(locs)>3 else locs)
+                # [개선] 다중 선택(multiselect)을 단일 선택(selectbox)으로 변경하여 1개 지역만 조회
+                sel_loc = st.selectbox("조회 지역 선택", locs)
             with f2:
                 default_start = datetime.date(2025, 1, 1)
                 default_end = datetime.date(2025, 12, 31)
                 dr = st.date_input("조회 기간", [default_start, default_end])
-        mask = (df_db['지점'].isin(sel_locs))
+        
+        # 1개 지역 필터링 적용
+        mask = (df_db['지점'] == sel_loc)
         if len(dr) == 2:
             mask = mask & (df_db['날짜'].dt.date >= dr[0]) & (df_db['날짜'].dt.date <= dr[1])
         
@@ -544,24 +547,59 @@ def view_solar(sh):
         if not f_df.empty:
             m1, m2, m3 = st.columns(3)
             m1.metric("평균 발전 시간", f"{f_df['발전시간'].mean():.2f} h")
-            m2.metric("최대 발전량 지역", f_df.loc[f_df['발전시간'].idxmax(), '지점'])
+            m2.metric("평균 일사량", f"{f_df['일사량합계'].mean():.2f} MJ/m²")
             m3.metric("검색 데이터 수", f"{len(f_df)} 건")
 
-            c1, c2 = st.columns(2)
-            with c1:
-                # [개선] 선 그래프를 나란히 비교하기 쉬운 그룹형 막대 차트(Bar)로 변경
-                fig_solar = px.bar(f_df, x='날짜', y='발전시간', color='지점', barmode='group', title="일별 발전 시간 추이")
-                st.plotly_chart(fig_solar, use_container_width=True)
-            with c2:
-                avg_comp = f_df.groupby('지점')['발전시간'].mean().reset_index()
-                st.plotly_chart(px.bar(avg_comp, x='지점', y='발전시간', color='발전시간', title="지역별 평균 효율 비교"), use_container_width=True)
+            # --- [핵심] 일사량(기상청) 막대그래프 + 발전시간(태양광) 선그래프 이중축 혼합 차트 ---
+            fig_solar = go.Figure()
             
+            # 1. 일사량합계 (주황색 막대) - 1차 Y축 (왼쪽)
+            fig_solar.add_trace(go.Bar(
+                x=f_df['날짜'], 
+                y=f_df['일사량합계'], 
+                name='일사량 (기상청)', 
+                marker_color='rgba(255, 165, 0, 0.6)', 
+                yaxis='y1'
+            ))
+            
+            # 2. 발전시간 (파란색 선) - 2차 Y축 (오른쪽)
+            fig_solar.add_trace(go.Scatter(
+                x=f_df['날짜'], 
+                y=f_df['발전시간'], 
+                name='발전시간', 
+                mode='lines+markers', 
+                line=dict(color='rgba(33, 150, 243, 1)', width=2), 
+                marker=dict(size=4),
+                yaxis='y2'
+            ))
+
+            fig_solar.update_layout(
+                title=f"[{sel_loc}] 일사량 및 발전시간 추이 비교",
+                xaxis=dict(title="날짜"),
+                yaxis=dict(
+                    title="일사량 (MJ/m²)", 
+                    titlefont=dict(color="orange"), 
+                    tickfont=dict(color="orange")
+                ),
+                yaxis2=dict(
+                    title="발전시간 (h)", 
+                    titlefont=dict(color="blue"), 
+                    tickfont=dict(color="blue"), 
+                    anchor="free", 
+                    overlaying="y", 
+                    side="right"
+                ),
+                hovermode="x unified",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            )
+            
+            st.plotly_chart(fig_solar, use_container_width=True)
+            # --------------------------------------------------------------------------------
+
             st.subheader("📊 검색 결과 상세 내역")
             
-            # --- [추가] 엑셀 다운로드 기능 ---
             output_solar = io.BytesIO()
             with pd.ExcelWriter(output_solar, engine='openpyxl') as writer:
-                # 다운로드 파일에는 시간(00:00:00)을 날리고 깔끔하게 YYYY-MM-DD만 저장되도록 처리
                 export_df = f_df.copy()
                 export_df['날짜'] = export_df['날짜'].dt.strftime('%Y-%m-%d')
                 export_df.to_excel(writer, index=False, sheet_name='발전량_검색결과')
@@ -575,14 +613,13 @@ def view_solar(sh):
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True
                 )
-            # ---------------------------------
             
             st.dataframe(f_df, use_container_width=True)
         else:
             st.warning("조건에 맞는 데이터가 없습니다.")
 
     except Exception as e:
-        st.error("분석 데이터를 불러올 수 없습니다.")
+        st.error(f"분석 데이터를 불러올 수 없습니다: {e}")
 
 # 4. 경영지표 KPI
 def view_kpi(sh):
