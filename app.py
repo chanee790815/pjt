@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 import io
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v4.5.19", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v4.5.20", page_icon="🏗️", layout="wide")
 
 # --- [UI] 스타일 ---
 st.markdown("""
@@ -28,9 +28,9 @@ st.markdown("""
     
     .footer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: rgba(128, 128, 128, 0.15); backdrop-filter: blur(5px); text-align: center; padding: 5px; font-size: 11px; z-index: 100; }
     
-    /* 박스 디자인 (반투명 회색 배경) */
-    .weekly-box { background-color: rgba(128, 128, 128, 0.1); padding: 8px 10px; border-radius: 6px; margin-top: 4px; font-size: 12px; line-height: 1.4; border: 1px solid rgba(128, 128, 128, 0.2); white-space: pre-wrap; }
-    .history-box { background-color: rgba(128, 128, 128, 0.1); padding: 15px; border-radius: 8px; border-left: 5px solid #2196f3; margin-bottom: 20px; }
+    /* 박스 디자인 (반투명 회색 배경) 및 자동 줄바꿈 최적화 */
+    .weekly-box { background-color: rgba(128, 128, 128, 0.1); padding: 8px 10px; border-radius: 6px; margin-top: 4px; font-size: 12px; line-height: 1.5; border: 1px solid rgba(128, 128, 128, 0.2); white-space: normal; word-break: break-all; }
+    .history-box { background-color: rgba(128, 128, 128, 0.1); padding: 15px; border-radius: 8px; border-left: 5px solid #2196f3; margin-bottom: 20px; white-space: normal; word-break: break-all; }
     .stMetric { background-color: rgba(128, 128, 128, 0.05); padding: 15px; border-radius: 10px; border: 1px solid rgba(128, 128, 128, 0.2); }
     
     /* 태그 및 뱃지 */
@@ -82,7 +82,7 @@ st.markdown("""
         .metric-container { flex-wrap: wrap; }
     }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.5.19) | 예측 발전량(Red Line) 차트 추가 및 폰트 에러 완벽 해결</div>
+    <div class="footer">시스템 상태: 정상 (v4.5.20) | 주간보고 내용 자동 줄바꿈(Word-Wrap) 및 UI 분리 최적화 완료</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -268,7 +268,10 @@ def view_dashboard(sh, pjt_list):
                     st.markdown(f'''
                         <div style="margin-bottom:4px; margin-top:2px;">
                             <p style="font-size:12.5px; opacity: 0.7; margin-top:0; margin-bottom:4px;">계획: {d['avg_plan']}% | 실적: {d['avg_act']}%</p>
-                            <div class="weekly-box" style="margin-top:0; line-height: 1.5;"><b>[금주]</b> {this_w_html}<br><b>[차주]</b> {next_w_html}</div>
+                            <div class="weekly-box" style="margin-top:0;">
+                                <div style="margin-bottom: 6px;"><b>[금주]</b> {this_w_html}</div>
+                                <div><b>[차주]</b> {next_w_html}</div>
+                            </div>
                         </div>
                     ''', unsafe_allow_html=True)
                     
@@ -456,8 +459,8 @@ def view_project_detail(sh, pjt_list):
                         st.markdown(f"""
                         <div class="history-box">
                             <p style="font-size:14px; opacity: 0.7; margin-bottom:10px;">📅 <b>최종 보고일:</b> {latest.get('날짜', '-')}</p>
-                            <p style="margin-bottom:12px; line-height: 1.6;"><b>✔️ 금주 주요 업무:</b><br>{hist_this_w}</p>
-                            <p style="margin-bottom:0; line-height: 1.6;"><b>🔜 차주 주요 업무:</b><br>{hist_next_w}</p>
+                            <div style="margin-bottom:12px;"><b>✔️ 금주 주요 업무:</b><br>{hist_this_w}</div>
+                            <div><b>🔜 차주 주요 업무:</b><br>{hist_next_w}</div>
                         </div>
                         """, unsafe_allow_html=True)
                     else: st.info("아직 등록된 주간 업무 기록이 없습니다.")
