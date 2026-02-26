@@ -82,7 +82,7 @@ st.markdown("""
         .metric-container { flex-wrap: wrap; }
     }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.5.18) | 단일 지역 일사량(막대) & 발전량(선) 혼합 차트 적용</div>
+    <div class="footer">시스템 상태: 정상 (v4.5.18) | 단일 지역 일사량(막대) & 발전량(선) 혼합 차트 적용 완벽수정</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -530,14 +530,12 @@ def view_solar(sh):
             f1, f2 = st.columns(2)
             with f1:
                 locs = sorted(df_db['지점'].unique().tolist())
-                # [개선] 다중 선택(multiselect)을 단일 선택(selectbox)으로 변경하여 1개 지역만 조회
                 sel_loc = st.selectbox("조회 지역 선택", locs)
             with f2:
                 default_start = datetime.date(2025, 1, 1)
                 default_end = datetime.date(2025, 12, 31)
                 dr = st.date_input("조회 기간", [default_start, default_end])
         
-        # 1개 지역 필터링 적용
         mask = (df_db['지점'] == sel_loc)
         if len(dr) == 2:
             mask = mask & (df_db['날짜'].dt.date >= dr[0]) & (df_db['날짜'].dt.date <= dr[1])
@@ -550,10 +548,9 @@ def view_solar(sh):
             m2.metric("평균 일사량", f"{f_df['일사량합계'].mean():.2f} MJ/m²")
             m3.metric("검색 데이터 수", f"{len(f_df)} 건")
 
-            # --- [핵심] 일사량(기상청) 막대그래프 + 발전시간(태양광) 선그래프 이중축 혼합 차트 ---
+            # --- [수정] 일사량(막대) & 발전량(선) 혼합 차트 및 titlefont 오류 수정 ---
             fig_solar = go.Figure()
             
-            # 1. 일사량합계 (주황색 막대) - 1차 Y축 (왼쪽)
             fig_solar.add_trace(go.Bar(
                 x=f_df['날짜'], 
                 y=f_df['일사량합계'], 
@@ -562,7 +559,6 @@ def view_solar(sh):
                 yaxis='y1'
             ))
             
-            # 2. 발전시간 (파란색 선) - 2차 Y축 (오른쪽)
             fig_solar.add_trace(go.Scatter(
                 x=f_df['날짜'], 
                 y=f_df['발전시간'], 
@@ -577,13 +573,11 @@ def view_solar(sh):
                 title=f"[{sel_loc}] 일사량 및 발전시간 추이 비교",
                 xaxis=dict(title="날짜"),
                 yaxis=dict(
-                    title="일사량 (MJ/m²)", 
-                    titlefont=dict(color="orange"), 
+                    title=dict(text="일사량 (MJ/m²)", font=dict(color="orange")), 
                     tickfont=dict(color="orange")
                 ),
                 yaxis2=dict(
-                    title="발전시간 (h)", 
-                    titlefont=dict(color="blue"), 
+                    title=dict(text="발전시간 (h)", font=dict(color="blue")), 
                     tickfont=dict(color="blue"), 
                     anchor="free", 
                     overlaying="y", 
