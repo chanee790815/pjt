@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 import io
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v4.5.20", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v4.5.21", page_icon="🏗️", layout="wide")
 
 # --- [UI] 스타일 ---
 st.markdown("""
@@ -28,9 +28,9 @@ st.markdown("""
     
     .footer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: rgba(128, 128, 128, 0.15); backdrop-filter: blur(5px); text-align: center; padding: 5px; font-size: 11px; z-index: 100; }
     
-    /* 박스 디자인 (반투명 회색 배경) 및 자동 줄바꿈 최적화 */
-    .weekly-box { background-color: rgba(128, 128, 128, 0.1); padding: 8px 10px; border-radius: 6px; margin-top: 4px; font-size: 12px; line-height: 1.5; border: 1px solid rgba(128, 128, 128, 0.2); white-space: normal; word-break: break-all; }
-    .history-box { background-color: rgba(128, 128, 128, 0.1); padding: 15px; border-radius: 8px; border-left: 5px solid #2196f3; margin-bottom: 20px; white-space: normal; word-break: break-all; }
+    /* [수정] 박스 디자인 - 한글 단어 잘림 방지(keep-all) 및 줄간격/여백 상세페이지와 동일하게 최적화 */
+    .weekly-box { background-color: rgba(128, 128, 128, 0.1); padding: 10px 12px; border-radius: 6px; margin-top: 4px; font-size: 12.5px; line-height: 1.6; border: 1px solid rgba(128, 128, 128, 0.2); white-space: normal; word-break: keep-all; word-wrap: break-word; }
+    .history-box { background-color: rgba(128, 128, 128, 0.1); padding: 15px; border-radius: 8px; border-left: 5px solid #2196f3; margin-bottom: 20px; white-space: normal; word-break: keep-all; word-wrap: break-word; }
     .stMetric { background-color: rgba(128, 128, 128, 0.05); padding: 15px; border-radius: 10px; border: 1px solid rgba(128, 128, 128, 0.2); }
     
     /* 태그 및 뱃지 */
@@ -40,7 +40,7 @@ st.markdown("""
     .status-delay { background-color: rgba(244, 67, 54, 0.15); color: #ef5350; border: 1px solid rgba(244, 67, 54, 0.3); }
     .status-done { background-color: rgba(76, 175, 80, 0.15); color: #66bb6a; border: 1px solid rgba(76, 175, 80, 0.3); }
     
-    /* [핵심] 컴팩트 버튼 디자인 */
+    /* 컴팩트 버튼 디자인 */
     div[data-testid="stButton"] button {
         min-height: 26px !important;
         height: 26px !important;
@@ -58,7 +58,7 @@ st.markdown("""
     div[data-testid="stProgressBar"] { margin-bottom: 0px !important; margin-top: 5px !important; }
     
     /* ========================================================= */
-    /* [중요] 모바일 세로 모드에서 버튼이 밑으로 떨어지는 현상 강제 차단 */
+    /* 모바일 세로 모드에서 버튼이 밑으로 떨어지는 현상 강제 차단 */
     /* ========================================================= */
     @media (max-width: 768px) {
         div[data-testid="stContainer"] div[data-testid="stHorizontalBlock"] {
@@ -82,7 +82,7 @@ st.markdown("""
         .metric-container { flex-wrap: wrap; }
     }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.5.20) | 주간보고 내용 자동 줄바꿈(Word-Wrap) 및 UI 분리 최적화 완료</div>
+    <div class="footer">시스템 상태: 정상 (v4.5.21) | 대시보드 주간보고 가독성(단어잘림 방지 및 줄바꿈) 최적화</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -265,12 +265,13 @@ def view_dashboard(sh, pjt_list):
                     this_w_html = str(d['this_w']).replace('\n', '<br>')
                     next_w_html = str(d['next_w']).replace('\n', '<br>')
 
+                    # [수정] 금주, 차주 타이틀 아래에 <br> 추가하여 다음 줄부터 내용이 시작되도록 정렬
                     st.markdown(f'''
                         <div style="margin-bottom:4px; margin-top:2px;">
                             <p style="font-size:12.5px; opacity: 0.7; margin-top:0; margin-bottom:4px;">계획: {d['avg_plan']}% | 실적: {d['avg_act']}%</p>
                             <div class="weekly-box" style="margin-top:0;">
-                                <div style="margin-bottom: 6px;"><b>[금주]</b> {this_w_html}</div>
-                                <div><b>[차주]</b> {next_w_html}</div>
+                                <div style="margin-bottom: 8px;"><b>[금주]</b><br>{this_w_html}</div>
+                                <div><b>[차주]</b><br>{next_w_html}</div>
                             </div>
                         </div>
                     ''', unsafe_allow_html=True)
