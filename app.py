@@ -12,7 +12,7 @@ import io
 import streamlit.components.v1 as components
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v4.5.22", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v4.5.23", page_icon="🏗️", layout="wide")
 
 # --- [UI] 스타일 ---
 st.markdown("""
@@ -84,7 +84,7 @@ st.markdown("""
     }
 
     /* ========================================================= */
-    /* [보고서 인쇄/PDF 최적화 CSS] */
+    /* [보고서 인쇄/PDF 최적화 CSS - 잘림 완벽 방지] */
     /* ========================================================= */
     @media print {
         /* 불필요한 UI 숨기기 */
@@ -94,15 +94,34 @@ st.markdown("""
         iframe { display: none !important; } /* 인쇄 버튼 자체 숨김 */
         button { display: none !important; } /* 화면 내 다른 버튼들 숨김 */
         
+        /* 스크롤바 제거 및 전체 페이지 강제 펼침 (숨겨진 요소 잘림 방지) */
+        html, body, .stApp, .main, .block-container {
+            height: auto !important;
+            overflow: visible !important;
+            position: relative !important;
+        }
+        
         /* 여백 최소화 및 배경색 강제 인쇄 설정 */
-        .block-container { max-width: 100% !important; padding: 10px !important; margin: 0 !important; }
+        .block-container { max-width: 100% !important; padding: 10px 20px !important; margin: 0 !important; }
         * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
         
-        /* 카드가 페이지 중간에 잘리는 것 방지 */
-        div[data-testid="stContainer"] { page-break-inside: avoid; }
+        /* 카드나 박스가 페이지 중간에 반토막 나는 것(잘림)을 완벽하게 방지 */
+        div[data-testid="stContainer"],
+        .weekly-box,
+        .history-box,
+        div[data-testid="stVerticalBlock"] > div {
+            page-break-inside: avoid !important;
+            break-inside: avoid !important;
+            display: block !important;
+        }
+        
+        /* 인쇄 시 카드 아래에 여유 공간 추가 */
+        div[data-testid="stContainer"] {
+            margin-bottom: 20px !important;
+        }
     }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.5.22) | PDF/보고서 인쇄 기능 추가</div>
+    <div class="footer">시스템 상태: 정상 (v4.5.23) | 인쇄/PDF 페이지 잘림(Page-break) 방지 적용</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -646,6 +665,7 @@ def view_solar(sh):
             ))
             
             # 3. 예측 발전시간 추세 (빨간색 두꺼운 선) - 2차 Y축
+            # 예측 발전시간 = (일사량 / 3.6) * 0.8(효율 80%) 계산 후 14일 이동평균선 적용하여 스무딩 처리
             f_df['예측_발전시간'] = (f_df['일사량합계'] / 3.6) * 0.8
             f_df['예측_추세선'] = f_df['예측_발전시간'].rolling(window=14, min_periods=1, center=True).mean()
             
@@ -658,6 +678,7 @@ def view_solar(sh):
                 yaxis='y2'
             ))
 
+            # [오류 해결] 최신 문법으로 title_font 속성 적용
             fig_solar.update_layout(
                 title=f"[{sel_loc}] 일사량 및 실제/예측 발전시간 추이 비교",
                 xaxis=dict(title="날짜"),
