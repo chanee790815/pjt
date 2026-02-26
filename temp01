@@ -9,9 +9,10 @@ import time
 import plotly.express as px
 import plotly.graph_objects as go
 import io
+import streamlit.components.v1 as components
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v4.5.15", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v4.5.22", page_icon="🏗️", layout="wide")
 
 # --- [UI] 스타일 ---
 st.markdown("""
@@ -28,9 +29,9 @@ st.markdown("""
     
     .footer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: rgba(128, 128, 128, 0.15); backdrop-filter: blur(5px); text-align: center; padding: 5px; font-size: 11px; z-index: 100; }
     
-    /* 박스 디자인 (반투명 회색 배경) */
-    .weekly-box { background-color: rgba(128, 128, 128, 0.1); padding: 8px 10px; border-radius: 6px; margin-top: 4px; font-size: 12px; line-height: 1.4; border: 1px solid rgba(128, 128, 128, 0.2); white-space: pre-wrap; }
-    .history-box { background-color: rgba(128, 128, 128, 0.1); padding: 15px; border-radius: 8px; border-left: 5px solid #2196f3; margin-bottom: 20px; }
+    /* 박스 디자인 (반투명 회색 배경) 및 자동 줄바꿈 최적화 */
+    .weekly-box { background-color: rgba(128, 128, 128, 0.1); padding: 10px 12px; border-radius: 6px; margin-top: 4px; font-size: 12.5px; line-height: 1.6; border: 1px solid rgba(128, 128, 128, 0.2); white-space: normal; word-break: keep-all; word-wrap: break-word; }
+    .history-box { background-color: rgba(128, 128, 128, 0.1); padding: 15px; border-radius: 8px; border-left: 5px solid #2196f3; margin-bottom: 20px; white-space: normal; word-break: keep-all; word-wrap: break-word; }
     .stMetric { background-color: rgba(128, 128, 128, 0.05); padding: 15px; border-radius: 10px; border: 1px solid rgba(128, 128, 128, 0.2); }
     
     /* 태그 및 뱃지 */
@@ -40,7 +41,7 @@ st.markdown("""
     .status-delay { background-color: rgba(244, 67, 54, 0.15); color: #ef5350; border: 1px solid rgba(244, 67, 54, 0.3); }
     .status-done { background-color: rgba(76, 175, 80, 0.15); color: #66bb6a; border: 1px solid rgba(76, 175, 80, 0.3); }
     
-    /* [핵심] 컴팩트 버튼 디자인 */
+    /* 컴팩트 버튼 디자인 */
     div[data-testid="stButton"] button {
         min-height: 26px !important;
         height: 26px !important;
@@ -58,7 +59,7 @@ st.markdown("""
     div[data-testid="stProgressBar"] { margin-bottom: 0px !important; margin-top: 5px !important; }
     
     /* ========================================================= */
-    /* [중요] 모바일 세로 모드에서 버튼이 밑으로 떨어지는 현상 강제 차단 */
+    /* 모바일 세로 모드에서 버튼이 밑으로 떨어지는 현상 강제 차단 */
     /* ========================================================= */
     @media (max-width: 768px) {
         div[data-testid="stContainer"] div[data-testid="stHorizontalBlock"] {
@@ -81,8 +82,27 @@ st.markdown("""
         }
         .metric-container { flex-wrap: wrap; }
     }
+
+    /* ========================================================= */
+    /* [보고서 인쇄/PDF 최적화 CSS] */
+    /* ========================================================= */
+    @media print {
+        /* 불필요한 UI 숨기기 */
+        header[data-testid="stHeader"] { display: none !important; }
+        section[data-testid="stSidebar"] { display: none !important; }
+        .footer { display: none !important; }
+        iframe { display: none !important; } /* 인쇄 버튼 자체 숨김 */
+        button { display: none !important; } /* 화면 내 다른 버튼들 숨김 */
+        
+        /* 여백 최소화 및 배경색 강제 인쇄 설정 */
+        .block-container { max-width: 100% !important; padding: 10px !important; margin: 0 !important; }
+        * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+        
+        /* 카드가 페이지 중간에 잘리는 것 방지 */
+        div[data-testid="stContainer"] { page-break-inside: avoid; }
+    }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.5.15) | 차트 Y축 구획 분리 및 세로선/왼쪽 정렬 기능 활성화</div>
+    <div class="footer">시스템 상태: 정상 (v4.5.22) | PDF/보고서 인쇄 기능 추가</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -145,13 +165,53 @@ def navigate_to_project(p_name):
     st.session_state.selected_menu = "프로젝트 상세"
     st.session_state.selected_pjt = p_name
 
+def render_print_button():
+    """자바스크립트를 이용해 브라우저 인쇄(PDF 저장) 창을 띄우는 버튼"""
+    components.html(
+        """
+        <script>
+            function printApp() {
+                window.parent.print();
+            }
+        </script>
+        <style>
+            body { margin: 0; padding: 0; background-color: transparent; }
+            .print-btn {
+                float: right;
+                background-color: #f8f9fa;
+                color: #212529;
+                border: 1px solid #dee2e6;
+                padding: 6px 14px;
+                border-radius: 6px;
+                font-size: 13px;
+                font-weight: bold;
+                cursor: pointer;
+                font-family: sans-serif;
+                box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+                transition: all 0.2s;
+            }
+            .print-btn:hover {
+                background-color: #e9ecef;
+                border-color: #ced4da;
+            }
+        </style>
+        <button class="print-btn" onclick="printApp()">🖨️ PDF 저장 / 인쇄</button>
+        """,
+        height=40
+    )
+
 # ---------------------------------------------------------
 # [SECTION 2] 뷰(View) 함수
 # ---------------------------------------------------------
 
 # 1. 통합 대시보드
 def view_dashboard(sh, pjt_list):
-    st.title("📊 통합 대시보드 (현황 브리핑)")
+    col_title, col_btn = st.columns([8, 2])
+    with col_title:
+        st.title("📊 통합 대시보드 (현황 브리핑)")
+    with col_btn:
+        st.write("") # 줄맞춤 여백
+        render_print_button()
     
     dashboard_data = []
     
@@ -262,10 +322,16 @@ def view_dashboard(sh, pjt_list):
                     with h_col2:
                         st.button("🔍 상세", key=f"btn_go_{d['p_name']}", on_click=navigate_to_project, args=(d['p_name'],), use_container_width=True)
                     
+                    this_w_html = str(d['this_w']).replace('\n', '<br>')
+                    next_w_html = str(d['next_w']).replace('\n', '<br>')
+
                     st.markdown(f'''
                         <div style="margin-bottom:4px; margin-top:2px;">
                             <p style="font-size:12.5px; opacity: 0.7; margin-top:0; margin-bottom:4px;">계획: {d['avg_plan']}% | 실적: {d['avg_act']}%</p>
-                            <div class="weekly-box" style="margin-top:0;"><b>[금주]</b> {d['this_w']}<br><b>[차주]</b> {d['next_w']}</div>
+                            <div class="weekly-box" style="margin-top:0;">
+                                <div style="margin-bottom: 8px;"><b>[금주]</b><br>{this_w_html}</div>
+                                <div><b>[차주]</b><br>{next_w_html}</div>
+                            </div>
                         </div>
                     ''', unsafe_allow_html=True)
                     
@@ -273,7 +339,12 @@ def view_dashboard(sh, pjt_list):
 
 # 2. 프로젝트 상세 관리
 def view_project_detail(sh, pjt_list):
-    st.title("🏗️ 프로젝트 상세 관리")
+    col_title, col_btn = st.columns([8, 2])
+    with col_title:
+        st.title("🏗️ 프로젝트 상세 관리")
+    with col_btn:
+        st.write("")
+        render_print_button()
     
     selected_pjt = st.selectbox("현장 선택", ["선택"] + pjt_list, key="selected_pjt")
     
@@ -339,25 +410,20 @@ def view_project_detail(sh, pjt_list):
                         
                     cdf['진행률'] = pd.to_numeric(cdf['진행률'], errors='coerce').fillna(0).astype(float)
                     
-                    # 1. '구분' 텍스트 앞에 순번을 붙여 고유값 생성
                     cdf['구분_고유'] = cdf.apply(lambda r: f"{r.name + 1}. {str(r['구분']).strip()}", axis=1)
                     
-                    # 2. [핵심] 차트 Y축 왼쪽 정렬을 위한 공간(padding) 계산 로직
-                    # 한글은 넓게(너비 2), 영문/숫자는 좁게(너비 1) 차지하는 특성을 반영해 시각적 너비를 계산
                     def calc_text_width(text):
                         return sum(2 if ord(c) > 127 else 1 for c in str(text))
                     
                     max_width = cdf['구분_고유'].apply(calc_text_width).max()
                     
-                    # 빈 공간만큼 HTML 공백문자(&nbsp;)를 우측에 채워 넣어, Plotly의 강제 우측정렬을 왼쪽 정렬처럼 속임
                     cdf['구분_고유'] = cdf['구분_고유'].apply(
                         lambda x: str(x) + "&nbsp;" * int((max_width - calc_text_width(x)) * 2.5)
                     )
                     
                     cdf['duration'] = (cdf['종료일'] - cdf['시작일']).dt.total_seconds() * 1000
-                    cdf['duration'] = cdf['duration'].apply(lambda d: 86400000.0 if d <= 0 else d) # 0일이어도 1일 두께 보장
+                    cdf['duration'] = cdf['duration'].apply(lambda d: 86400000.0 if d <= 0 else d)
                     
-                    # 툴팁용 원본 데이터 보존
                     cdf['시작일_str'] = cdf['시작일'].dt.strftime('%Y-%m-%d')
                     cdf['종료일_str'] = cdf['종료일'].dt.strftime('%Y-%m-%d')
                     
@@ -365,7 +431,6 @@ def view_project_detail(sh, pjt_list):
                     fig.add_trace(go.Bar(
                         base=cdf['시작일'],
                         x=cdf['duration'],
-                        # [핵심] Y축을 [대분류, 구분] 2차원 리스트로 넣어 '병합된 셀 모양' 그룹화 생성
                         y=[cdf['대분류'].tolist(), cdf['구분_고유'].tolist()],
                         orientation='h',
                         marker=dict(
@@ -376,7 +441,6 @@ def view_project_detail(sh, pjt_list):
                             showscale=True,
                             colorbar=dict(title="진행률(%)")
                         ),
-                        # 툴팁(호버)에는 스페이스가 잔뜩 들어간 '구분_고유' 대신 원본 '구분'을 보여주도록 설정
                         customdata=cdf[['시작일_str', '종료일_str', '대분류', '구분']].values,
                         hovertemplate="<b>[%{customdata[2]}] %{customdata[3]}</b><br>시작일: %{customdata[0]}<br>종료일: %{customdata[1]}<br>진행률: %{marker.color}%<extra></extra>"
                     ))
@@ -389,7 +453,7 @@ def view_project_detail(sh, pjt_list):
                     fig.update_xaxes(
                         type="date",             
                         dtick="M1",              
-                        tickformat="%y.%-m",     # '25.8' 연.월 표기
+                        tickformat="%y.%-m",     
                         tickangle=0,             
                         showgrid=True,           
                         gridwidth=1,
@@ -400,13 +464,12 @@ def view_project_detail(sh, pjt_list):
                     
                     fig.update_yaxes(
                         autorange="reversed",
-                        type="multicategory",    # 멀티 카테고리 (대분류-구분 분리)
+                        type="multicategory",    
                         categoryorder="trace",   
                         showgrid=True,
                         gridwidth=1,
                         gridcolor='rgba(200, 200, 200, 0.6)',
                         showline=True, linewidth=1, linecolor='rgba(200, 200, 200, 0.6)', mirror=True,
-                        # [핵심] 대분류와 구분 사이에 뚜렷한 세로선(디바이더) 추가
                         dividercolor='rgba(150, 150, 150, 0.8)',
                         dividerwidth=1,
                         title_text=""
@@ -454,11 +517,15 @@ def view_project_detail(sh, pjt_list):
                     p_match = h_df[h_df['프로젝트명'] == selected_pjt.strip()]
                     if not p_match.empty:
                         latest = p_match.iloc[-1]
+                        
+                        hist_this_w = str(latest.get('금주업무', latest.get('주요현황', '-'))).replace('\n', '<br>')
+                        hist_next_w = str(latest.get('차주업무', '-')).replace('\n', '<br>')
+                        
                         st.markdown(f"""
                         <div class="history-box">
                             <p style="font-size:14px; opacity: 0.7; margin-bottom:10px;">📅 <b>최종 보고일:</b> {latest.get('날짜', '-')}</p>
-                            <p style="margin-bottom:12px;"><b>✔️ 금주 주요 업무:</b><br>{latest.get('금주업무', latest.get('주요현황', '-'))}</p>
-                            <p style="margin-bottom:0;"><b>🔜 차주 주요 업무:</b><br>{latest.get('차주업무', '-')}</p>
+                            <div style="margin-bottom:12px;"><b>✔️ 금주 주요 업무:</b><br>{hist_this_w}</div>
+                            <div><b>🔜 차주 주요 업무:</b><br>{hist_next_w}</div>
                         </div>
                         """, unsafe_allow_html=True)
                     else: st.info("아직 등록된 주간 업무 기록이 없습니다.")
@@ -467,9 +534,11 @@ def view_project_detail(sh, pjt_list):
             st.divider()
 
             st.subheader("📝 주간 업무 작성 및 동기화 (I2, J2 셀 & 히스토리)")
+            
+            st.info("💡 우측 하단 모서리를 마우스로 드래그하면 입력 창의 크기를 자유롭게 늘리거나 줄일 수 있습니다.")
             with st.form("weekly_sync_form"):
-                in_this = st.text_area("✔️ 금주 주요 업무 (I2)", value=this_val, height=120)
-                in_next = st.text_area("🔜 차주 주요 업무 (J2)", value=next_val, height=120)
+                in_this = st.text_area("✔️ 금주 주요 업무 (I2)", value=this_val, height=250)
+                in_next = st.text_area("🔜 차주 주요 업무 (J2)", value=next_val, height=250)
                 if st.form_submit_button("시트 데이터 업데이트 및 이력 저장"):
                     safe_api_call(ws.update, 'I2', [[in_this]])
                     safe_api_call(ws.update, 'J2', [[in_next]])
@@ -511,7 +580,13 @@ def view_project_detail(sh, pjt_list):
 
 # 3. 일 발전량 및 일조 분석
 def view_solar(sh):
-    st.title("☀️ 일 발전량 및 일조 분석")
+    col_title, col_btn = st.columns([8, 2])
+    with col_title:
+        st.title("☀️ 일 발전량 및 일조 분석")
+    with col_btn:
+        st.write("")
+        render_print_button()
+        
     try:
         db_ws = safe_api_call(sh.worksheet, 'Solar_DB')
         raw = safe_api_call(db_ws.get_all_records)
@@ -529,12 +604,13 @@ def view_solar(sh):
             f1, f2 = st.columns(2)
             with f1:
                 locs = sorted(df_db['지점'].unique().tolist())
-                sel_locs = st.multiselect("조회 지역 선택", locs, default=locs[:3] if len(locs)>3 else locs)
+                sel_loc = st.selectbox("조회 지역 선택", locs)
             with f2:
                 default_start = datetime.date(2025, 1, 1)
                 default_end = datetime.date(2025, 12, 31)
                 dr = st.date_input("조회 기간", [default_start, default_end])
-        mask = (df_db['지점'].isin(sel_locs))
+        
+        mask = (df_db['지점'] == sel_loc)
         if len(dr) == 2:
             mask = mask & (df_db['날짜'].dt.date >= dr[0]) & (df_db['날짜'].dt.date <= dr[1])
         
@@ -543,27 +619,100 @@ def view_solar(sh):
         if not f_df.empty:
             m1, m2, m3 = st.columns(3)
             m1.metric("평균 발전 시간", f"{f_df['발전시간'].mean():.2f} h")
-            m2.metric("최대 발전량 지역", f_df.loc[f_df['발전시간'].idxmax(), '지점'])
+            m2.metric("평균 일사량", f"{f_df['일사량합계'].mean():.2f} MJ/m²")
             m3.metric("검색 데이터 수", f"{len(f_df)} 건")
 
-            c1, c2 = st.columns(2)
-            with c1:
-                st.plotly_chart(px.line(f_df, x='날짜', y='발전시간', color='지점', title="일별 발전 시간 추이"), use_container_width=True)
-            with c2:
-                avg_comp = f_df.groupby('지점')['발전시간'].mean().reset_index()
-                st.plotly_chart(px.bar(avg_comp, x='지점', y='발전시간', color='발전시간', title="지역별 평균 효율 비교"), use_container_width=True)
+            # --- [핵심] 일사량(막대), 발전시간(선), 예측추세(빨간선) 혼합 차트 ---
+            fig_solar = go.Figure()
             
+            # 1. 일사량합계 (주황색 막대) - 1차 Y축
+            fig_solar.add_trace(go.Bar(
+                x=f_df['날짜'], 
+                y=f_df['일사량합계'], 
+                name='일사량 (기상청)', 
+                marker_color='rgba(255, 165, 0, 0.6)', 
+                yaxis='y1'
+            ))
+            
+            # 2. 실제 발전시간 (파란색 선) - 2차 Y축
+            fig_solar.add_trace(go.Scatter(
+                x=f_df['날짜'], 
+                y=f_df['발전시간'], 
+                name='실제 발전시간', 
+                mode='lines+markers', 
+                line=dict(color='rgba(33, 150, 243, 1)', width=2), 
+                marker=dict(size=4),
+                yaxis='y2'
+            ))
+            
+            # 3. 예측 발전시간 추세 (빨간색 두꺼운 선) - 2차 Y축
+            f_df['예측_발전시간'] = (f_df['일사량합계'] / 3.6) * 0.8
+            f_df['예측_추세선'] = f_df['예측_발전시간'].rolling(window=14, min_periods=1, center=True).mean()
+            
+            fig_solar.add_trace(go.Scatter(
+                x=f_df['날짜'], 
+                y=f_df['예측_추세선'], 
+                name='예측 발전량 (Trend)', 
+                mode='lines', 
+                line=dict(color='red', width=4), 
+                yaxis='y2'
+            ))
+
+            fig_solar.update_layout(
+                title=f"[{sel_loc}] 일사량 및 실제/예측 발전시간 추이 비교",
+                xaxis=dict(title="날짜"),
+                yaxis=dict(
+                    title=dict(text="일사량 (MJ/m²)", font=dict(color="orange")), 
+                    tickfont=dict(color="orange")
+                ),
+                yaxis2=dict(
+                    title=dict(text="발전시간 (h)", font=dict(color="blue")), 
+                    tickfont=dict(color="blue"), 
+                    anchor="free", 
+                    overlaying="y", 
+                    side="right"
+                ),
+                hovermode="x unified",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            )
+            
+            st.plotly_chart(fig_solar, use_container_width=True)
+            # --------------------------------------------------------------------------------
+
             st.subheader("📊 검색 결과 상세 내역")
+            
+            output_solar = io.BytesIO()
+            with pd.ExcelWriter(output_solar, engine='openpyxl') as writer:
+                export_df = f_df.copy()
+                export_df['날짜'] = export_df['날짜'].dt.strftime('%Y-%m-%d')
+                export_df.to_excel(writer, index=False, sheet_name='발전량_검색결과')
+            
+            col_down1, col_down2 = st.columns([8, 2])
+            with col_down2:
+                st.download_button(
+                    label="📥 데이터 엑셀 다운로드",
+                    data=output_solar.getvalue(),
+                    file_name=f"일일발전량_조회결과_{datetime.date.today()}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+            
             st.dataframe(f_df, use_container_width=True)
         else:
             st.warning("조건에 맞는 데이터가 없습니다.")
 
     except Exception as e:
-        st.error("분석 데이터를 불러올 수 없습니다.")
+        st.error(f"분석 데이터를 불러올 수 없습니다: {e}")
 
 # 4. 경영지표 KPI
 def view_kpi(sh):
-    st.title("📉 경영 실적 및 KPI")
+    col_title, col_btn = st.columns([8, 2])
+    with col_title:
+        st.title("📉 경영 실적 및 KPI")
+    with col_btn:
+        st.write("")
+        render_print_button()
+        
     try:
         ws = safe_api_call(sh.worksheet, 'KPI')
         df = pd.DataFrame(safe_api_call(ws.get_all_records))
@@ -574,7 +723,13 @@ def view_kpi(sh):
 
 # 5. 마스터 관리
 def view_project_admin(sh, pjt_list):
-    st.title("⚙️ 마스터 관리")
+    col_title, col_btn = st.columns([8, 2])
+    with col_title:
+        st.title("⚙️ 마스터 관리")
+    with col_btn:
+        st.write("")
+        render_print_button()
+        
     t1, t2, t3, t4, t5 = st.tabs(["➕ 등록", "✏️ 수정", "🗑️ 삭제", "🔄 업로드", "📥 다운로드"])
     
     with t1:
