@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 import io
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v4.5.15", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v4.5.17", page_icon="🏗️", layout="wide")
 
 # --- [UI] 스타일 ---
 st.markdown("""
@@ -82,7 +82,7 @@ st.markdown("""
         .metric-container { flex-wrap: wrap; }
     }
     </style>
-    <div class="footer">시스템 상태: 정상 (v4.5.16) | 발전량 막대차트 전환 및 주간업무 줄바꿈/텍스트박스 개선 적용</div>
+    <div class="footer">시스템 상태: 정상 (v4.5.17) | 일일 발전량 엑셀 다운로드 기능 추가 완료</div>
     """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
@@ -262,7 +262,6 @@ def view_dashboard(sh, pjt_list):
                     with h_col2:
                         st.button("🔍 상세", key=f"btn_go_{d['p_name']}", on_click=navigate_to_project, args=(d['p_name'],), use_container_width=True)
                     
-                    # [개선] 대시보드 카드 내부 주간업무도 정확히 줄바꿈 처리
                     this_w_html = str(d['this_w']).replace('\n', '<br>')
                     next_w_html = str(d['next_w']).replace('\n', '<br>')
 
@@ -451,7 +450,6 @@ def view_project_detail(sh, pjt_list):
                     if not p_match.empty:
                         latest = p_match.iloc[-1]
                         
-                        # [개선] 이력 박스 안에서도 줄바꿈(\n)을 HTML(<br>)로 완벽 처리
                         hist_this_w = str(latest.get('금주업무', latest.get('주요현황', '-'))).replace('\n', '<br>')
                         hist_next_w = str(latest.get('차주업무', '-')).replace('\n', '<br>')
                         
@@ -469,7 +467,6 @@ def view_project_detail(sh, pjt_list):
 
             st.subheader("📝 주간 업무 작성 및 동기화 (I2, J2 셀 & 히스토리)")
             
-            # [개선] 텍스트 에디터 창 사이즈 대폭 상향 (height=120 -> 250). 마우스로 추가 조절(드래그) 가능.
             st.info("💡 우측 하단 모서리를 마우스로 드래그하면 입력 창의 크기를 자유롭게 늘리거나 줄일 수 있습니다.")
             with st.form("weekly_sync_form"):
                 in_this = st.text_area("✔️ 금주 주요 업무 (I2)", value=this_val, height=250)
@@ -552,7 +549,7 @@ def view_solar(sh):
 
             c1, c2 = st.columns(2)
             with c1:
-                # [개선] 라인 차트(px.line)에서 겹치지 않는 막대 차트(px.bar)로 변경
+                # [개선] 선 그래프를 나란히 비교하기 쉬운 그룹형 막대 차트(Bar)로 변경
                 fig_solar = px.bar(f_df, x='날짜', y='발전시간', color='지점', barmode='group', title="일별 발전 시간 추이")
                 st.plotly_chart(fig_solar, use_container_width=True)
             with c2:
@@ -560,6 +557,26 @@ def view_solar(sh):
                 st.plotly_chart(px.bar(avg_comp, x='지점', y='발전시간', color='발전시간', title="지역별 평균 효율 비교"), use_container_width=True)
             
             st.subheader("📊 검색 결과 상세 내역")
+            
+            # --- [추가] 엑셀 다운로드 기능 ---
+            output_solar = io.BytesIO()
+            with pd.ExcelWriter(output_solar, engine='openpyxl') as writer:
+                # 다운로드 파일에는 시간(00:00:00)을 날리고 깔끔하게 YYYY-MM-DD만 저장되도록 처리
+                export_df = f_df.copy()
+                export_df['날짜'] = export_df['날짜'].dt.strftime('%Y-%m-%d')
+                export_df.to_excel(writer, index=False, sheet_name='발전량_검색결과')
+            
+            col_down1, col_down2 = st.columns([8, 2])
+            with col_down2:
+                st.download_button(
+                    label="📥 데이터 엑셀 다운로드",
+                    data=output_solar.getvalue(),
+                    file_name=f"일일발전량_조회결과_{datetime.date.today()}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+            # ---------------------------------
+            
             st.dataframe(f_df, use_container_width=True)
         else:
             st.warning("조건에 맞는 데이터가 없습니다.")
