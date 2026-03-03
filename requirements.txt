@@ -2,8 +2,9 @@ streamlit
 pandas
 gspread
 google-auth
-google-auth-oauthlib
-google-auth-httplib2
-plotly
 requests
+plotly
 openpyxl
+beautifulsoup4
+python-pptx
+lxml
