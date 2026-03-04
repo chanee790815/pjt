@@ -11,6 +11,8 @@ import plotly.graph_objects as go
 import io
 import streamlit.components.v1 as components
 import numpy as np
+from streamlit_folium import st_folium
+import folium
 
 # ---------------------------------
 # 지점별 고정 위경도 매핑 (원하는 만큼 추가)
@@ -31,7 +33,6 @@ st.markdown("""
     @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
     html, body, [class*="css"] { font-family: 'Pretendard', sans-serif; }
     
-    /* 메인 제목 반응형 최적화 */
     h1 {
         font-size: clamp(1.5rem, 6vw, 2.5rem) !important; 
         word-break: keep-all !important; 
@@ -40,19 +41,16 @@ st.markdown("""
     
     .footer { position: fixed; left: 0; bottom: 0; width: 100%; background-color: rgba(128, 128, 128, 0.15); backdrop-filter: blur(5px); text-align: center; padding: 5px; font-size: 11px; z-index: 100; }
     
-    /* 박스 디자인 (반투명 회색 배경) 및 자동 줄바꿈 최적화 */
     .weekly-box { background-color: rgba(128, 128, 128, 0.1); padding: 10px 12px; border-radius: 6px; margin-top: 4px; font-size: 12.5px; line-height: 1.6; border: 1px solid rgba(128, 128, 128, 0.2); white-space: normal; word-break: keep-all; word-wrap: break-word; }
     .history-box { background-color: rgba(128, 128, 128, 0.1); padding: 15px; border-radius: 8px; border-left: 5px solid #2196f3; margin-bottom: 20px; white-space: normal; word-break: keep-all; word-wrap: break-word; }
     .stMetric { background-color: rgba(128, 128, 128, 0.05); padding: 15px; border-radius: 10px; border: 1px solid rgba(128, 128, 128, 0.2); }
     
-    /* 태그 및 뱃지 */
     .pm-tag { background-color: rgba(25, 113, 194, 0.15); color: #339af0; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; border: 1px solid rgba(25, 113, 194, 0.3); display: inline-block; }
     .status-badge { padding: 3px 8px; border-radius: 12px; font-size: 11px; font-weight: 700; display: inline-block; white-space: nowrap; }
     .status-normal { background-color: rgba(33, 150, 243, 0.15); color: #42a5f5; border: 1px solid rgba(33, 150, 243, 0.3); }
     .status-delay { background-color: rgba(244, 67, 54, 0.15); color: #ef5350; border: 1px solid rgba(244, 67, 54, 0.3); }
     .status-done { background-color: rgba(76, 175, 80, 0.15); color: #66bb6a; border: 1px solid rgba(76, 175, 80, 0.3); }
     
-    /* 컴팩트 버튼 디자인 */
     div[data-testid="stButton"] button {
         min-height: 26px !important;
         height: 26px !important;
@@ -66,12 +64,8 @@ st.markdown("""
         width: 100% !important;
     }
     
-    /* 진행바 마진 최적화 */
     div[data-testid="stProgressBar"] { margin-bottom: 0px !important; margin-top: 5px !important; }
     
-    /* ========================================================= */
-    /* 모바일 세로 모드에서 버튼이 밑으로 떨어지는 현상 강제 차단 */
-    /* ========================================================= */
     @media (max-width: 768px) {
         div[data-testid="stContainer"] div[data-testid="stHorizontalBlock"] {
             flex-direction: row !important;
@@ -92,9 +86,6 @@ st.markdown("""
         .metric-container { flex-wrap: wrap; }
     }
 
-    /* ========================================================= */
-    /* [보고서 인쇄/PDF 최적화 CSS] */
-    /* ========================================================= */
     @media print {
         header[data-testid="stHeader"] { display: none !important; }
         section[data-testid="stSidebar"] { display: none !important; }
@@ -116,7 +107,6 @@ st.markdown("""
 # ---------------------------------------------------------
 
 def safe_api_call(func, *args, **kwargs):
-    """API 할당량 초과(429) 방지를 위한 자동 재시도 함수"""
     retries = 5
     for i in range(retries):
         try:
@@ -784,7 +774,7 @@ def view_solar(sh):
         st.title("☀️ 일 발전량 및 일조 분석")
     with col_btn:
         st.write("")
-        render_print_button()
+    render_print_button()
         
     try:
         raw = cached_get_all_records('pms_db', 'Solar_DB')
@@ -814,7 +804,7 @@ def view_solar(sh):
         
         f_df = df_db[mask].sort_values('날짜')
 
-        # [신규] 내일 예측 섹션
+        # [신규] 내일 예측 섹션 + 지도 선택
         st.subheader("🔮 내일 태양광 예측 (날씨 예보 연동)")
         with st.container(border=True):
             tom = datetime.date.today() + datetime.timedelta(days=1)
@@ -835,13 +825,25 @@ def view_solar(sh):
                     lat = float(geo["latitude"])
                     lon = float(geo["longitude"])
                     place = " / ".join([str(x) for x in [geo.get("name"), geo.get("admin1"), geo.get("country")] if x])
-                    st.caption(f"예보 좌표: {place} (lat={lat:.4f}, lon={lon:.4f})")
+                    st.caption(f"예보 좌표(지오코딩): {place} (lat={lat:.4f}, lon={lon:.4f})")
 
+            # 지도에서 직접 선택
             if lat is None or lon is None:
-                st.warning("지점명으로 좌표를 찾지 못했습니다. 아래에서 직접 위도/경도를 입력해 주세요.")
+                st.warning("지점명으로 좌표를 찾지 못했습니다. 아래 지도에서 위치를 클릭하거나, 숫자로 직접 입력해 주세요.")
+                center_lat, center_lon = 36.5, 127.9
+                m = folium.Map(location=[center_lat, center_lon], zoom_start=7)
+                m.add_child(folium.LatLngPopup())
+
+                map_data = st_folium(m, width=700, height=400)
+                last_clicked = (map_data or {}).get("last_clicked")
+
                 c1, c2 = st.columns(2)
-                lat = c1.number_input("위도(lat)", value=36.3504, format="%.6f")
-                lon = c2.number_input("경도(lon)", value=127.3845, format="%.6f")
+                if last_clicked:
+                    lat = c1.number_input("위도(lat)", value=float(last_clicked["lat"]), format="%.6f")
+                    lon = c2.number_input("경도(lon)", value=float(last_clicked["lng"]), format="%.6f")
+                else:
+                    lat = c1.number_input("위도(lat)", value=36.3504, format="%.6f")
+                    lon = c2.number_input("경도(lon)", value=127.3845, format="%.6f")
 
             try:
                 fc = fetch_open_meteo_daily_forecast(lat, lon, timezone="Asia/Seoul")
