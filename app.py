@@ -10,6 +10,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 import io
 import streamlit.components.v1 as components
+import numpy as np
 
 # 1. 페이지 설정
 st.set_page_config(page_title="PM 통합 공정 관리 v4.5.22", page_icon="🏗️", layout="wide")
@@ -123,7 +124,8 @@ def safe_api_call(func, *args, **kwargs):
                 raise e
 
 def check_login():
-    if st.session_state.get("logged_in", False): return True
+    if st.session_state.get("logged_in", False): 
+        return True
     st.title("🏗️ PM 통합 관리 시스템")
     with st.form("login"):
         u_id = st.text_input("ID")
@@ -133,33 +135,182 @@ def check_login():
                 st.session_state["logged_in"] = True
                 st.session_state["user_id"] = u_id
                 st.rerun()
-            else: st.error("정보 불일치")
+            else:
+                st.error("정보 불일치")
     return False
 
 @st.cache_resource
 def get_client():
     try:
         key_dict = dict(st.secrets["gcp_service_account"])
-        if "private_key" in key_dict: key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
-        creds = Credentials.from_service_account_info(key_dict, scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
+        if "private_key" in key_dict: 
+            key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
+        creds = Credentials.from_service_account_info(
+            key_dict,
+            scopes=[
+                "https://www.googleapis.com/auth/spreadsheets",
+                "https://www.googleapis.com/auth/drive"
+            ]
+        )
         return gspread.authorize(creds)
     except Exception as e:
         st.error(f"구글 클라우드 연결 실패: {e}")
         return None
 
+# -------------------------------
+# [성능 개선] 구글 시트 읽기 캐시
+# -------------------------------
+
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_get_all_values(spreadsheet_name: str, worksheet_name: str):
+    """지정 워크시트 전체 데이터를 5분간 캐싱"""
+    client = get_client()
+    if client is None:
+        return []
+    sh = safe_api_call(client.open, spreadsheet_name)
+    ws = safe_api_call(sh.worksheet, worksheet_name)
+    return safe_api_call(ws.get_all_values)
+
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_get_all_records(spreadsheet_name: str, worksheet_name: str):
+    """get_all_records 결과를 5분간 캐싱"""
+    client = get_client()
+    if client is None:
+        return []
+    sh = safe_api_call(client.open, spreadsheet_name)
+    ws = safe_api_call(sh.worksheet, worksheet_name)
+    return safe_api_call(ws.get_all_records)
+
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_get_head(spreadsheet_name: str, worksheet_name: str, max_rows: int = 200):
+    """
+    대시보드용: 상단 N행(A1~J{max_rows})만 읽어서 평균 진척 계산
+    → 프로젝트별 행이 많아져도 속도 유지
+    """
+    client = get_client()
+    if client is None:
+        return []
+    sh = safe_api_call(client.open, spreadsheet_name)
+    ws = safe_api_call(sh.worksheet, worksheet_name)
+    rng = f"A1:J{max_rows}"
+    return safe_api_call(ws.get, rng)
+
+# -------------------------------
+# [예측] Open-Meteo 기반 내일 일사량/발전시간 예측
+# -------------------------------
+
+@st.cache_data(ttl=24 * 3600, show_spinner=False)
+def geocode_location_open_meteo(name: str):
+    """지점명 -> 위/경도 (Open-Meteo Geocoding)"""
+    q = str(name).strip()
+    if not q:
+        return None
+    url = "https://geocoding-api.open-meteo.com/v1/search"
+    params = {"name": q, "count": 1, "language": "ko", "format": "json"}
+    r = requests.get(url, params=params, timeout=10)
+    r.raise_for_status()
+    j = r.json()
+    results = j.get("results") or []
+    if not results:
+        return None
+    top = results[0]
+    return {
+        "name": top.get("name"),
+        "country": top.get("country"),
+        "admin1": top.get("admin1"),
+        "latitude": top.get("latitude"),
+        "longitude": top.get("longitude"),
+    }
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def fetch_open_meteo_daily_forecast(latitude: float, longitude: float, timezone: str = "Asia/Seoul"):
+    """
+    일 단위 예보:
+    - shortwave_radiation_sum: MJ/m² (Open-Meteo 문서 기준)
+    """
+    url = "https://api.open-meteo.com/v1/forecast"
+    params = {
+        "latitude": latitude,
+        "longitude": longitude,
+        "daily": "shortwave_radiation_sum,cloud_cover_mean,temperature_2m_max,temperature_2m_min,precipitation_sum",
+        "forecast_days": 7,
+        "timezone": timezone,
+    }
+    r = requests.get(url, params=params, timeout=15)
+    r.raise_for_status()
+    return r.json()
+
+def _pick_daily_value(forecast_json: dict, target_date: datetime.date, key: str):
+    daily = (forecast_json or {}).get("daily") or {}
+    times = daily.get("time") or []
+    values = daily.get(key) or []
+    if not times or not values:
+        return None
+    t_str = target_date.strftime("%Y-%m-%d")
+    try:
+        idx = times.index(t_str)
+        return values[idx]
+    except ValueError:
+        return None
+
+def fit_predict_generation_hours(hist_df: pd.DataFrame, radiation_mj_m2: float):
+    """
+    과거(실제) 데이터를 활용해 '일사량합계(MJ/m²) -> 발전시간(h)'로 회귀/비율 기반 예측
+    반환: (pred_hours, method, r2_or_none)
+    """
+    try:
+        x = pd.to_numeric(hist_df.get("일사량합계"), errors="coerce")
+        y = pd.to_numeric(hist_df.get("발전시간"), errors="coerce")
+        m = x.notna() & y.notna()
+        if m.sum() >= 12:
+            # 1차 선형회귀
+            a, b = np.polyfit(x[m].to_numpy(), y[m].to_numpy(), 1)
+            yhat = a * x[m] + b
+            ss_res = float(((y[m] - yhat) ** 2).sum())
+            ss_tot = float(((y[m] - y[m].mean()) ** 2).sum())
+            r2 = None if ss_tot <= 0 else (1.0 - (ss_res / ss_tot))
+            pred = float(a * radiation_mj_m2 + b)
+            pred = max(0.0, min(24.0, pred))
+            return pred, "linear_regression", r2
+
+        # 비율 기반(발전시간 / (kWh/m²)) 평균으로 추정
+        if m.sum() >= 5:
+            kwh_m2 = (x[m] / 3.6).replace([np.inf, -np.inf], np.nan)
+            ratio = (y[m] / kwh_m2).replace([np.inf, -np.inf], np.nan).dropna()
+            if len(ratio) >= 5:
+                r = float(ratio.clip(lower=0).median())
+                pred = float((radiation_mj_m2 / 3.6) * r)
+                pred = max(0.0, min(24.0, pred))
+                return pred, "ratio_median", None
+
+        # 마지막 fallback (기존 로직과 유사)
+        pred = float((radiation_mj_m2 / 3.6) * 0.8)
+        pred = max(0.0, min(24.0, pred))
+        return pred, "fallback_pr0.8", None
+    except Exception:
+        pred = float((radiation_mj_m2 / 3.6) * 0.8)
+        pred = max(0.0, min(24.0, pred))
+        return pred, "fallback_pr0.8", None
+
 def calc_planned_progress(start, end, target_date=None):
-    if target_date is None: target_date = datetime.date.today()
+    if target_date is None: 
+        target_date = datetime.date.today()
     try:
         s = pd.to_datetime(start).date()
         e = pd.to_datetime(end).date()
-        if pd.isna(s) or pd.isna(e): return 0.0
-        if target_date < s: return 0.0
-        if target_date > e: return 100.0
+        if pd.isna(s) or pd.isna(e): 
+            return 0.0
+        if target_date < s: 
+            return 0.0
+        if target_date > e: 
+            return 100.0
         total_days = (e - s).days
-        if total_days <= 0: return 100.0
+        if total_days <= 0: 
+            return 100.0
         passed_days = (target_date - s).days
         return min(100.0, max(0.0, (passed_days / total_days) * 100))
-    except: return 0.0
+    except: 
+        return 0.0
 
 def navigate_to_project(p_name):
     st.session_state.selected_menu = "프로젝트 상세"
@@ -218,8 +369,8 @@ def view_dashboard(sh, pjt_list):
     with st.spinner("프로젝트 데이터를 분석 중입니다..."):
         for p_name in pjt_list:
             try:
-                ws = safe_api_call(sh.worksheet, p_name)
-                data = safe_api_call(ws.get_all_values)
+                # ★ 성능 개선: 전체가 아니라 상단 일부만 + 캐시 사용
+                data = cached_get_head('pms_db', p_name, max_rows=200)
                 
                 pm_name = "미지정"
                 this_w = "금주 실적 미입력"
@@ -227,7 +378,10 @@ def view_dashboard(sh, pjt_list):
                 
                 if len(data) > 0:
                     header = data[0][:7]
-                    df = pd.DataFrame([r[:7] for r in data[1:]], columns=header) if len(data) > 1 else pd.DataFrame(columns=header)
+                    df = pd.DataFrame(
+                        [r[:7] for r in data[1:]],
+                        columns=header
+                    ) if len(data) > 1 else pd.DataFrame(columns=header)
                     
                     if len(data) > 1 and len(data[1]) > 7 and str(data[1][7]).strip(): pm_name = str(data[1][7]).strip()
                     if len(data) > 1 and len(data[1]) > 8 and str(data[1][8]).strip(): this_w = str(data[1][8]).strip()
@@ -237,7 +391,12 @@ def view_dashboard(sh, pjt_list):
 
                 if not df.empty and '진행률' in df.columns:
                     avg_act = round(pd.to_numeric(df['진행률'], errors='coerce').fillna(0).mean(), 1)
-                    avg_plan = round(df.apply(lambda r: calc_planned_progress(r.get('시작일'), r.get('종료일')), axis=1).mean(), 1)
+                    avg_plan = round(
+                        df.apply(
+                            lambda r: calc_planned_progress(r.get('시작일'), r.get('종료일')),
+                            axis=1
+                        ).mean(), 1
+                    )
                 else:
                     avg_act = 0.0; avg_plan = 0.0
                 
@@ -260,7 +419,8 @@ def view_dashboard(sh, pjt_list):
                     "status_ui": status_ui,
                     "b_style": b_style
                 })
-            except Exception as e:
+            except Exception:
+                # 개별 프로젝트 오류는 무시하고 계속
                 pass
 
     all_pms = sorted(list(set([d["pm_name"] for d in dashboard_data])))
@@ -349,8 +509,7 @@ def view_project_detail(sh, pjt_list):
     selected_pjt = st.selectbox("현장 선택", ["선택"] + pjt_list, key="selected_pjt")
     
     if selected_pjt != "선택":
-        ws = safe_api_call(sh.worksheet, selected_pjt)
-        data = safe_api_call(ws.get_all_values)
+        data = cached_get_all_values('pms_db', selected_pjt)
         
         current_pm = ""
         this_val = ""
@@ -374,6 +533,8 @@ def view_project_detail(sh, pjt_list):
         if '진행률' in df.columns:
             df['진행률'] = pd.to_numeric(df['진행률'], errors='coerce').fillna(0)
 
+        ws = safe_api_call(sh.worksheet, selected_pjt)
+
         col_pm1, col_pm2 = st.columns([3, 1])
         with col_pm1:
             new_pm = st.text_input("프로젝트 담당 PM (H2 셀)", value=current_pm)
@@ -381,6 +542,8 @@ def view_project_detail(sh, pjt_list):
             st.write("")
             if st.button("PM 성함 저장"):
                 safe_api_call(ws.update, 'H2', [[new_pm]])
+                cached_get_all_values.clear()
+                cached_get_head.clear()
                 st.success("PM이 업데이트되었습니다!")
         
         st.divider()
@@ -504,13 +667,13 @@ def view_project_detail(sh, pjt_list):
                     fig_s.add_trace(go.Scatter(x=[datetime.date.today().strftime("%Y-%m-%d")], y=[a_prog], mode='markers', name='현재 실적', marker=dict(size=12, color='red', symbol='star')))
                     fig_s.update_layout(title="진척률 추이 (S-Curve)", yaxis_title="진척률(%)")
                     st.plotly_chart(fig_s, use_container_width=True)
-            except: pass
+            except:
+                pass
 
         with tab3:
             st.subheader("📋 최근 주간 업무 이력")
             try:
-                h_ws = safe_api_call(sh.worksheet, 'weekly_history')
-                h_data = safe_api_call(h_ws.get_all_records)
+                h_data = cached_get_all_records('pms_db', 'weekly_history')
                 h_df = pd.DataFrame(h_data)
                 if not h_df.empty:
                     h_df['프로젝트명'] = h_df['프로젝트명'].astype(str).str.strip()
@@ -528,8 +691,10 @@ def view_project_detail(sh, pjt_list):
                             <div><b>🔜 차주 주요 업무:</b><br>{hist_next_w}</div>
                         </div>
                         """, unsafe_allow_html=True)
-                    else: st.info("아직 등록된 주간 업무 기록이 없습니다.")
-            except: st.warning("이력 데이터를 불러오는 중 오류가 발생했습니다.")
+                    else: 
+                        st.info("아직 등록된 주간 업무 기록이 없습니다.")
+            except: 
+                st.warning("이력 데이터를 불러오는 중 오류가 발생했습니다.")
 
             st.divider()
 
@@ -545,7 +710,11 @@ def view_project_detail(sh, pjt_list):
                     try:
                         h_ws = safe_api_call(sh.worksheet, 'weekly_history')
                         safe_api_call(h_ws.append_row, [datetime.date.today().strftime("%Y-%m-%d"), selected_pjt, in_this, in_next, st.session_state.user_id])
-                    except: pass
+                        cached_get_all_records.clear()
+                    except: 
+                        pass
+                    cached_get_all_values.clear()
+                    cached_get_head.clear()
                     st.success("성공적으로 업데이트 및 저장되었습니다!"); time.sleep(1); st.rerun()
 
         st.write("---")
@@ -576,6 +745,8 @@ def view_project_detail(sh, pjt_list):
                 
             safe_api_call(ws.clear)
             safe_api_call(ws.update, 'A1', full_data)
+            cached_get_all_values.clear()
+            cached_get_head.clear()
             st.success("데이터가 완벽하게 저장되었습니다!"); time.sleep(1); st.rerun()
 
 # 3. 일 발전량 및 일조 분석
@@ -588,8 +759,7 @@ def view_solar(sh):
         render_print_button()
         
     try:
-        db_ws = safe_api_call(sh.worksheet, 'Solar_DB')
-        raw = safe_api_call(db_ws.get_all_records)
+        raw = cached_get_all_records('pms_db', 'Solar_DB')
         if not raw:
             st.info("데이터가 없습니다.")
             return
@@ -615,6 +785,101 @@ def view_solar(sh):
             mask = mask & (df_db['날짜'].dt.date >= dr[0]) & (df_db['날짜'].dt.date <= dr[1])
         
         f_df = df_db[mask].sort_values('날짜')
+
+        # -------------------------
+        # [신규] 내일 예측 섹션
+        # -------------------------
+        st.subheader("🔮 내일 태양광 예측 (날씨 예보 연동)")
+        with st.container(border=True):
+            tom = datetime.date.today() + datetime.timedelta(days=1)
+            geo = None
+            try:
+                geo = geocode_location_open_meteo(sel_loc)
+            except Exception:
+                geo = None
+
+            lat = None
+            lon = None
+            if geo and geo.get("latitude") is not None and geo.get("longitude") is not None:
+                lat = float(geo["latitude"])
+                lon = float(geo["longitude"])
+                place = " / ".join([str(x) for x in [geo.get("name"), geo.get("admin1"), geo.get("country")] if x])
+                st.caption(f"예보 좌표: {place} (lat={lat:.4f}, lon={lon:.4f})")
+            else:
+                st.warning("지점명을 좌표로 변환하지 못했습니다. 아래에서 위/경도를 직접 입력하면 예측이 가능합니다.")
+                c1, c2 = st.columns(2)
+                lat = c1.number_input("위도(lat)", value=36.3504, format="%.6f")
+                lon = c2.number_input("경도(lon)", value=127.3845, format="%.6f")
+
+            try:
+                fc = fetch_open_meteo_daily_forecast(lat, lon, timezone="Asia/Seoul")
+                rad = _pick_daily_value(fc, tom, "shortwave_radiation_sum")  # MJ/m²
+                cloud = _pick_daily_value(fc, tom, "cloud_cover_mean")
+                tmax = _pick_daily_value(fc, tom, "temperature_2m_max")
+                precip = _pick_daily_value(fc, tom, "precipitation_sum")
+
+                if rad is None:
+                    st.warning("내일 일사량 예보 값을 가져오지 못했습니다. (API 응답에 날짜가 없을 수 있어요)")
+                else:
+                    pred_h, method, r2 = fit_predict_generation_hours(f_df, float(rad))
+
+                    m1, m2, m3, m4 = st.columns(4)
+                    m1.metric("내일 예보 일사량", f"{float(rad):.2f} MJ/m²")
+                    m2.metric("내일 예측 발전시간", f"{pred_h:.2f} h")
+                    if cloud is not None:
+                        m3.metric("평균 운량(예보)", f"{float(cloud):.0f}%")
+                    else:
+                        m3.metric("평균 운량(예보)", "-")
+                    if tmax is not None:
+                        m4.metric("최고기온(예보)", f"{float(tmax):.1f}℃")
+                    else:
+                        m4.metric("최고기온(예보)", "-")
+
+                    cap = f"예측모델: {method}"
+                    if r2 is not None:
+                        cap += f" | 적합도(R²): {r2:.2f}"
+                    if precip is not None:
+                        cap += f" | 강수량(합계): {float(precip):.1f} mm"
+                    st.caption(cap)
+
+                    # 선택: 예측값 저장 (Solar_Forecast 시트)
+                    with st.expander("📌 예측값 저장 (선택)"):
+                        st.write("버튼을 누르면 `pms_db`에 `Solar_Forecast` 시트가 없으면 생성하고, 예측 결과를 1행 추가합니다.")
+                        if st.button("💾 내일 예측값 시트에 저장", use_container_width=True):
+                            try:
+                                f_ws_title = "Solar_Forecast"
+                                try:
+                                    f_ws = safe_api_call(sh.worksheet, f_ws_title)
+                                except WorksheetNotFound:
+                                    f_ws = safe_api_call(sh.add_worksheet, title=f_ws_title, rows="2000", cols="20")
+                                    safe_api_call(f_ws.append_row, ["날짜", "지점", "위도", "경도", "예보_일사량(MJ/m²)", "예측_발전시간(h)", "예측모델", "R2", "운량(%)", "최고기온(℃)", "강수량(mm)", "저장시각", "저장자"])
+                                now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                safe_api_call(
+                                    f_ws.append_row,
+                                    [
+                                        tom.strftime("%Y-%m-%d"),
+                                        str(sel_loc),
+                                        float(lat),
+                                        float(lon),
+                                        float(rad),
+                                        float(pred_h),
+                                        str(method),
+                                        "" if r2 is None else float(r2),
+                                        "" if cloud is None else float(cloud),
+                                        "" if tmax is None else float(tmax),
+                                        "" if precip is None else float(precip),
+                                        now_str,
+                                        st.session_state.get("user_id", "")
+                                    ]
+                                )
+                                st.success("저장 완료!")
+                            except Exception as e:
+                                st.error(f"저장 중 오류: {e}")
+
+            except Exception as e:
+                st.warning(f"예보 데이터를 불러오지 못했습니다: {e}")
+
+        st.divider()
 
         if not f_df.empty:
             m1, m2, m3 = st.columns(3)
@@ -645,7 +910,8 @@ def view_solar(sh):
                 yaxis='y2'
             ))
             
-            # 3. 예측 발전시간 추세 (빨간색 두꺼운 선) - 2차 Y축
+            # 3. 예측 발전시간 추세 (빨간색 두꺼운 선) - 2차 Y축 (기존 로직 유지)
+            f_df = f_df.copy()
             f_df['예측_발전시간'] = (f_df['일사량합계'] / 3.6) * 0.8
             f_df['예측_추세선'] = f_df['예측_발전시간'].rolling(window=14, min_periods=1, center=True).mean()
             
@@ -657,6 +923,26 @@ def view_solar(sh):
                 line=dict(color='red', width=4), 
                 yaxis='y2'
             ))
+
+            # 내일 예측 점(가능할 때만)
+            try:
+                tom = datetime.date.today() + datetime.timedelta(days=1)
+                geo = geocode_location_open_meteo(sel_loc)
+                if geo and geo.get("latitude") and geo.get("longitude"):
+                    fc = fetch_open_meteo_daily_forecast(float(geo["latitude"]), float(geo["longitude"]), timezone="Asia/Seoul")
+                    rad = _pick_daily_value(fc, tom, "shortwave_radiation_sum")
+                    if rad is not None:
+                        pred_h, _, _ = fit_predict_generation_hours(f_df, float(rad))
+                        fig_solar.add_trace(go.Scatter(
+                            x=[datetime.datetime.combine(tom, datetime.time(0, 0))],
+                            y=[pred_h],
+                            name="내일 예측(점)",
+                            mode="markers",
+                            marker=dict(size=12, color="purple", symbol="diamond"),
+                            yaxis='y2'
+                        ))
+            except Exception:
+                pass
 
             fig_solar.update_layout(
                 title=f"[{sel_loc}] 일사량 및 실제/예측 발전시간 추이 비교",
@@ -677,7 +963,6 @@ def view_solar(sh):
             )
             
             st.plotly_chart(fig_solar, use_container_width=True)
-            # --------------------------------------------------------------------------------
 
             st.subheader("📊 검색 결과 상세 내역")
             
@@ -714,12 +999,12 @@ def view_kpi(sh):
         render_print_button()
         
     try:
-        ws = safe_api_call(sh.worksheet, 'KPI')
-        df = pd.DataFrame(safe_api_call(ws.get_all_records))
+        df = pd.DataFrame(cached_get_all_records('pms_db', 'KPI'))
         st.table(df)
         if not df.empty and '실적' in df.columns:
             st.plotly_chart(px.pie(df, values='실적', names=df.columns[0], title="항목별 실적 비중"))
-    except: st.warning("KPI 시트를 찾을 수 없습니다.")
+    except: 
+        st.warning("KPI 시트를 찾을 수 없습니다.")
 
 # 5. 마스터 관리
 def view_project_admin(sh, pjt_list):
@@ -737,6 +1022,8 @@ def view_project_admin(sh, pjt_list):
         if st.button("생성") and new_n:
             new_ws = safe_api_call(sh.add_worksheet, title=new_n, rows="100", cols="20")
             safe_api_call(new_ws.append_row, ["시작일", "종료일", "대분류", "구분", "진행상태", "비고", "진행률", "PM", "금주", "차주"])
+            cached_get_all_values.clear()
+            cached_get_head.clear()
             st.success("생성 완료!"); st.rerun()
             
     with t2:
@@ -745,6 +1032,8 @@ def view_project_admin(sh, pjt_list):
         if st.button("이름 변경") and target != "선택" and new_name:
             ws = safe_api_call(sh.worksheet, target)
             safe_api_call(ws.update_title, new_name)
+            cached_get_all_values.clear()
+            cached_get_head.clear()
             st.success("수정 완료!"); st.rerun()
 
     with t3:
@@ -753,6 +1042,8 @@ def view_project_admin(sh, pjt_list):
         if st.button("삭제 수행") and target_del != "선택" and conf:
             ws = safe_api_call(sh.worksheet, target_del)
             safe_api_call(sh.del_worksheet, ws)
+            cached_get_all_values.clear()
+            cached_get_head.clear()
             st.success("삭제 완료!"); st.rerun()
 
     with t4:
@@ -780,6 +1071,9 @@ def view_project_admin(sh, pjt_list):
                         else:
                             skipped_sheets.append(s_name)
                 
+                cached_get_all_values.clear()
+                cached_get_head.clear()
+
                 if updated_count > 0:
                     st.success(f"🎉 총 {updated_count}개의 프로젝트가 성공적으로 일괄 업데이트되었습니다!")
                 else:
@@ -797,10 +1091,12 @@ def view_project_admin(sh, pjt_list):
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 for p in pjt_list:
                     try:
-                        ws = safe_api_call(sh.worksheet, p)
-                        data = safe_api_call(ws.get_all_values)
+                        data = cached_get_all_values('pms_db', p)
+                        if not data:
+                            continue
                         pd.DataFrame(data[1:], columns=data[0]).to_excel(writer, index=False, sheet_name=p[:31])
-                    except: pass
+                    except: 
+                        pass
             st.download_button("📥 통합 파일 받기", output.getvalue(), f"Backup_{datetime.date.today()}.xlsx")
 
 # ---------------------------------------------------------
@@ -812,7 +1108,7 @@ if check_login():
     if client:
         try:
             sh = safe_api_call(client.open, 'pms_db')
-            sys_names = ['weekly_history', 'Solar_DB', 'KPI', 'Sheet1', 'Control_Center', 'Dashboard_Control', '통합 대시보드']
+            sys_names = ['weekly_history', 'Solar_DB', 'KPI', 'Sheet1', 'Control_Center', 'Dashboard_Control', '통합 대시보드', 'Solar_Forecast']
             pjt_list = [ws.title for ws in sh.worksheets() if ws.title not in sys_names]
             
             if "selected_menu" not in st.session_state:
@@ -823,11 +1119,19 @@ if check_login():
             st.sidebar.title("📁 PMO 메뉴")
             menu = st.sidebar.radio("메뉴 선택", ["통합 대시보드", "프로젝트 상세", "일 발전량 분석", "경영지표(KPI)", "마스터 설정"], key="selected_menu")
             
-            if menu == "통합 대시보드": view_dashboard(sh, pjt_list)
-            elif menu == "프로젝트 상세": view_project_detail(sh, pjt_list)
-            elif menu == "일 발전량 분석": view_solar(sh)
-            elif menu == "경영지표(KPI)": view_kpi(sh)
-            elif menu == "마스터 설정": view_project_admin(sh, pjt_list)
+            if menu == "통합 대시보드": 
+                view_dashboard(sh, pjt_list)
+            elif menu == "프로젝트 상세": 
+                view_project_detail(sh, pjt_list)
+            elif menu == "일 발전량 분석": 
+                view_solar(sh)
+            elif menu == "경영지표(KPI)": 
+                view_kpi(sh)
+            elif menu == "마스터 설정": 
+                view_project_admin(sh, pjt_list)
             
-            if st.sidebar.button("로그아웃"): st.session_state.logged_in = False; st.rerun()
-        except Exception as e: st.error(f"서버 접속이 지연되고 있습니다. 잠시 후 새로고침 해주세요.")
+            if st.sidebar.button("로그아웃"): 
+                st.session_state.logged_in = False
+                st.rerun()
+        except Exception:
+            st.error("서버 접속이 지연되고 있습니다. 잠시 후 새로고침 해주세요.")
