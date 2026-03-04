@@ -12,16 +12,6 @@ import io
 import streamlit.components.v1 as components
 import numpy as np
 
-# ---------------------------------
-# 지점별 고정 위경도 매핑 (원하는 만큼 추가)
-# ---------------------------------
-LOCATION_COORDS = {
-    "서산태양광": {"lat": 36.7840, "lon": 126.4500},
-    "부산": {"lat": 35.1796, "lon": 129.0756},
-    "당진": {"lat": 36.8910, "lon": 126.6290},
-    # TODO: 실제 사용하는 지점명을 키로, 위도/경도를 계속 추가하세요.
-}
-
 # 1. 페이지 설정
 st.set_page_config(page_title="PM 통합 공정 관리 v4.5.22", page_icon="🏗️", layout="wide")
 
@@ -371,7 +361,7 @@ def view_dashboard(sh, pjt_list):
     with col_title:
         st.title("📊 통합 대시보드 (현황 브리핑)")
     with col_btn:
-        st.write("")  # 줄맞춤 여백
+        st.write("") # 줄맞춤 여백
         render_print_button()
     
     dashboard_data = []
@@ -379,6 +369,7 @@ def view_dashboard(sh, pjt_list):
     with st.spinner("프로젝트 데이터를 분석 중입니다..."):
         for p_name in pjt_list:
             try:
+                # ★ 성능 개선: 전체가 아니라 상단 일부만 + 캐시 사용
                 data = cached_get_head('pms_db', p_name, max_rows=200)
                 
                 pm_name = "미지정"
@@ -392,12 +383,9 @@ def view_dashboard(sh, pjt_list):
                         columns=header
                     ) if len(data) > 1 else pd.DataFrame(columns=header)
                     
-                    if len(data) > 1 and len(data[1]) > 7 and str(data[1][7]).strip():
-                        pm_name = str(data[1][7]).strip()
-                    if len(data) > 1 and len(data[1]) > 8 and str(data[1][8]).strip():
-                        this_w = str(data[1][8]).strip()
-                    if len(data) > 1 and len(data[1]) > 9 and str(data[1][9]).strip():
-                        next_w = str(data[1][9]).strip()
+                    if len(data) > 1 and len(data[1]) > 7 and str(data[1][7]).strip(): pm_name = str(data[1][7]).strip()
+                    if len(data) > 1 and len(data[1]) > 8 and str(data[1][8]).strip(): this_w = str(data[1][8]).strip()
+                    if len(data) > 1 and len(data[1]) > 9 and str(data[1][9]).strip(): next_w = str(data[1][9]).strip()
                 else:
                     df = pd.DataFrame()
 
@@ -410,8 +398,7 @@ def view_dashboard(sh, pjt_list):
                         ).mean(), 1
                     )
                 else:
-                    avg_act = 0.0
-                    avg_plan = 0.0
+                    avg_act = 0.0; avg_plan = 0.0
                 
                 status_ui = "🟢 정상"
                 b_style = "status-normal"
@@ -433,6 +420,7 @@ def view_dashboard(sh, pjt_list):
                     "b_style": b_style
                 })
             except Exception:
+                # 개별 프로젝트 오류는 무시하고 계속
                 pass
 
     all_pms = sorted(list(set([d["pm_name"] for d in dashboard_data])))
@@ -531,12 +519,9 @@ def view_project_detail(sh, pjt_list):
             header = data[0][:7]
             df = pd.DataFrame([r[:7] for r in data[1:]], columns=header) if len(data) > 1 else pd.DataFrame(columns=header)
             
-            if len(data) > 1 and len(data[1]) > 7:
-                current_pm = str(data[1][7]).strip()
-            if len(data) > 1 and len(data[1]) > 8:
-                this_val = str(data[1][8]).strip()
-            if len(data) > 1 and len(data[1]) > 9:
-                next_val = str(data[1][9]).strip()
+            if len(data) > 1 and len(data[1]) > 7: current_pm = str(data[1][7]).strip()
+            if len(data) > 1 and len(data[1]) > 8: this_val = str(data[1][8]).strip()
+            if len(data) > 1 and len(data[1]) > 9: next_val = str(data[1][9]).strip()
         else:
             df = pd.DataFrame(columns=["시작일", "종료일", "대분류", "구분", "진행상태", "비고", "진행률"])
 
@@ -624,14 +609,9 @@ def view_project_detail(sh, pjt_list):
                     ))
                     
                     today_ms = pd.Timestamp.now().normalize().timestamp() * 1000
-                    fig.add_vline(
-                        x=today_ms,
-                        line_width=2.5,
-                        line_color="purple", 
-                        annotation_text="오늘",
-                        annotation_position="top",
-                        annotation_font=dict(color="purple", size=13, weight="bold")
-                    )
+                    fig.add_vline(x=today_ms, line_width=2.5, line_color="purple", 
+                                  annotation_text="오늘", annotation_position="top",
+                                  annotation_font=dict(color="purple", size=13, weight="bold"))
                     
                     fig.update_xaxes(
                         type="date",             
@@ -660,131 +640,114 @@ def view_project_detail(sh, pjt_list):
                     
                     fig.update_layout(
                         height=max(400, len(cdf) * 35),
-+                        plot_bgcolor='white',  
-+                        paper_bgcolor='white',
-+                        margin=dict(l=10, r=20, t=40, b=20)
-+                    )
-+                    
-+                    st.plotly_chart(fig, use_container_width=True)
-+                else:
-+                    st.info("차트를 그릴 수 있는 유효한 날짜 데이터가 부족합니다. 편집기에서 날짜를 확인해 주세요.")
-+            except Exception as e:
-+                st.error(f"차트를 그리는 중 세부 오류가 발생했습니다: {e}")
-+
-+        with tab2:
-+            try:
-+                sdf = df.copy()
-+                sdf['시작일'] = pd.to_datetime(sdf['시작일'], errors='coerce').dt.date
-+                sdf['종료일'] = pd.to_datetime(sdf['종료일'], errors='coerce').dt.date
-+                sdf = sdf.dropna(subset=['시작일', '종료일'])
-+                if not sdf.empty:
-+                    min_d, max_d = sdf['시작일'].min(), sdf['종료일'].max()
-+                    d_range = pd.date_range(min_d, max_d, freq='W-MON').date.tolist()
-+                    p_trend = [
-+                        sdf.apply(
-+                            lambda r: calc_planned_progress(r['시작일'], r['종료일'], d),
-+                            axis=1
-+                        ).mean()
-+                        for d in d_range
-+                    ]
-+                    a_prog = pd.to_numeric(sdf['진행률'], errors='coerce').fillna(0).mean()
-+                    fig_s = go.Figure()
-+                    fig_s.add_trace(go.Scatter(
-+                        x=[d.strftime("%Y-%m-%d") for d in d_range],
-+                        y=p_trend,
-+                        mode='lines+markers',
-+                        name='계획'
-+                    ))
-+                    fig_s.add_trace(go.Scatter(
-+                        x=[datetime.date.today().strftime("%Y-%m-%d")],
-+                        y=[a_prog],
-+                        mode='markers',
-+                        name='현재 실적',
-+                        marker=dict(size=12, color='red', symbol='star')
-+                    ))
-+                    fig_s.update_layout(title="진척률 추이 (S-Curve)", yaxis_title="진척률(%)")
-+                    st.plotly_chart(fig_s, use_container_width=True)
-+            except:
-+                pass
-+
-+        with tab3:
-+            st.subheader("📋 최근 주간 업무 이력")
-+            try:
-+                h_data = cached_get_all_records('pms_db', 'weekly_history')
-+                h_df = pd.DataFrame(h_data)
-+                if not h_df.empty:
-+                    h_df['프로젝트명'] = h_df['프로젝트명'].astype(str).str.strip()
-+                    p_match = h_df[h_df['프로젝트명'] == selected_pjt.strip()]
-+                    if not p_match.empty:
-+                        latest = p_match.iloc[-1]
-+                        
-+                        hist_this_w = str(latest.get('금주업무', latest.get('주요현황', '-'))).replace('\n', '<br>')
-+                        hist_next_w = str(latest.get('차주업무', '-')).replace('\n', '<br>')
-+                        
-+                        st.markdown(f"""
-+                        <div class="history-box">
-+                            <p style="font-size:14px; opacity: 0.7; margin-bottom:10px;">📅 <b>최종 보고일:</b> {latest.get('날짜', '-')}</p>
-+                            <div style="margin-bottom:12px;"><b>✔️ 금주 주요 업무:</b><br>{hist_this_w}</div>
-+                            <div><b>🔜 차주 주요 업무:</b><br>{hist_next_w}</div>
-+                        </div>
-+                        """, unsafe_allow_html=True)
-+                    else: 
-+                        st.info("아직 등록된 주간 업무 기록이 없습니다.")
-+            except: 
-+                st.warning("이력 데이터를 불러오는 중 오류가 발생했습니다.")
-+
-+            st.divider()
-+
-+            st.subheader("📝 주간 업무 작성 및 동기화 (I2, J2 셀 & 히스토리)")
-+            
-+            st.info("💡 우측 하단 모서리를 마우스로 드래그하면 입력 창의 크기를 자유롭게 늘리거나 줄일 수 있습니다.")
-+            with st.form("weekly_sync_form"):
-+                in_this = st.text_area("✔️ 금주 주요 업무 (I2)", value=this_val, height=250)
-+                in_next = st.text_area("🔜 차주 주요 업무 (J2)", value=next_val, height=250)
-+                if st.form_submit_button("시트 데이터 업데이트 및 이력 저장"):
-+                    safe_api_call(ws.update, 'I2', [[in_this]])
-+                    safe_api_call(ws.update, 'J2', [[in_next]])
-+                    try:
-+                        h_ws = safe_api_call(sh.worksheet, 'weekly_history')
-+                        safe_api_call(h_ws.append_row, [datetime.date.today().strftime("%Y-%m-%d"), selected_pjt, in_this, in_next, st.session_state.user_id])
-+                        cached_get_all_records.clear()
-+                    except: 
-+                        pass
-+                    cached_get_all_values.clear()
-+                    cached_get_head.clear()
-+                    st.success("성공적으로 업데이트 및 저장되었습니다!"); time.sleep(1); st.rerun()
-+
-+        st.write("---")
-+        st.subheader("📝 상세 공정표 편집 (A~G열 전용)")
-+        edited = st.data_editor(df, use_container_width=True, num_rows="dynamic")
-+        
-+        if st.button("💾 변경사항 전체 저장"):
-+            full_data = []
-+            header_7 = edited.columns.values.tolist()[:7]
-+            while len(header_7) < 7: header_7.append("")
-+            
-+            full_data.append(header_7 + ["PM", "금주", "차주"])
-+            
-+            edited_rows = edited.fillna("").astype(str).values.tolist()
-+            if len(edited_rows) > 0:
-+                for i, r in enumerate(edited_rows):
-+                    r_7 = r[:7]
-+                    while len(r_7) < 7: r_7.append("")
-+                    
-+                    if i == 0:
-+                        r_7.extend([new_pm, in_this, in_next])
-+                    else:
-+                        r_7.extend([new_pm, "", ""])
-+                        
-+                    full_data.append(r_7)
-+            else:
-+                full_data.append([""] * 7 + [new_pm, in_this, in_next])
-+                
-+            safe_api_call(ws.clear)
-+            safe_api_call(ws.update, 'A1', full_data)
-+            cached_get_all_values.clear()
-+            cached_get_head.clear()
-+            st.success("데이터가 완벽하게 저장되었습니다!"); time.sleep(1); st.rerun()
+                        plot_bgcolor='white',  
+                        paper_bgcolor='white',
+                        margin=dict(l=10, r=20, t=40, b=20)
+                    )
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.info("차트를 그릴 수 있는 유효한 날짜 데이터가 부족합니다. 편집기에서 날짜를 확인해 주세요.")
+            except Exception as e:
+                st.error(f"차트를 그리는 중 세부 오류가 발생했습니다: {e}")
+
+        with tab2:
+            try:
+                sdf = df.copy()
+                sdf['시작일'] = pd.to_datetime(sdf['시작일'], errors='coerce').dt.date
+                sdf['종료일'] = pd.to_datetime(sdf['종료일'], errors='coerce').dt.date
+                sdf = sdf.dropna(subset=['시작일', '종료일'])
+                if not sdf.empty:
+                    min_d, max_d = sdf['시작일'].min(), sdf['종료일'].max()
+                    d_range = pd.date_range(min_d, max_d, freq='W-MON').date.tolist()
+                    p_trend = [sdf.apply(lambda r: calc_planned_progress(r['시작일'], r['종료일'], d), axis=1).mean() for d in d_range]
+                    a_prog = pd.to_numeric(sdf['진행률'], errors='coerce').fillna(0).mean()
+                    fig_s = go.Figure()
+                    fig_s.add_trace(go.Scatter(x=[d.strftime("%Y-%m-%d") for d in d_range], y=p_trend, mode='lines+markers', name='계획'))
+                    fig_s.add_trace(go.Scatter(x=[datetime.date.today().strftime("%Y-%m-%d")], y=[a_prog], mode='markers', name='현재 실적', marker=dict(size=12, color='red', symbol='star')))
+                    fig_s.update_layout(title="진척률 추이 (S-Curve)", yaxis_title="진척률(%)")
+                    st.plotly_chart(fig_s, use_container_width=True)
+            except:
+                pass
+
+        with tab3:
+            st.subheader("📋 최근 주간 업무 이력")
+            try:
+                h_data = cached_get_all_records('pms_db', 'weekly_history')
+                h_df = pd.DataFrame(h_data)
+                if not h_df.empty:
+                    h_df['프로젝트명'] = h_df['프로젝트명'].astype(str).str.strip()
+                    p_match = h_df[h_df['프로젝트명'] == selected_pjt.strip()]
+                    if not p_match.empty:
+                        latest = p_match.iloc[-1]
+                        
+                        hist_this_w = str(latest.get('금주업무', latest.get('주요현황', '-'))).replace('\n', '<br>')
+                        hist_next_w = str(latest.get('차주업무', '-')).replace('\n', '<br>')
+                        
+                        st.markdown(f"""
+                        <div class="history-box">
+                            <p style="font-size:14px; opacity: 0.7; margin-bottom:10px;">📅 <b>최종 보고일:</b> {latest.get('날짜', '-')}</p>
+                            <div style="margin-bottom:12px;"><b>✔️ 금주 주요 업무:</b><br>{hist_this_w}</div>
+                            <div><b>🔜 차주 주요 업무:</b><br>{hist_next_w}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    else: 
+                        st.info("아직 등록된 주간 업무 기록이 없습니다.")
+            except: 
+                st.warning("이력 데이터를 불러오는 중 오류가 발생했습니다.")
+
+            st.divider()
+
+            st.subheader("📝 주간 업무 작성 및 동기화 (I2, J2 셀 & 히스토리)")
+            
+            st.info("💡 우측 하단 모서리를 마우스로 드래그하면 입력 창의 크기를 자유롭게 늘리거나 줄일 수 있습니다.")
+            with st.form("weekly_sync_form"):
+                in_this = st.text_area("✔️ 금주 주요 업무 (I2)", value=this_val, height=250)
+                in_next = st.text_area("🔜 차주 주요 업무 (J2)", value=next_val, height=250)
+                if st.form_submit_button("시트 데이터 업데이트 및 이력 저장"):
+                    safe_api_call(ws.update, 'I2', [[in_this]])
+                    safe_api_call(ws.update, 'J2', [[in_next]])
+                    try:
+                        h_ws = safe_api_call(sh.worksheet, 'weekly_history')
+                        safe_api_call(h_ws.append_row, [datetime.date.today().strftime("%Y-%m-%d"), selected_pjt, in_this, in_next, st.session_state.user_id])
+                        cached_get_all_records.clear()
+                    except: 
+                        pass
+                    cached_get_all_values.clear()
+                    cached_get_head.clear()
+                    st.success("성공적으로 업데이트 및 저장되었습니다!"); time.sleep(1); st.rerun()
+
+        st.write("---")
+        st.subheader("📝 상세 공정표 편집 (A~G열 전용)")
+        edited = st.data_editor(df, use_container_width=True, num_rows="dynamic")
+        
+        if st.button("💾 변경사항 전체 저장"):
+            full_data = []
+            header_7 = edited.columns.values.tolist()[:7]
+            while len(header_7) < 7: header_7.append("")
+            
+            full_data.append(header_7 + ["PM", "금주", "차주"])
+            
+            edited_rows = edited.fillna("").astype(str).values.tolist()
+            if len(edited_rows) > 0:
+                for i, r in enumerate(edited_rows):
+                    r_7 = r[:7]
+                    while len(r_7) < 7: r_7.append("")
+                    
+                    if i == 0:
+                        r_7.extend([new_pm, in_this, in_next])
+                    else:
+                        r_7.extend([new_pm, "", ""])
+                        
+                    full_data.append(r_7)
+            else:
+                full_data.append([""] * 7 + [new_pm, in_this, in_next])
+                
+            safe_api_call(ws.clear)
+            safe_api_call(ws.update, 'A1', full_data)
+            cached_get_all_values.clear()
+            cached_get_head.clear()
+            st.success("데이터가 완벽하게 저장되었습니다!"); time.sleep(1); st.rerun()
 
 # 3. 일 발전량 및 일조 분석
 def view_solar(sh):
@@ -829,30 +792,21 @@ def view_solar(sh):
         st.subheader("🔮 내일 태양광 예측 (날씨 예보 연동)")
         with st.container(border=True):
             tom = datetime.date.today() + datetime.timedelta(days=1)
-
-            # 1순위: LOCATION_COORDS에서 좌표 사용
-            lat = lon = None
-            if sel_loc in LOCATION_COORDS:
-                lat = LOCATION_COORDS[sel_loc]["lat"]
-                lon = LOCATION_COORDS[sel_loc]["lon"]
-                st.caption(f"고정 좌표 사용: {sel_loc} (lat={lat:.4f}, lon={lon:.4f})")
-            else:
-                # 2순위: Open-Meteo 지오코딩
+            geo = None
+            try:
+                geo = geocode_location_open_meteo(sel_loc)
+            except Exception:
                 geo = None
-                try:
-                    geo = geocode_location_open_meteo(sel_loc)
-                except Exception:
-                    geo = None
 
-                if geo and geo.get("latitude") is not None and geo.get("longitude") is not None:
-                    lat = float(geo["latitude"])
-                    lon = float(geo["longitude"])
-                    place = " / ".join([str(x) for x in [geo.get("name"), geo.get("admin1"), geo.get("country")] if x])
-                    st.caption(f"예보 좌표: {place} (lat={lat:.4f}, lon={lon:.4f})")
-
-            # 3순위: 좌표 못 찾으면 수동 입력
-            if lat is None or lon is None:
-                st.warning("지점명으로 좌표를 찾지 못했습니다. 아래에서 직접 위도/경도를 선택 또는 입력해 주세요.")
+            lat = None
+            lon = None
+            if geo and geo.get("latitude") is not None and geo.get("longitude") is not None:
+                lat = float(geo["latitude"])
+                lon = float(geo["longitude"])
+                place = " / ".join([str(x) for x in [geo.get("name"), geo.get("admin1"), geo.get("country")] if x])
+                st.caption(f"예보 좌표: {place} (lat={lat:.4f}, lon={lon:.4f})")
+            else:
+                st.warning("지점명을 좌표로 변환하지 못했습니다. 아래에서 위/경도를 직접 입력하면 예측이 가능합니다.")
                 c1, c2 = st.columns(2)
                 lat = c1.number_input("위도(lat)", value=36.3504, format="%.6f")
                 lon = c2.number_input("경도(lon)", value=127.3845, format="%.6f")
@@ -898,11 +852,7 @@ def view_solar(sh):
                                     f_ws = safe_api_call(sh.worksheet, f_ws_title)
                                 except WorksheetNotFound:
                                     f_ws = safe_api_call(sh.add_worksheet, title=f_ws_title, rows="2000", cols="20")
-                                    safe_api_call(
-                                        f_ws.append_row,
-                                        ["날짜", "지점", "위도", "경도", "예보_일사량(MJ/m²)", "예측_발전시간(h)",
-                                         "예측모델", "R2", "운량(%)", "최고기온(℃)", "강수량(mm)", "저장시각", "저장자"]
-                                    )
+                                    safe_api_call(f_ws.append_row, ["날짜", "지점", "위도", "경도", "예보_일사량(MJ/m²)", "예측_발전시간(h)", "예측모델", "R2", "운량(%)", "최고기온(℃)", "강수량(mm)", "저장시각", "저장자"])
                                 now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                 safe_api_call(
                                     f_ws.append_row,
@@ -937,8 +887,10 @@ def view_solar(sh):
             m2.metric("평균 일사량", f"{f_df['일사량합계'].mean():.2f} MJ/m²")
             m3.metric("검색 데이터 수", f"{len(f_df)} 건")
 
+            # --- [핵심] 일사량(막대), 발전시간(선), 예측추세(빨간선) 혼합 차트 ---
             fig_solar = go.Figure()
             
+            # 1. 일사량합계 (주황색 막대) - 1차 Y축
             fig_solar.add_trace(go.Bar(
                 x=f_df['날짜'], 
                 y=f_df['일사량합계'], 
@@ -947,6 +899,7 @@ def view_solar(sh):
                 yaxis='y1'
             ))
             
+            # 2. 실제 발전시간 (파란색 선) - 2차 Y축
             fig_solar.add_trace(go.Scatter(
                 x=f_df['날짜'], 
                 y=f_df['발전시간'], 
@@ -957,6 +910,7 @@ def view_solar(sh):
                 yaxis='y2'
             ))
             
+            # 3. 예측 발전시간 추세 (빨간색 두꺼운 선) - 2차 Y축 (기존 로직 유지)
             f_df = f_df.copy()
             f_df['예측_발전시간'] = (f_df['일사량합계'] / 3.6) * 0.8
             f_df['예측_추세선'] = f_df['예측_발전시간'].rolling(window=14, min_periods=1, center=True).mean()
@@ -970,24 +924,18 @@ def view_solar(sh):
                 yaxis='y2'
             ))
 
-            # 내일 예측 점
+            # 내일 예측 점(가능할 때만)
             try:
-                tom2 = datetime.date.today() + datetime.timedelta(days=1)
-                if sel_loc in LOCATION_COORDS:
-                    lat2 = LOCATION_COORDS[sel_loc]["lat"]
-                    lon2 = LOCATION_COORDS[sel_loc]["lon"]
-                else:
-                    geo2 = geocode_location_open_meteo(sel_loc)
-                    lat2 = float(geo2["latitude"]) if geo2 and geo2.get("latitude") else None
-                    lon2 = float(geo2["longitude"]) if geo2 and geo2.get("longitude") else None
-                if lat2 is not None and lon2 is not None:
-                    fc2 = fetch_open_meteo_daily_forecast(lat2, lon2, timezone="Asia/Seoul")
-                    rad2 = _pick_daily_value(fc2, tom2, "shortwave_radiation_sum")
-                    if rad2 is not None:
-                        pred_h2, _, _ = fit_predict_generation_hours(f_df, float(rad2))
+                tom = datetime.date.today() + datetime.timedelta(days=1)
+                geo = geocode_location_open_meteo(sel_loc)
+                if geo and geo.get("latitude") and geo.get("longitude"):
+                    fc = fetch_open_meteo_daily_forecast(float(geo["latitude"]), float(geo["longitude"]), timezone="Asia/Seoul")
+                    rad = _pick_daily_value(fc, tom, "shortwave_radiation_sum")
+                    if rad is not None:
+                        pred_h, _, _ = fit_predict_generation_hours(f_df, float(rad))
                         fig_solar.add_trace(go.Scatter(
-                            x=[datetime.datetime.combine(tom2, datetime.time(0, 0))],
-                            y=[pred_h2],
+                            x=[datetime.datetime.combine(tom, datetime.time(0, 0))],
+                            y=[pred_h],
                             name="내일 예측(점)",
                             mode="markers",
                             marker=dict(size=12, color="purple", symbol="diamond"),
@@ -1055,7 +1003,7 @@ def view_kpi(sh):
         st.table(df)
         if not df.empty and '실적' in df.columns:
             st.plotly_chart(px.pie(df, values='실적', names=df.columns[0], title="항목별 실적 비중"))
-    except:
+    except: 
         st.warning("KPI 시트를 찾을 수 없습니다.")
 
 # 5. 마스터 관리
@@ -1147,7 +1095,7 @@ def view_project_admin(sh, pjt_list):
                         if not data:
                             continue
                         pd.DataFrame(data[1:], columns=data[0]).to_excel(writer, index=False, sheet_name=p[:31])
-                    except:
+                    except: 
                         pass
             st.download_button("📥 통합 파일 받기", output.getvalue(), f"Backup_{datetime.date.today()}.xlsx")
 
