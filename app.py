@@ -13,7 +13,7 @@ import streamlit.components.v1 as components
 import numpy as np
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM 통합 공정 관리 v4.5.22", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM팀 통합 공정 관리 v4.5.22", page_icon="🏗️", layout="wide")
 
 # --- [UI] 스타일 ---
 st.markdown("""
@@ -126,7 +126,7 @@ def safe_api_call(func, *args, **kwargs):
 def check_login():
     if st.session_state.get("logged_in", False): 
         return True
-    st.title("🏗️ PM 통합 관리 시스템")
+    st.title("🏗️ PM팀 PJT 통합 관리 시스템")
     with st.form("login"):
         u_id = st.text_input("ID")
         u_pw = st.text_input("Password", type="password")
@@ -136,7 +136,7 @@ def check_login():
                 st.session_state["user_id"] = u_id
                 st.rerun()
             else:
-                st.error("정보 불일치")
+                st.error("아이디 또는 패스워드를 확인하세요")
     return False
 
 @st.cache_resource
@@ -359,7 +359,7 @@ def render_print_button():
 def view_dashboard(sh, pjt_list):
     col_title, col_btn = st.columns([8, 2])
     with col_title:
-        st.title("📊 통합 대시보드 (현황 브리핑)")
+        st.title("📊 PM팀 프로젝트 현황판")
     with col_btn:
         st.write("") # 줄맞춤 여백
         render_print_button()
@@ -1135,4 +1135,5 @@ if check_login():
                 st.rerun()
         except Exception:
             st.error("서버 접속이 지연되고 있습니다. 잠시 후 새로고침 해주세요.")
+
 
