@@ -366,7 +366,7 @@ def view_dashboard(sh, pjt_list):
     
     dashboard_data = []
     
-    with st.spinner("프로젝트 데이터를 분석 중입니다..."):
+    with st.spinner("프로젝트 데이터를 분석 중입니다.(첫 로그인 후 5분간 캐시 저장)"):
         for p_name in pjt_list:
             try:
                 # ★ 성능 개선: 전체가 아니라 상단 일부만 + 캐시 사용
@@ -1135,5 +1135,6 @@ if check_login():
                 st.rerun()
         except Exception:
             st.error("서버 접속이 지연되고 있습니다. 잠시 후 새로고침 해주세요.")
+
 
 
