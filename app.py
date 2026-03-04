@@ -141,11 +141,55 @@ def get_client():
     try:
         key_dict = dict(st.secrets["gcp_service_account"])
         if "private_key" in key_dict: key_dict["private_key"] = key_dict["private_key"].replace("\\n", "\n")
-        creds = Credentials.from_service_account_info(key_dict, scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
+        creds = Credentials.from_service_account_info(
+            key_dict,
+            scopes=[
+                "https://www.googleapis.com/auth/spreadsheets",
+                "https://www.googleapis.com/auth/drive"
+            ]
+        )
         return gspread.authorize(creds)
     except Exception as e:
         st.error(f"구글 클라우드 연결 실패: {e}")
         return None
+
+# -------------------------------
+# [성능 개선] 구글 시트 읽기 캐시
+# -------------------------------
+
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_get_all_values(spreadsheet_name: str, worksheet_name: str):
+    """지정 워크시트 전체 데이터를 5분간 캐싱"""
+    client = get_client()
+    if client is None:
+        return []
+    sh = safe_api_call(client.open, spreadsheet_name)
+    ws = safe_api_call(sh.worksheet, worksheet_name)
+    return safe_api_call(ws.get_all_values)
+
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_get_all_records(spreadsheet_name: str, worksheet_name: str):
+    """get_all_records 결과를 5분간 캐싱"""
+    client = get_client()
+    if client is None:
+        return []
+    sh = safe_api_call(client.open, spreadsheet_name)
+    ws = safe_api_call(sh.worksheet, worksheet_name)
+    return safe_api_call(ws.get_all_records)
+
+@st.cache_data(ttl=300, show_spinner=False)
+def cached_get_head(spreadsheet_name: str, worksheet_name: str, max_rows: int = 200):
+    """
+    대시보드용: 상단 N행(A1~J{max_rows})만 읽어서 평균 진척 계산
+    → 프로젝트별 행이 많아져도 속도 유지
+    """
+    client = get_client()
+    if client is None:
+        return []
+    sh = safe_api_call(client.open, spreadsheet_name)
+    ws = safe_api_call(sh.worksheet, worksheet_name)
+    rng = f"A1:J{max_rows}"
+    return safe_api_call(ws.get, rng)
 
 def calc_planned_progress(start, end, target_date=None):
     if target_date is None: target_date = datetime.date.today()
@@ -218,8 +262,8 @@ def view_dashboard(sh, pjt_list):
     with st.spinner("프로젝트 데이터를 분석 중입니다..."):
         for p_name in pjt_list:
             try:
-                ws = safe_api_call(sh.worksheet, p_name)
-                data = safe_api_call(ws.get_all_values)
+                # ★ 성능 개선: 전체가 아니라 상단 일부만 + 캐시 사용
+                data = cached_get_head('pms_db', p_name, max_rows=200)
                 
                 pm_name = "미지정"
                 this_w = "금주 실적 미입력"
@@ -227,7 +271,10 @@ def view_dashboard(sh, pjt_list):
                 
                 if len(data) > 0:
                     header = data[0][:7]
-                    df = pd.DataFrame([r[:7] for r in data[1:]], columns=header) if len(data) > 1 else pd.DataFrame(columns=header)
+                    df = pd.DataFrame(
+                        [r[:7] for r in data[1:]],
+                        columns=header
+                    ) if len(data) > 1 else pd.DataFrame(columns=header)
                     
                     if len(data) > 1 and len(data[1]) > 7 and str(data[1][7]).strip(): pm_name = str(data[1][7]).strip()
                     if len(data) > 1 and len(data[1]) > 8 and str(data[1][8]).strip(): this_w = str(data[1][8]).strip()
@@ -237,7 +284,12 @@ def view_dashboard(sh, pjt_list):
 
                 if not df.empty and '진행률' in df.columns:
                     avg_act = round(pd.to_numeric(df['진행률'], errors='coerce').fillna(0).mean(), 1)
-                    avg_plan = round(df.apply(lambda r: calc_planned_progress(r.get('시작일'), r.get('종료일')), axis=1).mean(), 1)
+                    avg_plan = round(
+                        df.apply(
+                            lambda r: calc_planned_progress(r.get('시작일'), r.get('종료일')),
+                            axis=1
+                        ).mean(), 1
+                    )
                 else:
                     avg_act = 0.0; avg_plan = 0.0
                 
@@ -261,6 +313,7 @@ def view_dashboard(sh, pjt_list):
                     "b_style": b_style
                 })
             except Exception as e:
+                # 개별 프로젝트 오류는 무시하고 계속
                 pass
 
     all_pms = sorted(list(set([d["pm_name"] for d in dashboard_data])))
@@ -349,8 +402,8 @@ def view_project_detail(sh, pjt_list):
     selected_pjt = st.selectbox("현장 선택", ["선택"] + pjt_list, key="selected_pjt")
     
     if selected_pjt != "선택":
-        ws = safe_api_call(sh.worksheet, selected_pjt)
-        data = safe_api_call(ws.get_all_values)
+        # ★ 성능 개선: 전체 데이터도 캐시 사용
+        data = cached_get_all_values('pms_db', selected_pjt)
         
         current_pm = ""
         this_val = ""
@@ -374,6 +427,8 @@ def view_project_detail(sh, pjt_list):
         if '진행률' in df.columns:
             df['진행률'] = pd.to_numeric(df['진행률'], errors='coerce').fillna(0)
 
+        ws = safe_api_call(sh.worksheet, selected_pjt)
+
         col_pm1, col_pm2 = st.columns([3, 1])
         with col_pm1:
             new_pm = st.text_input("프로젝트 담당 PM (H2 셀)", value=current_pm)
@@ -381,6 +436,9 @@ def view_project_detail(sh, pjt_list):
             st.write("")
             if st.button("PM 성함 저장"):
                 safe_api_call(ws.update, 'H2', [[new_pm]])
+                # 데이터 변경 후 캐시 무효화
+                cached_get_all_values.clear()
+                cached_get_head.clear()
                 st.success("PM이 업데이트되었습니다!")
         
         st.divider()
@@ -446,9 +504,14 @@ def view_project_detail(sh, pjt_list):
                     ))
                     
                     today_ms = pd.Timestamp.now().normalize().timestamp() * 1000
-                    fig.add_vline(x=today_ms, line_width=2.5, line_color="purple", 
-                                  annotation_text="오늘", annotation_position="top",
-                                  annotation_font=dict(color="purple", size=13, weight="bold"))
+                    fig.add_vline(
+                        x=today_ms,
+                        line_width=2.5,
+                        line_color="purple", 
+                        annotation_text="오늘",
+                        annotation_position="top",
+                        annotation_font=dict(color="purple", size=13, weight="bold")
+                    )
                     
                     fig.update_xaxes(
                         type="date",             
@@ -497,20 +560,38 @@ def view_project_detail(sh, pjt_list):
                 if not sdf.empty:
                     min_d, max_d = sdf['시작일'].min(), sdf['종료일'].max()
                     d_range = pd.date_range(min_d, max_d, freq='W-MON').date.tolist()
-                    p_trend = [sdf.apply(lambda r: calc_planned_progress(r['시작일'], r['종료일'], d), axis=1).mean() for d in d_range]
+                    p_trend = [
+                        sdf.apply(
+                            lambda r: calc_planned_progress(r['시작일'], r['종료일'], d),
+                            axis=1
+                        ).mean()
+                        for d in d_range
+                    ]
                     a_prog = pd.to_numeric(sdf['진행률'], errors='coerce').fillna(0).mean()
                     fig_s = go.Figure()
-                    fig_s.add_trace(go.Scatter(x=[d.strftime("%Y-%m-%d") for d in d_range], y=p_trend, mode='lines+markers', name='계획'))
-                    fig_s.add_trace(go.Scatter(x=[datetime.date.today().strftime("%Y-%m-%d")], y=[a_prog], mode='markers', name='현재 실적', marker=dict(size=12, color='red', symbol='star')))
+                    fig_s.add_trace(go.Scatter(
+                        x=[d.strftime("%Y-%m-%d") for d in d_range],
+                        y=p_trend,
+                        mode='lines+markers',
+                        name='계획'
+                    ))
+                    fig_s.add_trace(go.Scatter(
+                        x=[datetime.date.today().strftime("%Y-%m-%d")],
+                        y=[a_prog],
+                        mode='markers',
+                        name='현재 실적',
+                        marker=dict(size=12, color='red', symbol='star')
+                    ))
                     fig_s.update_layout(title="진척률 추이 (S-Curve)", yaxis_title="진척률(%)")
                     st.plotly_chart(fig_s, use_container_width=True)
-            except: pass
+            except:
+                pass
 
         with tab3:
             st.subheader("📋 최근 주간 업무 이력")
             try:
-                h_ws = safe_api_call(sh.worksheet, 'weekly_history')
-                h_data = safe_api_call(h_ws.get_all_records)
+                # weekly_history는 시스템 시트라 캐시 사용
+                h_data = cached_get_all_records('pms_db', 'weekly_history')
                 h_df = pd.DataFrame(h_data)
                 if not h_df.empty:
                     h_df['프로젝트명'] = h_df['프로젝트명'].astype(str).str.strip()
@@ -528,8 +609,10 @@ def view_project_detail(sh, pjt_list):
                             <div><b>🔜 차주 주요 업무:</b><br>{hist_next_w}</div>
                         </div>
                         """, unsafe_allow_html=True)
-                    else: st.info("아직 등록된 주간 업무 기록이 없습니다.")
-            except: st.warning("이력 데이터를 불러오는 중 오류가 발생했습니다.")
+                    else:
+                        st.info("아직 등록된 주간 업무 기록이 없습니다.")
+            except:
+                st.warning("이력 데이터를 불러오는 중 오류가 발생했습니다.")
 
             st.divider()
 
@@ -544,9 +627,26 @@ def view_project_detail(sh, pjt_list):
                     safe_api_call(ws.update, 'J2', [[in_next]])
                     try:
                         h_ws = safe_api_call(sh.worksheet, 'weekly_history')
-                        safe_api_call(h_ws.append_row, [datetime.date.today().strftime("%Y-%m-%d"), selected_pjt, in_this, in_next, st.session_state.user_id])
-                    except: pass
-                    st.success("성공적으로 업데이트 및 저장되었습니다!"); time.sleep(1); st.rerun()
+                        safe_api_call(
+                            h_ws.append_row,
+                            [
+                                datetime.date.today().strftime("%Y-%m-%d"),
+                                selected_pjt,
+                                in_this,
+                                in_next,
+                                st.session_state.user_id
+                            ]
+                        )
+                        # weekly_history 변경 후 캐시 무효화
+                        cached_get_all_records.clear()
+                    except:
+                        pass
+                    # 프로젝트 시트 데이터도 변경되므로 관련 캐시 무효화
+                    cached_get_all_values.clear()
+                    cached_get_head.clear()
+                    st.success("성공적으로 업데이트 및 저장되었습니다!")
+                    time.sleep(1)
+                    st.rerun()
 
         st.write("---")
         st.subheader("📝 상세 공정표 편집 (A~G열 전용)")
@@ -576,7 +676,12 @@ def view_project_detail(sh, pjt_list):
                 
             safe_api_call(ws.clear)
             safe_api_call(ws.update, 'A1', full_data)
-            st.success("데이터가 완벽하게 저장되었습니다!"); time.sleep(1); st.rerun()
+            # 저장 후 관련 캐시 전체 무효화
+            cached_get_all_values.clear()
+            cached_get_head.clear()
+            st.success("데이터가 완벽하게 저장되었습니다!")
+            time.sleep(1)
+            st.rerun()
 
 # 3. 일 발전량 및 일조 분석
 def view_solar(sh):
@@ -588,8 +693,8 @@ def view_solar(sh):
         render_print_button()
         
     try:
-        db_ws = safe_api_call(sh.worksheet, 'Solar_DB')
-        raw = safe_api_call(db_ws.get_all_records)
+        # ★ 성능 개선: Solar_DB 전체도 캐시 사용
+        raw = cached_get_all_records('pms_db', 'Solar_DB')
         if not raw:
             st.info("데이터가 없습니다.")
             return
@@ -714,12 +819,13 @@ def view_kpi(sh):
         render_print_button()
         
     try:
-        ws = safe_api_call(sh.worksheet, 'KPI')
-        df = pd.DataFrame(safe_api_call(ws.get_all_records))
+        # ★ 성능 개선: KPI도 캐시 사용
+        df = pd.DataFrame(cached_get_all_records('pms_db', 'KPI'))
         st.table(df)
         if not df.empty and '실적' in df.columns:
             st.plotly_chart(px.pie(df, values='실적', names=df.columns[0], title="항목별 실적 비중"))
-    except: st.warning("KPI 시트를 찾을 수 없습니다.")
+    except:
+        st.warning("KPI 시트를 찾을 수 없습니다.")
 
 # 5. 마스터 관리
 def view_project_admin(sh, pjt_list):
@@ -737,7 +843,11 @@ def view_project_admin(sh, pjt_list):
         if st.button("생성") and new_n:
             new_ws = safe_api_call(sh.add_worksheet, title=new_n, rows="100", cols="20")
             safe_api_call(new_ws.append_row, ["시작일", "종료일", "대분류", "구분", "진행상태", "비고", "진행률", "PM", "금주", "차주"])
-            st.success("생성 완료!"); st.rerun()
+            # 프로젝트 목록 변경 → 캐시 무효화
+            cached_get_all_values.clear()
+            cached_get_head.clear()
+            st.success("생성 완료!")
+            st.rerun()
             
     with t2:
         target = st.selectbox("수정 대상", ["선택"] + pjt_list, key="ren")
@@ -745,7 +855,10 @@ def view_project_admin(sh, pjt_list):
         if st.button("이름 변경") and target != "선택" and new_name:
             ws = safe_api_call(sh.worksheet, target)
             safe_api_call(ws.update_title, new_name)
-            st.success("수정 완료!"); st.rerun()
+            cached_get_all_values.clear()
+            cached_get_head.clear()
+            st.success("수정 완료!")
+            st.rerun()
 
     with t3:
         target_del = st.selectbox("삭제 대상", ["선택"] + pjt_list, key="del")
@@ -753,7 +866,10 @@ def view_project_admin(sh, pjt_list):
         if st.button("삭제 수행") and target_del != "선택" and conf:
             ws = safe_api_call(sh.worksheet, target_del)
             safe_api_call(sh.del_worksheet, ws)
-            st.success("삭제 완료!"); st.rerun()
+            cached_get_all_values.clear()
+            cached_get_head.clear()
+            st.success("삭제 완료!")
+            st.rerun()
 
     with t4:
         st.info("💡 엑셀 파일 내의 '시트 이름'이 구글 시트의 '프로젝트명'과 일치하면 한 번에 모두 업데이트됩니다.")
@@ -780,6 +896,10 @@ def view_project_admin(sh, pjt_list):
                         else:
                             skipped_sheets.append(s_name)
                 
+                # 일괄 업데이트 후 캐시 무효화
+                cached_get_all_values.clear()
+                cached_get_head.clear()
+
                 if updated_count > 0:
                     st.success(f"🎉 총 {updated_count}개의 프로젝트가 성공적으로 일괄 업데이트되었습니다!")
                 else:
@@ -797,10 +917,12 @@ def view_project_admin(sh, pjt_list):
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 for p in pjt_list:
                     try:
-                        ws = safe_api_call(sh.worksheet, p)
-                        data = safe_api_call(ws.get_all_values)
+                        data = cached_get_all_values('pms_db', p)
+                        if not data:
+                            continue
                         pd.DataFrame(data[1:], columns=data[0]).to_excel(writer, index=False, sheet_name=p[:31])
-                    except: pass
+                    except:
+                        pass
             st.download_button("📥 통합 파일 받기", output.getvalue(), f"Backup_{datetime.date.today()}.xlsx")
 
 # ---------------------------------------------------------
@@ -823,11 +945,19 @@ if check_login():
             st.sidebar.title("📁 PMO 메뉴")
             menu = st.sidebar.radio("메뉴 선택", ["통합 대시보드", "프로젝트 상세", "일 발전량 분석", "경영지표(KPI)", "마스터 설정"], key="selected_menu")
             
-            if menu == "통합 대시보드": view_dashboard(sh, pjt_list)
-            elif menu == "프로젝트 상세": view_project_detail(sh, pjt_list)
-            elif menu == "일 발전량 분석": view_solar(sh)
-            elif menu == "경영지표(KPI)": view_kpi(sh)
-            elif menu == "마스터 설정": view_project_admin(sh, pjt_list)
+            if menu == "통합 대시보드":
+                view_dashboard(sh, pjt_list)
+            elif menu == "프로젝트 상세":
+                view_project_detail(sh, pjt_list)
+            elif menu == "일 발전량 분석":
+                view_solar(sh)
+            elif menu == "경영지표(KPI)":
+                view_kpi(sh)
+            elif menu == "마스터 설정":
+                view_project_admin(sh, pjt_list)
             
-            if st.sidebar.button("로그아웃"): st.session_state.logged_in = False; st.rerun()
-        except Exception as e: st.error(f"서버 접속이 지연되고 있습니다. 잠시 후 새로고침 해주세요.")
+            if st.sidebar.button("로그아웃"):
+                st.session_state.logged_in = False
+                st.rerun()
+        except Exception as e:
+            st.error(f"서버 접속이 지연되고 있습니다. 잠시 후 새로고침 해주세요.")
