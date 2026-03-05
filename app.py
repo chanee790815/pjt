@@ -13,7 +13,6 @@ import streamlit.components.v1 as components
 import numpy as np
 import json
 import pathlib
-from urllib.parse import quote
 
 # 1. 페이지 설정
 st.set_page_config(page_title="PM 통합 공정 관리 v4.5.22", page_icon="🏗️", layout="wide")
@@ -88,42 +87,10 @@ st.markdown("""
     }
 
     /* ========================================================= */
-    /* [상단 메뉴] 반투명 다크 바 스타일 (참고: LOTTE REIT형) */
+    /* [상단 메뉴] 가로 메뉴 바 */
     /* ========================================================= */
-    .pmo-top-nav {
-        background: rgba(28, 38, 50, 0.92);
-        backdrop-filter: blur(10px);
-        margin: 0 -1rem 1rem -1rem;
-        padding: 14px 24px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
+    [data-testid="stVerticalBlock"] > div:has([data-testid="column"]) [data-testid="stHorizontalBlock"] {
         gap: 8px;
-        flex-wrap: wrap;
-        border-bottom: 1px solid rgba(255,255,255,0.08);
-        box-shadow: 0 2px 12px rgba(0,0,0,0.15);
-    }
-    .pmo-top-nav a {
-        color: rgba(255,255,255,0.95);
-        text-decoration: none;
-        font-weight: 500;
-        font-size: 14px;
-        padding: 8px 16px;
-        border-radius: 6px;
-        transition: background 0.2s, color 0.2s;
-    }
-    .pmo-top-nav a:hover {
-        background: rgba(255,255,255,0.12);
-        color: #fff;
-    }
-    .pmo-top-nav a.active {
-        background: rgba(255,255,255,0.18);
-        color: #fff;
-        font-weight: 600;
-    }
-    @media (max-width: 768px) {
-        .pmo-top-nav { padding: 10px 12px; gap: 4px; }
-        .pmo-top-nav a { font-size: 12px; padding: 6px 10px; }
     }
 
     /* ========================================================= */
@@ -1364,25 +1331,24 @@ if check_login():
                 pjt_list = [ws.title for ws in sh.worksheets() if ws.title not in sys_names]
                 _save_file_cache(WORKSHEET_LIST_CACHE, pjt_list)
             
-            menu_options = ["통합 대시보드", "프로젝트 상세", "일 발전량 분석", "경영지표(KPI)", "마스터 설정"]
             if "selected_menu" not in st.session_state:
                 st.session_state.selected_menu = "통합 대시보드"
             if "selected_pjt" not in st.session_state:
                 st.session_state.selected_pjt = "선택"
-            q_menu = st.query_params.get("menu")
-            if q_menu and q_menu in menu_options:
-                st.session_state.selected_menu = q_menu
-            menu = st.session_state.selected_menu
             
             st.sidebar.title("📁 PMO 메뉴")
-            st.sidebar.radio("메뉴 선택", menu_options, key="selected_menu")
+            menu = st.sidebar.radio("메뉴 선택", ["통합 대시보드", "프로젝트 상세", "일 발전량 분석", "경영지표(KPI)", "마스터 설정"], key="selected_menu")
             
-            # 상단 가로 메뉴 (반투명 다크 바, 링크 클릭 시 query_params로 전환)
-            nav_links = "".join(
-                f'<a href="?menu={quote(m)}" class="{"active" if m == menu else ""}">{m}</a>'
-                for m in menu_options
-            )
-            st.markdown(f'<nav class="pmo-top-nav">{nav_links}</nav>', unsafe_allow_html=True)
+            # 상단 가로 메뉴 (사이드바와 동기화)
+            menu_options = ["통합 대시보드", "프로젝트 상세", "일 발전량 분석", "경영지표(KPI)", "마스터 설정"]
+            with st.container(border=True):
+                top_cols = st.columns(5)
+                for idx, opt in enumerate(menu_options):
+                    with top_cols[idx]:
+                        if opt == menu:
+                            st.button(f"● {opt}", key=f"topmenu_{idx}", disabled=True, use_container_width=True, type="primary")
+                        else:
+                            st.button(opt, key=f"topmenu_{idx}", on_click=set_top_menu, args=(opt,), use_container_width=True)
             
             if menu == "통합 대시보드": 
                 view_dashboard(sh, pjt_list)
