@@ -629,7 +629,30 @@ def view_project_detail(sh, pjt_list):
         st.write("")
         render_print_button()
     
-    selected_pjt = st.selectbox("현장 선택", ["선택"] + pjt_list, key="selected_pjt")
+    # 프로젝트별 담당 PM 조회 (상단 2행만 읽어서 H열 PM 추출)
+    pjt_to_pm = {}
+    for p_name in pjt_list:
+        try:
+            data = cached_get_head('pms_db', p_name, max_rows=2)
+            pm_name = "미지정"
+            if len(data) > 1 and len(data[1]) > 7 and str(data[1][7]).strip():
+                pm_name = str(data[1][7]).strip()
+            pjt_to_pm[p_name] = pm_name
+        except Exception:
+            pjt_to_pm[p_name] = "미지정"
+    all_pms = sorted(set(pjt_to_pm.values()))
+    
+    col_pm_filter, col_pjt_filter = st.columns(2)
+    with col_pm_filter:
+        selected_pm_filter = st.selectbox("👤 담당자(PM) 조회", ["전체"] + all_pms, key="project_detail_pm_filter")
+    with col_pjt_filter:
+        if selected_pm_filter == "전체":
+            filtered_pjt_list = pjt_list
+        else:
+            filtered_pjt_list = [p for p in pjt_list if pjt_to_pm.get(p) == selected_pm_filter]
+        if st.session_state.get("selected_pjt") not in (["선택"] + filtered_pjt_list):
+            st.session_state.selected_pjt = "선택"
+        selected_pjt = st.selectbox("현장 선택", ["선택"] + filtered_pjt_list, key="selected_pjt")
     
     if selected_pjt != "선택":
         data = cached_get_all_values('pms_db', selected_pjt)
