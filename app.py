@@ -87,41 +87,31 @@ st.markdown("""
     }
 
     /* ========================================================= */
-    /* [상단 메뉴] 본문과 어울리는 탭 스타일 (테두리 없음, 얇은 구분선) */
+    /* [상단 메뉴] 가로 메뉴 바 */
     /* ========================================================= */
-    .pmo-top-nav-row {
-        margin: 0 -1rem 0 -1rem;
-        padding: 6px 1rem 10px 1rem;
-        border-bottom: 1px solid rgba(0,0,0,0.06);
-        background: rgba(0,0,0,0.02);
+    [data-testid="stVerticalBlock"] > div:has([data-testid="column"]) [data-testid="stHorizontalBlock"] {
+        gap: 8px;
     }
-    .pmo-top-nav-row .stButton > button {
-        font-size: 13px !important;
-        padding: 6px 12px !important;
-        min-height: 32px !important;
-        border: 1px solid transparent !important;
-        background: transparent !important;
-        box-shadow: none !important;
-        color: inherit !important;
+
+    /* ========================================================= */
+    /* [간트 차트] 상단 기간 표시줄 틀 고정 (스크롤 시 상단 고정) */
+    /* ========================================================= */
+    .gantt-sticky-header {
+        position: sticky;
+        top: 0;
+        z-index: 60;
+        background: linear-gradient(180deg, #f0f4f8 0%, #e8eef4 100%);
+        padding: 10px 14px;
+        margin: 0 -1rem 8px -1rem;
+        border-bottom: 2px solid rgba(33, 150, 243, 0.35);
+        font-weight: 700;
+        font-size: 14px;
+        color: #1565c0;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.06);
     }
-    .pmo-top-nav-row .stButton > button:hover {
-        background: rgba(0,0,0,0.04) !important;
-        border-color: rgba(0,0,0,0.08) !important;
+    @media (max-width: 768px) {
+        .gantt-sticky-header { font-size: 13px; padding: 8px 10px; }
     }
-    .pmo-top-nav-row .stButton > button[kind="primary"] {
-        background: rgba(33, 150, 243, 0.12) !important;
-        color: #1565c0 !important;
-        border-color: rgba(33, 150, 243, 0.3) !important;
-        font-weight: 600 !important;
-    }
-    /* 상단 메뉴 HTML 링크/탭 스타일 */
-    .pmo-top-nav-row { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
-    .pmo-top-nav-item {
-        display: inline-block; padding: 6px 12px; font-size: 13px; color: #555; text-decoration: none;
-        border-radius: 6px; border: 1px solid transparent; transition: background 0.15s, border-color 0.15s;
-    }
-    .pmo-top-nav-item:hover { background: rgba(0,0,0,0.04); border-color: rgba(0,0,0,0.08); color: #333; }
-    .pmo-top-nav-item.active { background: rgba(33, 150, 243, 0.12); color: #1565c0; font-weight: 600; border-color: rgba(33, 150, 243, 0.25); }
 
     /* ========================================================= */
     /* [보고서 인쇄/PDF 최적화 CSS] */
@@ -319,28 +309,70 @@ def cached_get_head(spreadsheet_name: str, worksheet_name: str, max_rows: int = 
 # [예측] Open-Meteo 기반 내일 일사량/발전시간 예측
 # -------------------------------
 
+# 지점명 자동 변환 실패 시 사용할 기본 좌표 (지점명 정확히 일치)
+# 필요 시 여기에 "지점명": (위도, 경도) 추가 (예: "서산(당진)": (36.78, 126.45))
+GEO_FALLBACK_COORDS = {
+    "서산(당진)": (36.7840, 126.4500),
+    "당진": (36.8940, 126.6290),
+    "서산": (36.7840, 126.4500),
+}
+
+def _geocode_one_query(query: str):
+    """단일 쿼리로 Open-Meteo Geocoding 시도"""
+    if not query or not query.strip():
+        return None
+    url = "https://geocoding-api.open-meteo.com/v1/search"
+    params = {"name": query.strip(), "count": 1, "language": "ko", "format": "json"}
+    try:
+        r = requests.get(url, params=params, timeout=10)
+        r.raise_for_status()
+        j = r.json()
+        results = j.get("results") or []
+        if not results:
+            return None
+        top = results[0]
+        return {
+            "name": top.get("name"),
+            "country": top.get("country"),
+            "admin1": top.get("admin1"),
+            "latitude": top.get("latitude"),
+            "longitude": top.get("longitude"),
+        }
+    except Exception:
+        return None
+
 @st.cache_data(ttl=24 * 3600, show_spinner=False)
 def geocode_location_open_meteo(name: str):
-    """지점명 -> 위/경도 (Open-Meteo Geocoding)"""
+    """지점명 -> 위/경도 (Open-Meteo Geocoding). 여러 쿼리 변형 시도 + 사전 좌표 fallback."""
     q = str(name).strip()
     if not q:
         return None
-    url = "https://geocoding-api.open-meteo.com/v1/search"
-    params = {"name": q, "count": 1, "language": "ko", "format": "json"}
-    r = requests.get(url, params=params, timeout=10)
-    r.raise_for_status()
-    j = r.json()
-    results = j.get("results") or []
-    if not results:
-        return None
-    top = results[0]
-    return {
-        "name": top.get("name"),
-        "country": top.get("country"),
-        "admin1": top.get("admin1"),
-        "latitude": top.get("latitude"),
-        "longitude": top.get("longitude"),
-    }
+    # 1) 사전에 등록된 좌표가 있으면 사용
+    if q in GEO_FALLBACK_COORDS:
+        lat, lon = GEO_FALLBACK_COORDS[q]
+        return {"name": q, "country": "South Korea", "admin1": None, "latitude": lat, "longitude": lon}
+    # 2) API로 쿼리 변형 여러 개 시도
+    to_try = [q]
+    if "(" in q and ")" in q:
+        to_try.append(q.split("(")[0].strip())
+        inner = q[q.index("(") + 1 : q.index(")")].strip()
+        if inner:
+            to_try.append(inner)
+        to_try.append(q.replace("(", " ").replace(")", " ").strip())
+    elif "," in q:
+        for part in q.split(","):
+            if part.strip():
+                to_try.append(part.strip())
+    seen = set()
+    for query in to_try:
+        query = (query or "").strip()
+        if not query or query in seen:
+            continue
+        seen.add(query)
+        result = _geocode_one_query(query)
+        if result and result.get("latitude") is not None and result.get("longitude") is not None:
+            return result
+    return None
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_open_meteo_daily_forecast(latitude: float, longitude: float, timezone: str = "Asia/Seoul"):
@@ -437,6 +469,7 @@ def navigate_to_project(p_name):
     st.session_state.selected_pjt = p_name
 
 def set_top_menu(menu_name: str):
+    """상단 메뉴 클릭 시 선택 메뉴 변경 (콜백 종료 후 Streamlit이 자동 리런)"""
     st.session_state.selected_menu = menu_name
 
 def render_print_button():
@@ -482,7 +515,7 @@ def render_print_button():
 def view_dashboard(sh, pjt_list):
     if "dashboard_report_font_size" not in st.session_state:
         st.session_state.dashboard_report_font_size = 12
-    col_title, col_font, col_btn = st.columns([5, 2, 2])
+    col_title, col_font, col_btn = st.columns([6, 2, 2])
     with col_title:
         st.title("📊 통합 대시보드 (현황 브리핑)")
     with col_font:
@@ -557,7 +590,6 @@ def view_dashboard(sh, pjt_list):
     f_col1, f_col2 = st.columns([1, 3])
     with f_col1:
         selected_pm = st.selectbox("👤 담당자 조회", ["전체"] + all_pms)
-        
     if selected_pm != "전체":
         filtered_data = [d for d in dashboard_data if d["pm_name"] == selected_pm]
     else:
@@ -636,30 +668,7 @@ def view_project_detail(sh, pjt_list):
         st.write("")
         render_print_button()
     
-    # 프로젝트별 담당 PM 조회 (상단 2행만 읽어서 H열 PM 추출)
-    pjt_to_pm = {}
-    for p_name in pjt_list:
-        try:
-            data = cached_get_head('pms_db', p_name, max_rows=2)
-            pm_name = "미지정"
-            if len(data) > 1 and len(data[1]) > 7 and str(data[1][7]).strip():
-                pm_name = str(data[1][7]).strip()
-            pjt_to_pm[p_name] = pm_name
-        except Exception:
-            pjt_to_pm[p_name] = "미지정"
-    all_pms = sorted(set(pjt_to_pm.values()))
-    
-    col_pm_filter, col_pjt_filter = st.columns(2)
-    with col_pm_filter:
-        selected_pm_filter = st.selectbox("👤 담당자(PM) 조회", ["전체"] + all_pms, key="project_detail_pm_filter")
-    with col_pjt_filter:
-        if selected_pm_filter == "전체":
-            filtered_pjt_list = pjt_list
-        else:
-            filtered_pjt_list = [p for p in pjt_list if pjt_to_pm.get(p) == selected_pm_filter]
-        if st.session_state.get("selected_pjt") not in (["선택"] + filtered_pjt_list):
-            st.session_state.selected_pjt = "선택"
-        selected_pjt = st.selectbox("현장 선택", ["선택"] + filtered_pjt_list, key="selected_pjt")
+    selected_pjt = st.selectbox("현장 선택", ["선택"] + pjt_list, key="selected_pjt")
     
     if selected_pjt != "선택":
         data = cached_get_all_values('pms_db', selected_pjt)
@@ -727,16 +736,14 @@ def view_project_detail(sh, pjt_list):
                         
                     cdf['진행률'] = pd.to_numeric(cdf['진행률'], errors='coerce').fillna(0).astype(float)
                     
-                    cdf['구분_고유'] = cdf.apply(lambda r: f"{r.name + 1}. {str(r['구분']).strip()}", axis=1)
-                    
-                    def calc_text_width(text):
-                        return sum(2 if ord(c) > 127 else 1 for c in str(text))
-                    
-                    max_width = cdf['구분_고유'].apply(calc_text_width).max()
-                    
-                    cdf['구분_고유'] = cdf['구분_고유'].apply(
-                        lambda x: str(x) + "&nbsp;" * int((max_width - calc_text_width(x)) * 2.5)
-                    )
+                    # 표시용 라벨: 긴 글자 말줄임으로 좌측 영역 축소 (모바일에서 차트가 크게 보이도록)
+                    max_label_len = 14
+                    def truncate_label(row):
+                        raw = f"{row.name + 1}. {str(row['구분']).strip()}"
+                        if len(raw) <= max_label_len:
+                            return raw
+                        return raw[:max_label_len] + "…"
+                    cdf['구분_표시'] = cdf.apply(truncate_label, axis=1)
                     
                     cdf['duration'] = (cdf['종료일'] - cdf['시작일']).dt.total_seconds() * 1000
                     cdf['duration'] = cdf['duration'].apply(lambda d: 86400000.0 if d <= 0 else d)
@@ -744,59 +751,109 @@ def view_project_detail(sh, pjt_list):
                     cdf['시작일_str'] = cdf['시작일'].dt.strftime('%Y-%m-%d')
                     cdf['종료일_str'] = cdf['종료일'].dt.strftime('%Y-%m-%d')
                     
+                    # 프로젝트 기간 년.월 (26.1 ~ 27.3 형식)
+                    min_d = cdf['시작일'].min()
+                    max_d = cdf['종료일'].max()
+                    period_start = f"{min_d.year % 100}.{min_d.month}"
+                    period_end = f"{max_d.year % 100}.{max_d.month}"
+                    
+                    # 상단 고정: 프로젝트 기간 표시 (스크롤해도 보이도록)
+                    st.markdown(
+                        f'<div class="gantt-sticky-header">📅 프로젝트 기간: <strong>{period_start}</strong> ~ <strong>{period_end}</strong></div>',
+                        unsafe_allow_html=True
+                    )
+                    
+                    # 진행률별 색상 대비 강화 (0=빨강, 30=주황, 60=노랑·연두, 100=초록)
+                    progress_colorscale = [
+                        [0.0, 'rgb(200, 60, 60)'],
+                        [0.2, 'rgb(230, 100, 80)'],
+                        [0.4, 'rgb(255, 180, 60)'],
+                        [0.6, 'rgb(180, 210, 90)'],
+                        [0.8, 'rgb(100, 180, 100)'],
+                        [1.0, 'rgb(50, 140, 70)'],
+                    ]
+                    
                     fig = go.Figure()
                     fig.add_trace(go.Bar(
                         base=cdf['시작일'],
                         x=cdf['duration'],
-                        y=[cdf['대분류'].tolist(), cdf['구분_고유'].tolist()],
+                        y=[cdf['대분류'].tolist(), cdf['구분_표시'].tolist()],
                         orientation='h',
                         marker=dict(
                             color=cdf['진행률'],
-                            colorscale='RdYlGn',
+                            colorscale=progress_colorscale,
                             cmin=0,
                             cmax=100,
                             showscale=True,
-                            colorbar=dict(title="진행률(%)")
+                            colorbar=dict(
+                                title=dict(text="진행률(%)", font=dict(size=12)),
+                                thickness=18,
+                                len=0.7,
+                                tickfont=dict(size=11),
+                                outlinewidth=1,
+                            ),
+                            line=dict(width=1.2, color='rgba(60,60,60,0.5)'),
                         ),
-                        customdata=cdf[['시작일_str', '종료일_str', '대분류', '구분']].values,
-                        hovertemplate="<b>[%{customdata[2]}] %{customdata[3]}</b><br>시작일: %{customdata[0]}<br>종료일: %{customdata[1]}<br>진행률: %{marker.color}%<extra></extra>"
+                        customdata=cdf[['시작일_str', '종료일_str', '대분류', '구분', '진행률']].values,
+                        hovertemplate="<b>[%{customdata[2]}] %{customdata[3]}</b><br>시작: %{customdata[0]} ~ 종료: %{customdata[1]}<br>진행률: %{customdata[4]:.0f}%<extra></extra>"
                     ))
                     
                     today_ms = pd.Timestamp.now().normalize().timestamp() * 1000
-                    fig.add_vline(x=today_ms, line_width=2.5, line_color="purple", 
-                                  annotation_text="오늘", annotation_position="top",
-                                  annotation_font=dict(color="purple", size=13, weight="bold"))
+                    fig.add_vline(
+                        x=today_ms,
+                        line_width=2.5,
+                        line_dash="dash",
+                        line_color="rgb(120, 60, 180)",
+                        annotation_text=" 오늘 ",
+                        annotation_position="top",
+                        annotation_font=dict(color="rgb(120, 60, 180)", size=12, weight="bold"),
+                        annotation_bgcolor="rgba(240,230,255,0.9)",
+                        annotation_borderpad=4,
+                    )
                     
                     fig.update_xaxes(
-                        type="date",             
-                        dtick="M1",              
-                        tickformat="%y.%-m",     
-                        tickangle=0,             
-                        showgrid=True,           
+                        type="date",
+                        dtick="M1",
+                        tickformat="%y.%-m",
+                        tickangle=0,
+                        tickfont=dict(size=11),
+                        showgrid=True,
                         gridwidth=1,
-                        gridcolor='rgba(200, 200, 200, 0.6)',
-                        showline=True, linewidth=1, linecolor='rgba(200, 200, 200, 0.6)', mirror=True,
-                        title_text=""
+                        gridcolor='rgba(200, 200, 200, 0.7)',
+                        showline=True,
+                        linewidth=1,
+                        linecolor='rgba(180, 180, 180, 0.8)',
+                        mirror=True,
+                        title_text="",
                     )
                     
                     fig.update_yaxes(
                         autorange="reversed",
-                        type="multicategory",    
-                        categoryorder="trace",   
+                        type="multicategory",
+                        categoryorder="trace",
+                        tickfont=dict(size=10),
                         showgrid=True,
                         gridwidth=1,
-                        gridcolor='rgba(200, 200, 200, 0.6)',
-                        showline=True, linewidth=1, linecolor='rgba(200, 200, 200, 0.6)', mirror=True,
-                        dividercolor='rgba(150, 150, 150, 0.8)',
-                        dividerwidth=1,
-                        title_text=""
+                        gridcolor='rgba(200, 200, 200, 0.7)',
+                        showline=True,
+                        linewidth=1,
+                        linecolor='rgba(180, 180, 180, 0.8)',
+                        mirror=True,
+                        dividercolor='rgba(120, 120, 120, 0.6)',
+                        dividerwidth=1.2,
+                        title_text="",
                     )
                     
+                    # 좌측 여백 축소 → 차트 영역 확대 (모바일에서 그래프가 크게 보이도록)
                     fig.update_layout(
-                        height=max(400, len(cdf) * 35),
-                        plot_bgcolor='white',  
+                        height=max(500, len(cdf) * 40),
+                        bargap=0.25,
+                        bargroupgap=0.08,
+                        plot_bgcolor='rgb(252,252,252)',
                         paper_bgcolor='white',
-                        margin=dict(l=10, r=20, t=40, b=20)
+                        margin=dict(l=78, r=88, t=36, b=45),
+                        font=dict(family="Pretendard, sans-serif", size=10),
+                        showlegend=False,
                     )
                     
                     st.plotly_chart(fig, use_container_width=True)
@@ -962,7 +1019,7 @@ def view_solar(sh):
                 place = " / ".join([str(x) for x in [geo.get("name"), geo.get("admin1"), geo.get("country")] if x])
                 st.caption(f"예보 좌표: {place} (lat={lat:.4f}, lon={lon:.4f})")
             else:
-                st.warning("지점명을 좌표로 변환하지 못했습니다. 아래에서 위/경도를 직접 입력하면 예측이 가능합니다.")
+                st.warning("지점명을 좌표로 변환하지 못했습니다. 아래에서 위/경도를 직접 입력하면 예측이 가능합니다. (자주 쓰는 지점은 개발자에게 요청해 app.py의 GEO_FALLBACK_COORDS에 등록하면 자동 변환됩니다.)")
                 c1, c2 = st.columns(2)
                 lat = c1.number_input("위도(lat)", value=36.3504, format="%.6f")
                 lon = c2.number_input("경도(lon)", value=127.3845, format="%.6f")
@@ -1156,18 +1213,6 @@ def view_kpi(sh):
         
     try:
         df = pd.DataFrame(cached_get_all_records('pms_db', 'KPI'))
-        # 가중치(%) 열: 불필요한 소수점 제거 (40.0000 → 40, 2.5000 → 2.5)
-        if not df.empty and '가중치(%)' in df.columns:
-            def _fmt_weight(x):
-                try:
-                    v = float(x)
-                    if pd.isna(v):
-                        return x
-                    return f"{v:.0f}" if v == int(v) else f"{v:g}"
-                except (TypeError, ValueError):
-                    return x
-            df = df.copy()
-            df['가중치(%)'] = df['가중치(%)'].apply(_fmt_weight)
         st.table(df)
         if not df.empty and '실적' in df.columns:
             st.plotly_chart(px.pie(df, values='실적', names=df.columns[0], title="항목별 실적 비중"))
@@ -1296,13 +1341,14 @@ if check_login():
             
             # 상단 가로 메뉴 (사이드바와 동기화)
             menu_options = ["통합 대시보드", "프로젝트 상세", "일 발전량 분석", "경영지표(KPI)", "마스터 설정"]
-            top_cols = st.columns(5)
-            for idx, opt in enumerate(menu_options):
-                with top_cols[idx]:
-                    if opt == menu:
-                        st.button(f"● {opt}", key=f"topmenu_{idx}", disabled=True, use_container_width=True, type="primary")
-                    else:
-                        st.button(opt, key=f"topmenu_{idx}", on_click=set_top_menu, args=(opt,), use_container_width=True)
+            with st.container(border=True):
+                top_cols = st.columns(5)
+                for idx, opt in enumerate(menu_options):
+                    with top_cols[idx]:
+                        if opt == menu:
+                            st.button(f"● {opt}", key=f"topmenu_{idx}", disabled=True, use_container_width=True, type="primary")
+                        else:
+                            st.button(opt, key=f"topmenu_{idx}", on_click=set_top_menu, args=(opt,), use_container_width=True)
             
             if menu == "통합 대시보드": 
                 view_dashboard(sh, pjt_list)
