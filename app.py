@@ -87,6 +87,13 @@ st.markdown("""
     }
 
     /* ========================================================= */
+    /* [상단 메뉴] 가로 메뉴 바 */
+    /* ========================================================= */
+    [data-testid="stVerticalBlock"] > div:has([data-testid="column"]) [data-testid="stHorizontalBlock"] {
+        gap: 8px;
+    }
+
+    /* ========================================================= */
     /* [간트 차트] 상단 기간 표시줄 틀 고정 (스크롤 시 상단 고정) */
     /* ========================================================= */
     .gantt-sticky-header {
@@ -418,6 +425,11 @@ def calc_planned_progress(start, end, target_date=None):
 def navigate_to_project(p_name):
     st.session_state.selected_menu = "프로젝트 상세"
     st.session_state.selected_pjt = p_name
+
+def set_top_menu(menu_name: str):
+    """상단 메뉴 클릭 시 선택 메뉴 변경 후 리런"""
+    st.session_state.selected_menu = menu_name
+    st.rerun()
 
 def render_print_button():
     """자바스크립트를 이용해 브라우저 인쇄(PDF 저장) 창을 띄우는 버튼"""
@@ -1279,6 +1291,17 @@ if check_login():
             
             st.sidebar.title("📁 PMO 메뉴")
             menu = st.sidebar.radio("메뉴 선택", ["통합 대시보드", "프로젝트 상세", "일 발전량 분석", "경영지표(KPI)", "마스터 설정"], key="selected_menu")
+            
+            # 상단 가로 메뉴 (사이드바와 동기화)
+            menu_options = ["통합 대시보드", "프로젝트 상세", "일 발전량 분석", "경영지표(KPI)", "마스터 설정"]
+            with st.container(border=True):
+                top_cols = st.columns(5)
+                for idx, opt in enumerate(menu_options):
+                    with top_cols[idx]:
+                        if opt == menu:
+                            st.button(f"● {opt}", key=f"topmenu_{idx}", disabled=True, use_container_width=True, type="primary")
+                        else:
+                            st.button(opt, key=f"topmenu_{idx}", on_click=set_top_menu, args=(opt,), use_container_width=True)
             
             if menu == "통합 대시보드": 
                 view_dashboard(sh, pjt_list)
