@@ -427,9 +427,8 @@ def navigate_to_project(p_name):
     st.session_state.selected_pjt = p_name
 
 def set_top_menu(menu_name: str):
-    """상단 메뉴 클릭 시 선택 메뉴 변경 후 리런"""
+    """상단 메뉴 클릭 시 선택 메뉴 변경 (콜백 종료 후 Streamlit이 자동 리런)"""
     st.session_state.selected_menu = menu_name
-    st.rerun()
 
 def render_print_button():
     """자바스크립트를 이용해 브라우저 인쇄(PDF 저장) 창을 띄우는 버튼"""
