@@ -1228,3 +1228,4 @@ if check_login():
                 st.rerun()
         except Exception:
             st.error("서버 접속이 지연되고 있습니다. 잠시 후 새로고침 해주세요.")
+
