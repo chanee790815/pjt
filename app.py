@@ -89,12 +89,6 @@ st.markdown("""
     /* ========================================================= */
     /* [상단 메뉴] 본문과 어울리는 탭 스타일 (테두리 없음, 얇은 구분선) */
     /* ========================================================= */
-    .pmo-top-nav-wrap {
-        margin: 0 -1rem 0 -1rem;
-        padding: 6px 1rem 10px 1rem;
-        border-bottom: 1px solid rgba(0,0,0,0.06);
-        background: rgba(0,0,0,0.02);
-    }
     .pmo-top-nav-row {
         margin: 0 -1rem 0 -1rem;
         padding: 6px 1rem 10px 1rem;
@@ -1132,6 +1126,18 @@ def view_kpi(sh):
         
     try:
         df = pd.DataFrame(cached_get_all_records('pms_db', 'KPI'))
+        # 가중치(%) 열: 불필요한 소수점 제거 (40.0000 → 40, 2.5000 → 2.5)
+        if not df.empty and '가중치(%)' in df.columns:
+            def _fmt_weight(x):
+                try:
+                    v = float(x)
+                    if pd.isna(v):
+                        return x
+                    return f"{v:.0f}" if v == int(v) else f"{v:g}"
+                except (TypeError, ValueError):
+                    return x
+            df = df.copy()
+            df['가중치(%)'] = df['가중치(%)'].apply(_fmt_weight)
         st.table(df)
         if not df.empty and '실적' in df.columns:
             st.plotly_chart(px.pie(df, values='실적', names=df.columns[0], title="항목별 실적 비중"))
@@ -1258,8 +1264,7 @@ if check_login():
             st.sidebar.title("📁 PMO 메뉴")
             menu = st.sidebar.radio("메뉴 선택", ["통합 대시보드", "프로젝트 상세", "일 발전량 분석", "경영지표(KPI)", "마스터 설정"], key="selected_menu")
             
-            # 상단 가로 메뉴 (사이드바와 동기화, 테두리 없이 자연스러운 탭 스타일)
-            st.markdown('<div class="pmo-top-nav-wrap"></div>', unsafe_allow_html=True)
+            # 상단 가로 메뉴 (사이드바와 동기화)
             menu_options = ["통합 대시보드", "프로젝트 상세", "일 발전량 분석", "경영지표(KPI)", "마스터 설정"]
             top_cols = st.columns(5)
             for idx, opt in enumerate(menu_options):
