@@ -309,28 +309,70 @@ def cached_get_head(spreadsheet_name: str, worksheet_name: str, max_rows: int = 
 # [예측] Open-Meteo 기반 내일 일사량/발전시간 예측
 # -------------------------------
 
+# 지점명 자동 변환 실패 시 사용할 기본 좌표 (지점명 정확히 일치)
+# 필요 시 여기에 "지점명": (위도, 경도) 추가 (예: "서산(당진)": (36.78, 126.45))
+GEO_FALLBACK_COORDS = {
+    "서산(당진)": (36.7840, 126.4500),
+    "당진": (36.8940, 126.6290),
+    "서산": (36.7840, 126.4500),
+}
+
+def _geocode_one_query(query: str):
+    """단일 쿼리로 Open-Meteo Geocoding 시도"""
+    if not query or not query.strip():
+        return None
+    url = "https://geocoding-api.open-meteo.com/v1/search"
+    params = {"name": query.strip(), "count": 1, "language": "ko", "format": "json"}
+    try:
+        r = requests.get(url, params=params, timeout=10)
+        r.raise_for_status()
+        j = r.json()
+        results = j.get("results") or []
+        if not results:
+            return None
+        top = results[0]
+        return {
+            "name": top.get("name"),
+            "country": top.get("country"),
+            "admin1": top.get("admin1"),
+            "latitude": top.get("latitude"),
+            "longitude": top.get("longitude"),
+        }
+    except Exception:
+        return None
+
 @st.cache_data(ttl=24 * 3600, show_spinner=False)
 def geocode_location_open_meteo(name: str):
-    """지점명 -> 위/경도 (Open-Meteo Geocoding)"""
+    """지점명 -> 위/경도 (Open-Meteo Geocoding). 여러 쿼리 변형 시도 + 사전 좌표 fallback."""
     q = str(name).strip()
     if not q:
         return None
-    url = "https://geocoding-api.open-meteo.com/v1/search"
-    params = {"name": q, "count": 1, "language": "ko", "format": "json"}
-    r = requests.get(url, params=params, timeout=10)
-    r.raise_for_status()
-    j = r.json()
-    results = j.get("results") or []
-    if not results:
-        return None
-    top = results[0]
-    return {
-        "name": top.get("name"),
-        "country": top.get("country"),
-        "admin1": top.get("admin1"),
-        "latitude": top.get("latitude"),
-        "longitude": top.get("longitude"),
-    }
+    # 1) 사전에 등록된 좌표가 있으면 사용
+    if q in GEO_FALLBACK_COORDS:
+        lat, lon = GEO_FALLBACK_COORDS[q]
+        return {"name": q, "country": "South Korea", "admin1": None, "latitude": lat, "longitude": lon}
+    # 2) API로 쿼리 변형 여러 개 시도
+    to_try = [q]
+    if "(" in q and ")" in q:
+        to_try.append(q.split("(")[0].strip())
+        inner = q[q.index("(") + 1 : q.index(")")].strip()
+        if inner:
+            to_try.append(inner)
+        to_try.append(q.replace("(", " ").replace(")", " ").strip())
+    elif "," in q:
+        for part in q.split(","):
+            if part.strip():
+                to_try.append(part.strip())
+    seen = set()
+    for query in to_try:
+        query = (query or "").strip()
+        if not query or query in seen:
+            continue
+        seen.add(query)
+        result = _geocode_one_query(query)
+        if result and result.get("latitude") is not None and result.get("longitude") is not None:
+            return result
+    return None
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_open_meteo_daily_forecast(latitude: float, longitude: float, timezone: str = "Asia/Seoul"):
@@ -971,7 +1013,7 @@ def view_solar(sh):
                 place = " / ".join([str(x) for x in [geo.get("name"), geo.get("admin1"), geo.get("country")] if x])
                 st.caption(f"예보 좌표: {place} (lat={lat:.4f}, lon={lon:.4f})")
             else:
-                st.warning("지점명을 좌표로 변환하지 못했습니다. 아래에서 위/경도를 직접 입력하면 예측이 가능합니다.")
+                st.warning("지점명을 좌표로 변환하지 못했습니다. 아래에서 위/경도를 직접 입력하면 예측이 가능합니다. (자주 쓰는 지점은 개발자에게 요청해 app.py의 GEO_FALLBACK_COORDS에 등록하면 자동 변환됩니다.)")
                 c1, c2 = st.columns(2)
                 lat = c1.number_input("위도(lat)", value=36.3504, format="%.6f")
                 lon = c2.number_input("경도(lon)", value=127.3845, format="%.6f")
