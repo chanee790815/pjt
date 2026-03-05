@@ -11,9 +11,11 @@ import plotly.graph_objects as go
 import io
 import streamlit.components.v1 as components
 import numpy as np
+import json
+import pathlib
 
 # 1. 페이지 설정
-st.set_page_config(page_title="PM팀 통합 공정 관리 v4.5.22", page_icon="🏗️", layout="wide")
+st.set_page_config(page_title="PM 통합 공정 관리 v4.5.22", page_icon="🏗️", layout="wide")
 
 # --- [UI] 스타일 ---
 st.markdown("""
@@ -110,6 +112,69 @@ st.markdown("""
 # [SECTION 1] 백엔드 엔진 & 유틸리티
 # ---------------------------------------------------------
 
+# --- [파일 캐시] 구글 시트 데이터를 로컬 파일로 저장/로드 (앱 재시작 후에도 유지) ---
+CACHE_DIR = pathlib.Path("pms_sheet_cache")
+FILE_CACHE_TTL = 300  # 초 (5분). 이 시간 안에는 파일에서만 읽음
+WORKSHEET_LIST_CACHE = CACHE_DIR / "worksheet_list.json"  # 프로젝트 목록 캐시 파일
+
+def _sheet_name_to_filename(name: str) -> str:
+    """시트명을 파일명으로 사용 가능하게 정리"""
+    safe = "".join(c if c.isalnum() or c in (" ", "-", "_") else "_" for c in str(name).strip())
+    return (safe[:50] + "_" + str(hash(name) % 10000)) if len(safe) > 50 else safe
+
+def _load_file_cache(cache_path: pathlib.Path, ttl_seconds: int):
+    """파일 캐시가 있고 TTL 이내면 데이터 반환, 아니면 None"""
+    if not cache_path.exists():
+        return None
+    try:
+        mtime = cache_path.stat().st_mtime
+        if (time.time() - mtime) > ttl_seconds:
+            return None
+        with open(cache_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+def _save_file_cache(cache_path: pathlib.Path, data) -> None:
+    """데이터를 JSON 파일로 저장"""
+    try:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=None)
+    except Exception:
+        pass
+
+def clear_file_cache(worksheet_name: str = None):
+    """파일 캐시 삭제. worksheet_name 이 None 이면 전체 삭제"""
+    if not CACHE_DIR.exists():
+        return
+    if worksheet_name is None:
+        for f in CACHE_DIR.glob("*.json"):
+            try:
+                f.unlink()
+            except Exception:
+                pass
+    else:
+        p = CACHE_DIR / f"{_sheet_name_to_filename(worksheet_name)}.json"
+        if p.exists():
+            try:
+                p.unlink()
+            except Exception:
+                pass
+    # head 캐시는 시트별 파일명에 _head_ 가 들어감
+    if worksheet_name:
+        for f in CACHE_DIR.glob(f"*{_sheet_name_to_filename(worksheet_name)}*head*"):
+            try:
+                f.unlink()
+            except Exception:
+                pass
+    else:
+        for f in CACHE_DIR.glob("*head*"):
+            try:
+                f.unlink()
+            except Exception:
+                pass
+
 def safe_api_call(func, *args, **kwargs):
     """API 할당량 초과(429) 방지를 위한 자동 재시도 함수"""
     retries = 5
@@ -126,7 +191,7 @@ def safe_api_call(func, *args, **kwargs):
 def check_login():
     if st.session_state.get("logged_in", False): 
         return True
-    st.title("🏗️ PM팀 PJT 통합 관리 시스템")
+    st.title("🏗️ PM 통합 관리 시스템")
     with st.form("login"):
         u_id = st.text_input("ID")
         u_pw = st.text_input("Password", type="password")
@@ -136,7 +201,7 @@ def check_login():
                 st.session_state["user_id"] = u_id
                 st.rerun()
             else:
-                st.error("아이디 또는 패스워드를 확인하세요")
+                st.error("정보 불일치")
     return False
 
 @st.cache_resource
@@ -163,13 +228,22 @@ def get_client():
 
 @st.cache_data(ttl=300, show_spinner=False)
 def cached_get_all_values(spreadsheet_name: str, worksheet_name: str):
-    """지정 워크시트 전체 데이터를 5분간 캐싱"""
+    """지정 워크시트 전체 데이터를 5분간 메모리 + 파일 캐시"""
+    if spreadsheet_name == "pms_db":
+        cache_path = CACHE_DIR / f"{_sheet_name_to_filename(worksheet_name)}.json"
+        loaded = _load_file_cache(cache_path, FILE_CACHE_TTL)
+        if loaded is not None:
+            return loaded
     client = get_client()
     if client is None:
         return []
     sh = safe_api_call(client.open, spreadsheet_name)
     ws = safe_api_call(sh.worksheet, worksheet_name)
-    return safe_api_call(ws.get_all_values)
+    data = safe_api_call(ws.get_all_values)
+    if spreadsheet_name == "pms_db":
+        cache_path = CACHE_DIR / f"{_sheet_name_to_filename(worksheet_name)}.json"
+        _save_file_cache(cache_path, data)
+    return data
 
 @st.cache_data(ttl=300, show_spinner=False)
 def cached_get_all_records(spreadsheet_name: str, worksheet_name: str):
@@ -185,15 +259,24 @@ def cached_get_all_records(spreadsheet_name: str, worksheet_name: str):
 def cached_get_head(spreadsheet_name: str, worksheet_name: str, max_rows: int = 200):
     """
     대시보드용: 상단 N행(A1~J{max_rows})만 읽어서 평균 진척 계산
-    → 프로젝트별 행이 많아져도 속도 유지
+    → 프로젝트별 행이 많아져도 속도 유지. 파일 캐시 지원.
     """
+    if spreadsheet_name == "pms_db":
+        cache_path = CACHE_DIR / f"{_sheet_name_to_filename(worksheet_name)}_head_{max_rows}.json"
+        loaded = _load_file_cache(cache_path, FILE_CACHE_TTL)
+        if loaded is not None:
+            return loaded
     client = get_client()
     if client is None:
         return []
     sh = safe_api_call(client.open, spreadsheet_name)
     ws = safe_api_call(sh.worksheet, worksheet_name)
     rng = f"A1:J{max_rows}"
-    return safe_api_call(ws.get, rng)
+    data = safe_api_call(ws.get, rng)
+    if spreadsheet_name == "pms_db":
+        cache_path = CACHE_DIR / f"{_sheet_name_to_filename(worksheet_name)}_head_{max_rows}.json"
+        _save_file_cache(cache_path, data)
+    return data
 
 # -------------------------------
 # [예측] Open-Meteo 기반 내일 일사량/발전시간 예측
@@ -359,14 +442,14 @@ def render_print_button():
 def view_dashboard(sh, pjt_list):
     col_title, col_btn = st.columns([8, 2])
     with col_title:
-        st.title("📊 PM팀 프로젝트 현황판")
+        st.title("📊 통합 대시보드 (현황 브리핑)")
     with col_btn:
         st.write("") # 줄맞춤 여백
         render_print_button()
     
     dashboard_data = []
     
-    with st.spinner("프로젝트 데이터를 분석 중입니다.(첫 로그인 후 5분간 캐시 저장)"):
+    with st.spinner("프로젝트 데이터를 분석 중입니다..."):
         for p_name in pjt_list:
             try:
                 # ★ 성능 개선: 전체가 아니라 상단 일부만 + 캐시 사용
@@ -544,6 +627,7 @@ def view_project_detail(sh, pjt_list):
                 safe_api_call(ws.update, 'H2', [[new_pm]])
                 cached_get_all_values.clear()
                 cached_get_head.clear()
+                clear_file_cache(selected_pjt)
                 st.success("PM이 업데이트되었습니다!")
         
         st.divider()
@@ -715,6 +799,7 @@ def view_project_detail(sh, pjt_list):
                         pass
                     cached_get_all_values.clear()
                     cached_get_head.clear()
+                    clear_file_cache(selected_pjt)
                     st.success("성공적으로 업데이트 및 저장되었습니다!"); time.sleep(1); st.rerun()
 
         st.write("---")
@@ -747,6 +832,7 @@ def view_project_detail(sh, pjt_list):
             safe_api_call(ws.update, 'A1', full_data)
             cached_get_all_values.clear()
             cached_get_head.clear()
+            clear_file_cache(selected_pjt)
             st.success("데이터가 완벽하게 저장되었습니다!"); time.sleep(1); st.rerun()
 
 # 3. 일 발전량 및 일조 분석
@@ -1024,6 +1110,7 @@ def view_project_admin(sh, pjt_list):
             safe_api_call(new_ws.append_row, ["시작일", "종료일", "대분류", "구분", "진행상태", "비고", "진행률", "PM", "금주", "차주"])
             cached_get_all_values.clear()
             cached_get_head.clear()
+            clear_file_cache()  # 워크시트 목록 포함 전체 갱신
             st.success("생성 완료!"); st.rerun()
             
     with t2:
@@ -1034,6 +1121,7 @@ def view_project_admin(sh, pjt_list):
             safe_api_call(ws.update_title, new_name)
             cached_get_all_values.clear()
             cached_get_head.clear()
+            clear_file_cache()  # 워크시트 목록 포함 전체 갱신
             st.success("수정 완료!"); st.rerun()
 
     with t3:
@@ -1044,6 +1132,7 @@ def view_project_admin(sh, pjt_list):
             safe_api_call(sh.del_worksheet, ws)
             cached_get_all_values.clear()
             cached_get_head.clear()
+            clear_file_cache()
             st.success("삭제 완료!"); st.rerun()
 
     with t4:
@@ -1073,6 +1162,7 @@ def view_project_admin(sh, pjt_list):
                 
                 cached_get_all_values.clear()
                 cached_get_head.clear()
+                clear_file_cache()  # 일괄 업로드 후 전체 갱신
 
                 if updated_count > 0:
                     st.success(f"🎉 총 {updated_count}개의 프로젝트가 성공적으로 일괄 업데이트되었습니다!")
@@ -1109,7 +1199,10 @@ if check_login():
         try:
             sh = safe_api_call(client.open, 'pms_db')
             sys_names = ['weekly_history', 'Solar_DB', 'KPI', 'Sheet1', 'Control_Center', 'Dashboard_Control', '통합 대시보드', 'Solar_Forecast']
-            pjt_list = [ws.title for ws in sh.worksheets() if ws.title not in sys_names]
+            pjt_list = _load_file_cache(WORKSHEET_LIST_CACHE, FILE_CACHE_TTL)
+            if pjt_list is None:
+                pjt_list = [ws.title for ws in sh.worksheets() if ws.title not in sys_names]
+                _save_file_cache(WORKSHEET_LIST_CACHE, pjt_list)
             
             if "selected_menu" not in st.session_state:
                 st.session_state.selected_menu = "통합 대시보드"
@@ -1135,6 +1228,4 @@ if check_login():
                 st.rerun()
         except Exception:
             st.error("서버 접속이 지연되고 있습니다. 잠시 후 새로고침 해주세요.")
-
-
 
