@@ -581,9 +581,14 @@ def view_dashboard(sh, pjt_list):
 
     all_pms = sorted(list(set([d["pm_name"] for d in dashboard_data])))
     
+    if "dashboard_report_font_size" not in st.session_state:
+        st.session_state.dashboard_report_font_size = 12
+    
     f_col1, f_col2 = st.columns([1, 3])
     with f_col1:
         selected_pm = st.selectbox("👤 담당자 조회", ["전체"] + all_pms)
+        report_font = st.slider("📝 보고 글자 크기", min_value=10, max_value=20, value=int(st.session_state.dashboard_report_font_size), step=1, key="dashboard_font_slider")
+        st.session_state.dashboard_report_font_size = float(report_font)
         
     if selected_pm != "전체":
         filtered_data = [d for d in dashboard_data if d["pm_name"] == selected_pm]
@@ -640,11 +645,12 @@ def view_dashboard(sh, pjt_list):
                     
                     this_w_html = str(d['this_w']).replace('\n', '<br>')
                     next_w_html = str(d['next_w']).replace('\n', '<br>')
+                    fs = st.session_state.get("dashboard_report_font_size", 12)
 
                     st.markdown(f'''
                         <div style="margin-bottom:4px; margin-top:2px;">
-                            <p style="font-size:12.5px; opacity: 0.7; margin-top:0; margin-bottom:4px;">계획: {d['avg_plan']}% | 실적: {d['avg_act']}%</p>
-                            <div class="weekly-box" style="margin-top:0;">
+                            <p style="font-size:{fs}px; opacity: 0.7; margin-top:0; margin-bottom:4px;">계획: {d['avg_plan']}% | 실적: {d['avg_act']}%</p>
+                            <div class="weekly-box" style="margin-top:0; font-size:{fs}px;">
                                 <div style="margin-bottom: 8px;"><b>[금주]</b><br>{this_w_html}</div>
                                 <div><b>[차주]</b><br>{next_w_html}</div>
                             </div>
