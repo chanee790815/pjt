@@ -87,6 +87,26 @@ st.markdown("""
     }
 
     /* ========================================================= */
+    /* [간트 차트] 상단 기간 표시줄 틀 고정 (스크롤 시 상단 고정) */
+    /* ========================================================= */
+    .gantt-sticky-header {
+        position: sticky;
+        top: 0;
+        z-index: 60;
+        background: linear-gradient(180deg, #f0f4f8 0%, #e8eef4 100%);
+        padding: 10px 14px;
+        margin: 0 -1rem 8px -1rem;
+        border-bottom: 2px solid rgba(33, 150, 243, 0.35);
+        font-weight: 700;
+        font-size: 14px;
+        color: #1565c0;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.06);
+    }
+    @media (max-width: 768px) {
+        .gantt-sticky-header { font-size: 13px; padding: 8px 10px; }
+    }
+
+    /* ========================================================= */
     /* [보고서 인쇄/PDF 최적화 CSS] */
     /* ========================================================= */
     @media print {
@@ -657,16 +677,14 @@ def view_project_detail(sh, pjt_list):
                         
                     cdf['진행률'] = pd.to_numeric(cdf['진행률'], errors='coerce').fillna(0).astype(float)
                     
-                    cdf['구분_고유'] = cdf.apply(lambda r: f"{r.name + 1}. {str(r['구분']).strip()}", axis=1)
-                    
-                    def calc_text_width(text):
-                        return sum(2 if ord(c) > 127 else 1 for c in str(text))
-                    
-                    max_width = cdf['구분_고유'].apply(calc_text_width).max()
-                    
-                    cdf['구분_고유'] = cdf['구분_고유'].apply(
-                        lambda x: str(x) + "&nbsp;" * int((max_width - calc_text_width(x)) * 2.5)
-                    )
+                    # 표시용 라벨: 긴 글자 말줄임으로 좌측 영역 축소 (모바일에서 차트가 크게 보이도록)
+                    max_label_len = 14
+                    def truncate_label(row):
+                        raw = f"{row.name + 1}. {str(row['구분']).strip()}"
+                        if len(raw) <= max_label_len:
+                            return raw
+                        return raw[:max_label_len] + "…"
+                    cdf['구분_표시'] = cdf.apply(truncate_label, axis=1)
                     
                     cdf['duration'] = (cdf['종료일'] - cdf['시작일']).dt.total_seconds() * 1000
                     cdf['duration'] = cdf['duration'].apply(lambda d: 86400000.0 if d <= 0 else d)
@@ -674,59 +692,109 @@ def view_project_detail(sh, pjt_list):
                     cdf['시작일_str'] = cdf['시작일'].dt.strftime('%Y-%m-%d')
                     cdf['종료일_str'] = cdf['종료일'].dt.strftime('%Y-%m-%d')
                     
+                    # 프로젝트 기간 년.월 (26.1 ~ 27.3 형식)
+                    min_d = cdf['시작일'].min()
+                    max_d = cdf['종료일'].max()
+                    period_start = f"{min_d.year % 100}.{min_d.month}"
+                    period_end = f"{max_d.year % 100}.{max_d.month}"
+                    
+                    # 상단 고정: 프로젝트 기간 표시 (스크롤해도 보이도록)
+                    st.markdown(
+                        f'<div class="gantt-sticky-header">📅 프로젝트 기간: <strong>{period_start}</strong> ~ <strong>{period_end}</strong></div>',
+                        unsafe_allow_html=True
+                    )
+                    
+                    # 진행률별 색상 대비 강화 (0=빨강, 30=주황, 60=노랑·연두, 100=초록)
+                    progress_colorscale = [
+                        [0.0, 'rgb(200, 60, 60)'],
+                        [0.2, 'rgb(230, 100, 80)'],
+                        [0.4, 'rgb(255, 180, 60)'],
+                        [0.6, 'rgb(180, 210, 90)'],
+                        [0.8, 'rgb(100, 180, 100)'],
+                        [1.0, 'rgb(50, 140, 70)'],
+                    ]
+                    
                     fig = go.Figure()
                     fig.add_trace(go.Bar(
                         base=cdf['시작일'],
                         x=cdf['duration'],
-                        y=[cdf['대분류'].tolist(), cdf['구분_고유'].tolist()],
+                        y=[cdf['대분류'].tolist(), cdf['구분_표시'].tolist()],
                         orientation='h',
                         marker=dict(
                             color=cdf['진행률'],
-                            colorscale='RdYlGn',
+                            colorscale=progress_colorscale,
                             cmin=0,
                             cmax=100,
                             showscale=True,
-                            colorbar=dict(title="진행률(%)")
+                            colorbar=dict(
+                                title=dict(text="진행률(%)", font=dict(size=12)),
+                                thickness=18,
+                                len=0.7,
+                                tickfont=dict(size=11),
+                                outlinewidth=1,
+                            ),
+                            line=dict(width=1.2, color='rgba(60,60,60,0.5)'),
                         ),
-                        customdata=cdf[['시작일_str', '종료일_str', '대분류', '구분']].values,
-                        hovertemplate="<b>[%{customdata[2]}] %{customdata[3]}</b><br>시작일: %{customdata[0]}<br>종료일: %{customdata[1]}<br>진행률: %{marker.color}%<extra></extra>"
+                        customdata=cdf[['시작일_str', '종료일_str', '대분류', '구분', '진행률']].values,
+                        hovertemplate="<b>[%{customdata[2]}] %{customdata[3]}</b><br>시작: %{customdata[0]} ~ 종료: %{customdata[1]}<br>진행률: %{customdata[4]:.0f}%<extra></extra>"
                     ))
                     
                     today_ms = pd.Timestamp.now().normalize().timestamp() * 1000
-                    fig.add_vline(x=today_ms, line_width=2.5, line_color="purple", 
-                                  annotation_text="오늘", annotation_position="top",
-                                  annotation_font=dict(color="purple", size=13, weight="bold"))
+                    fig.add_vline(
+                        x=today_ms,
+                        line_width=2.5,
+                        line_dash="dash",
+                        line_color="rgb(120, 60, 180)",
+                        annotation_text=" 오늘 ",
+                        annotation_position="top",
+                        annotation_font=dict(color="rgb(120, 60, 180)", size=12, weight="bold"),
+                        annotation_bgcolor="rgba(240,230,255,0.9)",
+                        annotation_borderpad=4,
+                    )
                     
                     fig.update_xaxes(
-                        type="date",             
-                        dtick="M1",              
-                        tickformat="%y.%-m",     
-                        tickangle=0,             
-                        showgrid=True,           
+                        type="date",
+                        dtick="M1",
+                        tickformat="%y.%-m",
+                        tickangle=0,
+                        tickfont=dict(size=11),
+                        showgrid=True,
                         gridwidth=1,
-                        gridcolor='rgba(200, 200, 200, 0.6)',
-                        showline=True, linewidth=1, linecolor='rgba(200, 200, 200, 0.6)', mirror=True,
-                        title_text=""
+                        gridcolor='rgba(200, 200, 200, 0.7)',
+                        showline=True,
+                        linewidth=1,
+                        linecolor='rgba(180, 180, 180, 0.8)',
+                        mirror=True,
+                        title_text="",
                     )
                     
                     fig.update_yaxes(
                         autorange="reversed",
-                        type="multicategory",    
-                        categoryorder="trace",   
+                        type="multicategory",
+                        categoryorder="trace",
+                        tickfont=dict(size=10),
                         showgrid=True,
                         gridwidth=1,
-                        gridcolor='rgba(200, 200, 200, 0.6)',
-                        showline=True, linewidth=1, linecolor='rgba(200, 200, 200, 0.6)', mirror=True,
-                        dividercolor='rgba(150, 150, 150, 0.8)',
-                        dividerwidth=1,
-                        title_text=""
+                        gridcolor='rgba(200, 200, 200, 0.7)',
+                        showline=True,
+                        linewidth=1,
+                        linecolor='rgba(180, 180, 180, 0.8)',
+                        mirror=True,
+                        dividercolor='rgba(120, 120, 120, 0.6)',
+                        dividerwidth=1.2,
+                        title_text="",
                     )
                     
+                    # 좌측 여백 축소 → 차트 영역 확대 (모바일에서 그래프가 크게 보이도록)
                     fig.update_layout(
-                        height=max(400, len(cdf) * 35),
-                        plot_bgcolor='white',  
+                        height=max(500, len(cdf) * 40),
+                        bargap=0.25,
+                        bargroupgap=0.08,
+                        plot_bgcolor='rgb(252,252,252)',
                         paper_bgcolor='white',
-                        margin=dict(l=10, r=20, t=40, b=20)
+                        margin=dict(l=78, r=88, t=36, b=45),
+                        font=dict(family="Pretendard, sans-serif", size=10),
+                        showlegend=False,
                     )
                     
                     st.plotly_chart(fig, use_container_width=True)
