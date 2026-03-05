@@ -89,12 +89,6 @@ st.markdown("""
     /* ========================================================= */
     /* [상단 메뉴] 본문과 어울리는 탭 스타일 (테두리 없음, 얇은 구분선) */
     /* ========================================================= */
-    .pmo-top-nav-wrap {
-        margin: 0 -1rem 0 -1rem;
-        padding: 6px 1rem 10px 1rem;
-        border-bottom: 1px solid rgba(0,0,0,0.06);
-        background: rgba(0,0,0,0.02);
-    }
     .pmo-top-nav-row {
         margin: 0 -1rem 0 -1rem;
         padding: 6px 1rem 10px 1rem;
@@ -486,11 +480,17 @@ def render_print_button():
 
 # 1. 통합 대시보드
 def view_dashboard(sh, pjt_list):
-    col_title, col_btn = st.columns([8, 2])
+    if "dashboard_report_font_size" not in st.session_state:
+        st.session_state.dashboard_report_font_size = 12
+    col_title, col_font, col_btn = st.columns([5, 2, 2])
     with col_title:
         st.title("📊 통합 대시보드 (현황 브리핑)")
+    with col_font:
+        st.write("")  # 세로 줄맞춤
+        report_font = st.slider("📝 보고 글자 크기", min_value=10, max_value=20, value=int(st.session_state.dashboard_report_font_size), step=1, key="dashboard_font_slider")
+        st.session_state.dashboard_report_font_size = float(report_font)
     with col_btn:
-        st.write("") # 줄맞춤 여백
+        st.write("")  # 줄맞춤 여백
         render_print_button()
     
     dashboard_data = []
@@ -613,11 +613,12 @@ def view_dashboard(sh, pjt_list):
                     
                     this_w_html = str(d['this_w']).replace('\n', '<br>')
                     next_w_html = str(d['next_w']).replace('\n', '<br>')
+                    fs = st.session_state.get("dashboard_report_font_size", 12)
 
                     st.markdown(f'''
                         <div style="margin-bottom:4px; margin-top:2px;">
-                            <p style="font-size:12.5px; opacity: 0.7; margin-top:0; margin-bottom:4px;">계획: {d['avg_plan']}% | 실적: {d['avg_act']}%</p>
-                            <div class="weekly-box" style="margin-top:0;">
+                            <p style="font-size:{fs}px; opacity: 0.7; margin-top:0; margin-bottom:4px;">계획: {d['avg_plan']}% | 실적: {d['avg_act']}%</p>
+                            <div class="weekly-box" style="margin-top:0; font-size:{fs}px;">
                                 <div style="margin-bottom: 8px;"><b>[금주]</b><br>{this_w_html}</div>
                                 <div><b>[차주]</b><br>{next_w_html}</div>
                             </div>
@@ -635,7 +636,30 @@ def view_project_detail(sh, pjt_list):
         st.write("")
         render_print_button()
     
-    selected_pjt = st.selectbox("현장 선택", ["선택"] + pjt_list, key="selected_pjt")
+    # 프로젝트별 담당 PM 조회 (상단 2행만 읽어서 H열 PM 추출)
+    pjt_to_pm = {}
+    for p_name in pjt_list:
+        try:
+            data = cached_get_head('pms_db', p_name, max_rows=2)
+            pm_name = "미지정"
+            if len(data) > 1 and len(data[1]) > 7 and str(data[1][7]).strip():
+                pm_name = str(data[1][7]).strip()
+            pjt_to_pm[p_name] = pm_name
+        except Exception:
+            pjt_to_pm[p_name] = "미지정"
+    all_pms = sorted(set(pjt_to_pm.values()))
+    
+    col_pm_filter, col_pjt_filter = st.columns(2)
+    with col_pm_filter:
+        selected_pm_filter = st.selectbox("👤 담당자(PM) 조회", ["전체"] + all_pms, key="project_detail_pm_filter")
+    with col_pjt_filter:
+        if selected_pm_filter == "전체":
+            filtered_pjt_list = pjt_list
+        else:
+            filtered_pjt_list = [p for p in pjt_list if pjt_to_pm.get(p) == selected_pm_filter]
+        if st.session_state.get("selected_pjt") not in (["선택"] + filtered_pjt_list):
+            st.session_state.selected_pjt = "선택"
+        selected_pjt = st.selectbox("현장 선택", ["선택"] + filtered_pjt_list, key="selected_pjt")
     
     if selected_pjt != "선택":
         data = cached_get_all_values('pms_db', selected_pjt)
@@ -1132,6 +1156,18 @@ def view_kpi(sh):
         
     try:
         df = pd.DataFrame(cached_get_all_records('pms_db', 'KPI'))
+        # 가중치(%) 열: 불필요한 소수점 제거 (40.0000 → 40, 2.5000 → 2.5)
+        if not df.empty and '가중치(%)' in df.columns:
+            def _fmt_weight(x):
+                try:
+                    v = float(x)
+                    if pd.isna(v):
+                        return x
+                    return f"{v:.0f}" if v == int(v) else f"{v:g}"
+                except (TypeError, ValueError):
+                    return x
+            df = df.copy()
+            df['가중치(%)'] = df['가중치(%)'].apply(_fmt_weight)
         st.table(df)
         if not df.empty and '실적' in df.columns:
             st.plotly_chart(px.pie(df, values='실적', names=df.columns[0], title="항목별 실적 비중"))
@@ -1258,8 +1294,7 @@ if check_login():
             st.sidebar.title("📁 PMO 메뉴")
             menu = st.sidebar.radio("메뉴 선택", ["통합 대시보드", "프로젝트 상세", "일 발전량 분석", "경영지표(KPI)", "마스터 설정"], key="selected_menu")
             
-            # 상단 가로 메뉴 (사이드바와 동기화, 테두리 없이 자연스러운 탭 스타일)
-            st.markdown('<div class="pmo-top-nav-wrap"></div>', unsafe_allow_html=True)
+            # 상단 가로 메뉴 (사이드바와 동기화)
             menu_options = ["통합 대시보드", "프로젝트 상세", "일 발전량 분석", "경영지표(KPI)", "마스터 설정"]
             top_cols = st.columns(5)
             for idx, opt in enumerate(menu_options):
