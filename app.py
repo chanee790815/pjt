@@ -515,16 +515,13 @@ def render_print_button():
 def view_dashboard(sh, pjt_list):
     if "dashboard_report_font_size" not in st.session_state:
         st.session_state.dashboard_report_font_size = 12
-    col_title, col_font, col_btn = st.columns([6, 2, 2])
+    col_title, col_right = st.columns([7, 2])
     with col_title:
         st.title("📊 통합 대시보드 (현황 브리핑)")
-    with col_font:
-        st.write("")  # 세로 줄맞춤
+    with col_right:
+        render_print_button()
         report_font = st.slider("📝 보고 글자 크기", min_value=10, max_value=20, value=int(st.session_state.dashboard_report_font_size), step=1, key="dashboard_font_slider")
         st.session_state.dashboard_report_font_size = float(report_font)
-    with col_btn:
-        st.write("")  # 줄맞춤 여백
-        render_print_button()
     
     dashboard_data = []
     
@@ -1339,16 +1336,15 @@ if check_login():
             st.sidebar.title("📁 PMO 메뉴")
             menu = st.sidebar.radio("메뉴 선택", ["통합 대시보드", "프로젝트 상세", "일 발전량 분석", "경영지표(KPI)", "마스터 설정"], key="selected_menu")
             
-            # 상단 가로 메뉴 (사이드바와 동기화)
+            # 상단 가로 메뉴 (사이드바와 동기화, 테두리 없음)
             menu_options = ["통합 대시보드", "프로젝트 상세", "일 발전량 분석", "경영지표(KPI)", "마스터 설정"]
-            with st.container(border=True):
-                top_cols = st.columns(5)
-                for idx, opt in enumerate(menu_options):
-                    with top_cols[idx]:
-                        if opt == menu:
-                            st.button(f"● {opt}", key=f"topmenu_{idx}", disabled=True, use_container_width=True, type="primary")
-                        else:
-                            st.button(opt, key=f"topmenu_{idx}", on_click=set_top_menu, args=(opt,), use_container_width=True)
+            top_cols = st.columns(5)
+            for idx, opt in enumerate(menu_options):
+                with top_cols[idx]:
+                    if opt == menu:
+                        st.button(f"● {opt}", key=f"topmenu_{idx}", disabled=True, use_container_width=True, type="primary")
+                    else:
+                        st.button(opt, key=f"topmenu_{idx}", on_click=set_top_menu, args=(opt,), use_container_width=True)
             
             if menu == "통합 대시보드": 
                 view_dashboard(sh, pjt_list)
