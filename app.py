@@ -992,33 +992,36 @@ def view_project_detail(sh, pjt_list):
 
         st.write("---")
         st.subheader("📝 상세 공정표 편집 (A~G열 전용)")
+        st.info("✏️ **날짜·내용을 모두 입력한 뒤**, 맨 아래 **💾 변경사항 전체 저장** 버튼 **한 번만** 누르면 시트에 반영됩니다. (중간에 화면이 갱신되지 않도록 달력 적용은 폼으로 묶어 두었습니다.)")
 
-        # ---------- 달력 팝업으로 날짜 선택 (클릭 시 항상 달력 표시) ----------
-        with st.expander("📅 달력으로 날짜 선택 (행 선택 후 시작일/종료일 설정)", expanded=True):
+        # ---------- 달력: 폼으로 묶어서 '이 행에 적용' 클릭 시에만 전송 → 리프레시 최소화 ----------
+        with st.expander("📅 달력으로 날짜 선택 (행 선택 후 시작일/종료일 설정)", expanded=False):
             n_rows = len(process_df)
             if n_rows == 0:
                 st.caption("아래 표에서 행을 추가한 뒤 여기서 날짜를 설정할 수 있습니다.")
             else:
-                row_options = list(range(n_rows))
-                def _row_label(i):
-                    g = str(process_df.iloc[i].get("구분", ""))[:18]
-                    return f"{i+1}행 - {g}" if g else f"{i+1}행"
-                sel_row = st.selectbox("행 선택", row_options, format_func=_row_label, key="calendar_row_sel")
-                cur_start = process_df.iloc[sel_row].get("시작일")
-                cur_end = process_df.iloc[sel_row].get("종료일")
-                default_start = cur_start if isinstance(cur_start, datetime.date) else datetime.date.today()
-                default_end = cur_end if isinstance(cur_end, datetime.date) else datetime.date.today()
-                cal_start = st.date_input("시작일", value=default_start, min_value=datetime.date(2020, 1, 1), max_value=datetime.date(2035, 12, 31), key="cal_start")
-                cal_end = st.date_input("종료일", value=default_end, min_value=datetime.date(2020, 1, 1), max_value=datetime.date(2035, 12, 31), key="cal_end")
-                if st.button("✅ 이 행에 적용", key="cal_apply"):
-                    process_df = st.session_state.process_edit_df.copy()
-                    process_df.at[process_df.index[sel_row], "시작일"] = cal_start
-                    process_df.at[process_df.index[sel_row], "종료일"] = cal_end
-                    st.session_state.process_edit_df = process_df
-                    st.success(f"{sel_row+1}행 날짜가 적용되었습니다.")
+                with st.form("calendar_apply_form"):
+                    row_options = list(range(n_rows))
+                    def _row_label(i):
+                        g = str(process_df.iloc[i].get("구분", ""))[:18]
+                        return f"{i+1}행 - {g}" if g else f"{i+1}행"
+                    sel_row = st.selectbox("행 선택", row_options, format_func=_row_label, key="calendar_row_sel")
+                    cur_start = process_df.iloc[sel_row].get("시작일")
+                    cur_end = process_df.iloc[sel_row].get("종료일")
+                    default_start = cur_start if isinstance(cur_start, datetime.date) else datetime.date.today()
+                    default_end = cur_end if isinstance(cur_end, datetime.date) else datetime.date.today()
+                    cal_start = st.date_input("시작일", value=default_start, min_value=datetime.date(2020, 1, 1), max_value=datetime.date(2035, 12, 31), key="cal_start")
+                    cal_end = st.date_input("종료일", value=default_end, min_value=datetime.date(2020, 1, 1), max_value=datetime.date(2035, 12, 31), key="cal_end")
+                    calendar_submitted = st.form_submit_button("✅ 이 행에 적용")
+                if calendar_submitted:
+                    _proc = st.session_state.process_edit_df.copy()
+                    _proc.at[_proc.index[sel_row], "시작일"] = cal_start
+                    _proc.at[_proc.index[sel_row], "종료일"] = cal_end
+                    st.session_state.process_edit_df = _proc
+                    st.success(f"{sel_row+1}행 날짜가 반영되었습니다. 아래 표에서 다른 항목도 수정한 뒤 **변경사항 전체 저장**을 누르세요.")
                     st.rerun()
 
-        st.caption("표에서 직접 수정하거나, 위 **달력으로 날짜 선택**에서 행을 고른 뒤 달력으로 선택 후 **이 행에 적용**을 누르세요.")
+        st.caption("표에서 날짜·대분류·구분·진행상태·비고·진행률을 입력/수정한 뒤, **한 번만** 맨 아래 **💾 변경사항 전체 저장**을 누르세요.")
         # 시작일/종료일 컬럼을 달력(DateColumn)으로 설정
         column_config = {
             "시작일": st.column_config.DateColumn(
