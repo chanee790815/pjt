@@ -692,6 +692,70 @@ def view_project_detail(sh, pjt_list):
         if '진행률' in df.columns:
             df['진행률'] = pd.to_numeric(df['진행률'], errors='coerce').fillna(0)
 
+        # 편집용 복사본: 시작일/종료일 정규화 후 date 타입으로 변환 (잘못된 입력도 YYYY-MM-DD로 표시)
+        df_edit = df.copy()
+
+        def _normalize_date_string(val):
+            """구글 시트 숫자(20260313.0), '2026.03.13', '20260313' 등 → '2026-03-13' 형태로 정규화."""
+            if val is None:
+                return ""
+            if isinstance(val, (int, float)):
+                if pd.isna(val):
+                    return ""
+                # 시트에서 숫자로 들어온 경우 (예: 20260313.0, 20260313)
+                i = int(val)
+                if 19000101 <= i <= 21001231:
+                    sc = str(i)
+                    if len(sc) == 8:
+                        return f"{sc[:4]}-{sc[4:6]}-{sc[6:8]}"
+                return ""
+            s = str(val).strip()
+            if not s or s.lower() in ("nan", "none", "."):
+                return ""
+            # 앞에 붙은 마이너스(오타) 제거
+            if s.startswith("-"):
+                s = s[1:].strip()
+            # 이미 YYYY-MM-DD 형태면 그대로
+            if len(s) >= 10 and s[4] == "-" and s[7] == "-":
+                return s[:10]
+            # 숫자만 추출 (20260313.0 → 20260313)
+            s_clean = "".join(c for c in s if c.isdigit())
+            if len(s_clean) >= 8:
+                s_clean = s_clean[:8]
+                return f"{s_clean[:4]}-{s_clean[4:6]}-{s_clean[6:8]}"
+            # 점/슬래시를 dash로 통일 후 처리
+            s = s.replace(".", "-").replace("/", "-")
+            parts = s.split("-")
+            if len(parts) == 2 and len(parts[0]) == 4 and len(parts[1]) == 4:
+                return f"{parts[0]}-{parts[1][:2]}-{parts[1][2:]}"
+            return s
+
+        def _to_date_or_none(ser):
+            def one(val):
+                norm = _normalize_date_string(val)
+                if not norm:
+                    return None
+                try:
+                    parsed = pd.to_datetime(norm, errors="coerce")
+                    return parsed.date() if pd.notna(parsed) else None
+                except Exception:
+                    return None
+            return ser.apply(one)
+
+        df_edit['시작일'] = _to_date_or_none(df_edit['시작일'])
+        df_edit['종료일'] = _to_date_or_none(df_edit['종료일'])
+
+        # 텍스트 컬럼에서 'None', 'nan' 표기 제거 → 빈 칸으로 표시
+        for col in ['대분류', '구분', '진행상태', '비고']:
+            if col in df_edit.columns:
+                df_edit[col] = df_edit[col].astype(str).replace({"None": "", "nan": "", "NaN": ""})
+
+        # 편집 내용 유지: 프로젝트별로 에디터용 데이터프레임을 세션에 보관
+        if "process_edit_df" not in st.session_state or st.session_state.get("process_edit_pjt") != selected_pjt:
+            st.session_state.process_edit_df = df_edit.copy()
+            st.session_state.process_edit_pjt = selected_pjt
+        process_df = st.session_state.process_edit_df
+
         ws = safe_api_call(sh.worksheet, selected_pjt)
 
         col_pm1, col_pm2 = st.columns([3, 1])
@@ -928,26 +992,90 @@ def view_project_detail(sh, pjt_list):
 
         st.write("---")
         st.subheader("📝 상세 공정표 편집 (A~G열 전용)")
-        edited = st.data_editor(df, use_container_width=True, num_rows="dynamic")
+
+        # ---------- 달력 팝업으로 날짜 선택 (클릭 시 항상 달력 표시) ----------
+        with st.expander("📅 달력으로 날짜 선택 (행 선택 후 시작일/종료일 설정)", expanded=True):
+            n_rows = len(process_df)
+            if n_rows == 0:
+                st.caption("아래 표에서 행을 추가한 뒤 여기서 날짜를 설정할 수 있습니다.")
+            else:
+                row_options = list(range(n_rows))
+                def _row_label(i):
+                    g = str(process_df.iloc[i].get("구분", ""))[:18]
+                    return f"{i+1}행 - {g}" if g else f"{i+1}행"
+                sel_row = st.selectbox("행 선택", row_options, format_func=_row_label, key="calendar_row_sel")
+                cur_start = process_df.iloc[sel_row].get("시작일")
+                cur_end = process_df.iloc[sel_row].get("종료일")
+                default_start = cur_start if isinstance(cur_start, datetime.date) else datetime.date.today()
+                default_end = cur_end if isinstance(cur_end, datetime.date) else datetime.date.today()
+                cal_start = st.date_input("시작일", value=default_start, min_value=datetime.date(2020, 1, 1), max_value=datetime.date(2035, 12, 31), key="cal_start")
+                cal_end = st.date_input("종료일", value=default_end, min_value=datetime.date(2020, 1, 1), max_value=datetime.date(2035, 12, 31), key="cal_end")
+                if st.button("✅ 이 행에 적용", key="cal_apply"):
+                    process_df = st.session_state.process_edit_df.copy()
+                    process_df.at[process_df.index[sel_row], "시작일"] = cal_start
+                    process_df.at[process_df.index[sel_row], "종료일"] = cal_end
+                    st.session_state.process_edit_df = process_df
+                    st.success(f"{sel_row+1}행 날짜가 적용되었습니다.")
+                    st.rerun()
+
+        st.caption("표에서 직접 수정하거나, 위 **달력으로 날짜 선택**에서 행을 고른 뒤 달력으로 선택 후 **이 행에 적용**을 누르세요.")
+        # 시작일/종료일 컬럼을 달력(DateColumn)으로 설정
+        column_config = {
+            "시작일": st.column_config.DateColumn(
+                "시작일",
+                format="YYYY-MM-DD",
+                min_value=datetime.date(2020, 1, 1),
+                max_value=datetime.date(2035, 12, 31),
+                step=1,
+                help="셀 클릭 또는 위 달력에서 선택",
+            ),
+            "종료일": st.column_config.DateColumn(
+                "종료일",
+                format="YYYY-MM-DD",
+                min_value=datetime.date(2020, 1, 1),
+                max_value=datetime.date(2035, 12, 31),
+                step=1,
+                help="셀 클릭 또는 위 달력에서 선택",
+            ),
+        }
+        edited = st.data_editor(process_df, column_config=column_config, use_container_width=True, num_rows="dynamic", key="process_schedule_editor")
+        st.session_state.process_edit_df = edited
         
+        def _date_cell_to_str(val):
+            """날짜/datetime 셀을 YYYY-MM-DD 문자열로 변환"""
+            if val is None or (isinstance(val, float) and pd.isna(val)):
+                return ""
+            if hasattr(val, "strftime"):
+                return val.strftime("%Y-%m-%d")
+            s = str(val).strip()
+            if not s or s.lower() == "nan":
+                return ""
+            # 이미 "2025-01-15" 형태면 그대로, "2025-01-15 00:00:00" 형태면 앞 10자만
+            return s[:10] if len(s) >= 10 else s
+
         if st.button("💾 변경사항 전체 저장"):
             full_data = []
-            header_7 = edited.columns.values.tolist()[:7]
-            while len(header_7) < 7: header_7.append("")
-            
+            header_7 = list(edited.columns.values)[:7]
+            while len(header_7) < 7:
+                header_7.append("")
             full_data.append(header_7 + ["PM", "금주", "차주"])
-            
-            edited_rows = edited.fillna("").astype(str).values.tolist()
-            if len(edited_rows) > 0:
-                for i, r in enumerate(edited_rows):
-                    r_7 = r[:7]
-                    while len(r_7) < 7: r_7.append("")
-                    
+
+            if len(edited) > 0:
+                for i in range(len(edited)):
+                    row = edited.iloc[i]
+                    r_7 = []
+                    for c in edited.columns[:7]:
+                        val = row[c]
+                        if c in ("시작일", "종료일"):
+                            r_7.append(_date_cell_to_str(val))
+                        else:
+                            r_7.append("" if (val is None or (isinstance(val, float) and pd.isna(val))) else str(val))
+                    while len(r_7) < 7:
+                        r_7.append("")
                     if i == 0:
                         r_7.extend([new_pm, in_this, in_next])
                     else:
                         r_7.extend([new_pm, "", ""])
-                        
                     full_data.append(r_7)
             else:
                 full_data.append([""] * 7 + [new_pm, in_this, in_next])
