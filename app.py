@@ -965,8 +965,35 @@ def view_project_detail(sh, pjt_list):
                         """, unsafe_allow_html=True)
                     else: 
                         st.info("아직 등록된 주간 업무 기록이 없습니다.")
+                else:
+                    st.info("아직 등록된 주간 업무 기록이 없습니다.")
             except: 
                 st.warning("이력 데이터를 불러오는 중 오류가 발생했습니다.")
+
+            # ---------- [추가] 전체 주간 보고 히스토리 (history 시트 전체 내역) ----------
+            st.subheader("📜 전체 주간 보고 히스토리")
+            try:
+                h_data_full = cached_get_all_records('pms_db', 'weekly_history')
+                h_df_full = pd.DataFrame(h_data_full)
+                if not h_df_full.empty:
+                    h_df_full['프로젝트명'] = h_df_full['프로젝트명'].astype(str).str.strip()
+                    hist_for_pjt = h_df_full[h_df_full['프로젝트명'] == selected_pjt.strip()].copy()
+                    if not hist_for_pjt.empty:
+                        # 날짜 컬럼이 있으면 최신순 정렬
+                        if '날짜' in hist_for_pjt.columns:
+                            hist_for_pjt['_sort_date'] = pd.to_datetime(hist_for_pjt['날짜'], errors='coerce')
+                            hist_for_pjt = hist_for_pjt.sort_values('_sort_date', ascending=False).drop(columns=['_sort_date'], errors='ignore')
+                        # 표시용: 프로젝트명 컬럼은 제거 (이미 선택된 프로젝트이므로)
+                        display_cols = [c for c in hist_for_pjt.columns if c != '프로젝트명']
+                        hist_display = hist_for_pjt[display_cols] if display_cols else hist_for_pjt
+                        st.caption(f"총 {len(hist_for_pjt)}건의 주간 보고 이력 (최신순)")
+                        st.dataframe(hist_display, use_container_width=True, height=min(400, 80 + len(hist_display) * 38))
+                    else:
+                        st.info("이 프로젝트에 대한 주간 보고 이력이 없습니다.")
+                else:
+                    st.info("히스토리 시트에 데이터가 없습니다.")
+            except Exception as e:
+                st.warning(f"전체 히스토리를 불러오는 중 오류가 발생했습니다: {e}")
 
             st.divider()
 
