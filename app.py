@@ -591,7 +591,7 @@ def call_gemini_summarize_table(df_report: pd.DataFrame):
     """
     key = _gemini_api_key()
     if not key:
-        return None, "GEMINI_API_KEY가 설정되지 않았습니다. (.streamlit/secrets.toml)"
+        return None, "GEMINI_API_KEY가 설정되지 않았습니다. (로컬: `.streamlit/secrets.toml` / Cloud: App settings → Secrets)"
     if df_report.empty:
         return None, "요약할 데이터가 없습니다."
     payload = df_report[
@@ -839,7 +839,8 @@ def view_weekly_final_report(sh, pjt_list):
 
     with st.expander("✨ Gemini로 금주·차주 요약 열 추가", expanded=False):
         st.markdown(
-            "`.streamlit/secrets.toml`에 `GEMINI_API_KEY = \"...\"` 를 넣으면 "
+            "로컬은 `.streamlit/secrets.toml`, **Streamlit Cloud**는 **App settings → Secrets**에 "
+            "`GEMINI_API_KEY = \"...\"` 를 넣으면 "
             "[Google AI Studio](https://aistudio.google.com/apikey) 키로 요약을 실행할 수 있습니다. "
             "(외부 전송 전 회사 보안 정책을 확인하세요.)"
         )
