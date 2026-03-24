@@ -511,6 +511,136 @@ def render_print_button():
 # [SECTION 2] 뷰(View) 함수
 # ---------------------------------------------------------
 
+def build_project_status_report_df(pjt_list):
+    """
+    구글 시트 프로젝트 탭과 동일 규칙으로 집계 (통합 대시보드와 동일 데이터 소스).
+    - PM/금주/차주: 2행 H,I,J
+    - 진행률: 공정표 '진행률' 열 평균, 계획: 시작~종료일 기준 calc_planned_progress 평균
+    """
+    rows = []
+    for p_name in pjt_list:
+        try:
+            data = cached_get_head("pms_db", p_name, max_rows=200)
+            pm_name = "미지정"
+            this_w = "금주 실적 미입력"
+            next_w = "차주 계획 미입력"
+            if len(data) > 0:
+                header = data[0][:7]
+                df = (
+                    pd.DataFrame([r[:7] for r in data[1:]], columns=header)
+                    if len(data) > 1
+                    else pd.DataFrame(columns=header)
+                )
+                if len(data) > 1 and len(data[1]) > 7 and str(data[1][7]).strip():
+                    pm_name = str(data[1][7]).strip()
+                if len(data) > 1 and len(data[1]) > 8 and str(data[1][8]).strip():
+                    this_w = str(data[1][8]).strip()
+                if len(data) > 1 and len(data[1]) > 9 and str(data[1][9]).strip():
+                    next_w = str(data[1][9]).strip()
+            else:
+                df = pd.DataFrame()
+            if not df.empty and "진행률" in df.columns:
+                avg_act = round(pd.to_numeric(df["진행률"], errors="coerce").fillna(0).mean(), 1)
+                avg_plan = round(
+                    df.apply(
+                        lambda r: calc_planned_progress(r.get("시작일"), r.get("종료일")),
+                        axis=1,
+                    ).mean(),
+                    1,
+                )
+            else:
+                avg_act = 0.0
+                avg_plan = 0.0
+            status_ui = "정상"
+            if (avg_plan - avg_act) >= 10:
+                status_ui = "지연"
+            elif avg_act >= 100:
+                status_ui = "완료"
+            rows.append(
+                {
+                    "프로젝트명": p_name,
+                    "담당자": pm_name,
+                    "진행률_실적%": avg_act,
+                    "계획진행률%": avg_plan,
+                    "상태": status_ui,
+                    "금주_주요": this_w,
+                    "차주_주요": next_w,
+                }
+            )
+        except Exception:
+            pass
+    return pd.DataFrame(rows)
+
+
+def _gemini_api_key():
+    try:
+        if "GEMINI_API_KEY" in st.secrets:
+            return str(st.secrets["GEMINI_API_KEY"]).strip()
+        g = st.secrets.get("gemini") or {}
+        if isinstance(g, dict) and g.get("api_key"):
+            return str(g["api_key"]).strip()
+    except Exception:
+        pass
+    return ""
+
+
+def call_gemini_summarize_table(df_report: pd.DataFrame):
+    """
+    금주/차주 텍스트를 핵심 위주로 짧게 요약한 열을 추가한 표 반환.
+    secrets: GEMINI_API_KEY 또는 [gemini] api_key
+    """
+    key = _gemini_api_key()
+    if not key:
+        return None, "GEMINI_API_KEY가 설정되지 않았습니다. (.streamlit/secrets.toml)"
+    if df_report.empty:
+        return None, "요약할 데이터가 없습니다."
+    payload = df_report[
+        ["프로젝트명", "담당자", "진행률_실적%", "금주_주요", "차주_주요"]
+    ].to_dict(orient="records")
+    prompt = (
+        "다음은 프로젝트 주간보고 표(JSON)입니다. 각 항목에 대해 "
+        "'금주_주요_요약', '차주_주요_요약'을 각각 불릿 2~4개 이내로 한국어로 압축하세요. "
+        "원문에 없는 내용은 만들지 마세요. "
+        "응답은 반드시 JSON 배열만 출력하세요. 키: 프로젝트명, 금주_주요_요약, 차주_주요_요약.\n\n"
+        + json.dumps(payload, ensure_ascii=False)
+    )
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+    try:
+        r = requests.post(
+            url,
+            params={"key": key},
+            json={
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {"temperature": 0.2, "maxOutputTokens": 8192},
+            },
+            timeout=120,
+        )
+        r.raise_for_status()
+        j = r.json()
+        text = j["candidates"][0]["content"]["parts"][0]["text"]
+    except Exception as e:
+        return None, f"Gemini API 오류: {e}"
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[-1]
+        if "```" in text:
+            text = text.rsplit("```", 1)[0]
+        text = text.strip()
+    try:
+        arr = json.loads(text)
+    except json.JSONDecodeError:
+        return None, "Gemini 응답을 JSON으로 파싱하지 못했습니다. 다시 시도해 주세요."
+    sum_df = pd.DataFrame(arr)
+    if sum_df.empty or "프로젝트명" not in sum_df.columns:
+        return None, "요약 결과 형식이 올바르지 않습니다."
+    out = df_report.merge(
+        sum_df[["프로젝트명", "금주_주요_요약", "차주_주요_요약"]],
+        on="프로젝트명",
+        how="left",
+    )
+    return out, None
+
+
 # 1. 통합 대시보드
 def view_dashboard(sh, pjt_list):
     if "dashboard_report_font_size" not in st.session_state:
@@ -655,6 +785,74 @@ def view_dashboard(sh, pjt_list):
                     ''', unsafe_allow_html=True)
                     
                     st.progress(min(1.0, max(0.0, d['avg_act']/100)))
+
+
+def view_weekly_final_report(sh, pjt_list):
+    """프로젝트별 진행 현황 표 + 엑셀 다운로드 (선택: Gemini 요약)"""
+    col_title, col_btn = st.columns([7, 2])
+    with col_title:
+        st.title("📋 프로젝트별 주간 최종 보고 (표)")
+    with col_btn:
+        render_print_button()
+    st.caption(
+        "데이터는 구글 시트 `pms_db`의 각 프로젝트 시트(공정 진행률 평균, 2행 H·I·J의 PM·금주·차주)와 동일합니다."
+    )
+
+    with st.spinner("프로젝트별 데이터를 불러오는 중…"):
+        report_df = build_project_status_report_df(pjt_list)
+
+    if report_df.empty:
+        st.info("표시할 프로젝트가 없습니다.")
+        return
+
+    all_pms = sorted(report_df["담당자"].dropna().unique().tolist())
+    f1, f2 = st.columns([1, 3])
+    with f1:
+        pm_sel = st.selectbox("담당자 필터", ["전체"] + all_pms, key="report_pm_filter")
+    base_df = st.session_state.get("gemini_summary_df")
+    display_df = base_df if base_df is not None else report_df
+    filt = display_df if pm_sel == "전체" else display_df[display_df["담당자"] == pm_sel]
+
+    st.metric("조회 건수", f"{len(filt)}건")
+    show_df = filt.copy()
+
+    st.dataframe(show_df, use_container_width=True, height=min(520, 120 + len(show_df) * 36))
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        buf = io.BytesIO()
+        with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+            show_df.to_excel(writer, index=False, sheet_name="주간최종보고")
+        st.download_button(
+            label="📥 엑셀(xlsx) 다운로드",
+            data=buf.getvalue(),
+            file_name=f"프로젝트별_주간최종보고_{datetime.date.today()}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+    with c2:
+        if st.button("🔄 원본 표로 초기화", use_container_width=True):
+            st.session_state["gemini_summary_df"] = None
+            st.rerun()
+    with c3:
+        pass
+
+    with st.expander("✨ Gemini로 금주·차주 요약 열 추가", expanded=False):
+        st.markdown(
+            "`.streamlit/secrets.toml`에 `GEMINI_API_KEY = \"...\"` 를 넣으면 "
+            "[Google AI Studio](https://aistudio.google.com/apikey) 키로 요약을 실행할 수 있습니다. "
+            "(외부 전송 전 회사 보안 정책을 확인하세요.)"
+        )
+        if st.button("Gemini로 요약 표 생성", type="primary", use_container_width=True):
+            with st.spinner("Gemini 요약 중…"):
+                summ, err = call_gemini_summarize_table(report_df.copy())
+            if err:
+                st.error(err)
+            else:
+                st.session_state["gemini_summary_df"] = summ
+                st.success("요약 열이 추가되었습니다. 위 표와 엑셀 다운로드에 반영됩니다.")
+                st.rerun()
+
 
 # 2. 프로젝트 상세 관리
 def view_project_detail(sh, pjt_list):
@@ -1492,11 +1690,29 @@ if check_login():
                 st.session_state.selected_pjt = "선택"
             
             st.sidebar.title("📁 PMO 메뉴")
-            menu = st.sidebar.radio("메뉴 선택", ["통합 대시보드", "프로젝트 상세", "일 발전량 분석", "경영지표(KPI)", "마스터 설정"], key="selected_menu")
+            menu = st.sidebar.radio(
+                "메뉴 선택",
+                [
+                    "통합 대시보드",
+                    "주간 최종 보고(표)",
+                    "프로젝트 상세",
+                    "일 발전량 분석",
+                    "경영지표(KPI)",
+                    "마스터 설정",
+                ],
+                key="selected_menu",
+            )
             
             # 상단 가로 메뉴 (사이드바와 동기화, 테두리 없음)
-            menu_options = ["통합 대시보드", "프로젝트 상세", "일 발전량 분석", "경영지표(KPI)", "마스터 설정"]
-            top_cols = st.columns(5)
+            menu_options = [
+                "통합 대시보드",
+                "주간 최종 보고(표)",
+                "프로젝트 상세",
+                "일 발전량 분석",
+                "경영지표(KPI)",
+                "마스터 설정",
+            ]
+            top_cols = st.columns(6)
             for idx, opt in enumerate(menu_options):
                 with top_cols[idx]:
                     if opt == menu:
@@ -1506,6 +1722,8 @@ if check_login():
             
             if menu == "통합 대시보드": 
                 view_dashboard(sh, pjt_list)
+            elif menu == "주간 최종 보고(표)":
+                view_weekly_final_report(sh, pjt_list)
             elif menu == "프로젝트 상세": 
                 view_project_detail(sh, pjt_list)
             elif menu == "일 발전량 분석": 
