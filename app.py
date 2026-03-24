@@ -14,6 +14,7 @@ import numpy as np
 import json
 import pathlib
 import os
+import re
 
 # 1. 페이지 설정
 st.set_page_config(page_title="PM 통합 공정 관리 v4.5.22", page_icon="🏗️", layout="wide")
@@ -635,6 +636,27 @@ def _gemini_key_debug_hint() -> str:
     return "\n".join(parts)
 
 
+def _gemini_user_facing_error(exc: BaseException) -> str:
+    """화면에 키·전체 URL이 노출되지 않도록 정리 (스크린샷 유출 방지)."""
+    if isinstance(exc, requests.HTTPError) and exc.response is not None:
+        code = exc.response.status_code
+        if code == 429:
+            return (
+                "Gemini **요청 한도(429)**에 걸렸습니다. API 키는 이미 전달된 상태입니다. "
+                "1~5분 뒤 다시 시도하거나, [Google AI Studio](https://aistudio.google.com/)에서 "
+                "**사용량·무료 한도**를 확인하세요. (테스트를 짧은 간격으로 많이 누르면 자주 발생합니다.)"
+            )
+        if code == 403:
+            return "Gemini **접근 거부(403)**입니다. API 키 활성화·제한(지역/IP)을 확인하세요."
+        if code == 400:
+            return "Gemini **요청 오류(400)**입니다. 잠시 후 다시 시도해 주세요."
+        return f"Gemini HTTP 오류 ({code}). 잠시 후 다시 시도해 주세요."
+    s = str(exc)
+    s = re.sub(r"key=AIza[A-Za-z0-9_-]{10,}", "key=(숨김)", s)
+    s = re.sub(r"\?key=[^&\s\"']+", "?key=(숨김)", s)
+    return f"Gemini API 오류: {s}"
+
+
 def call_gemini_summarize_table(df_report: pd.DataFrame):
     """
     금주/차주 텍스트를 핵심 위주로 짧게 요약한 열을 추가한 표 반환.
@@ -661,21 +683,41 @@ def call_gemini_summarize_table(df_report: pd.DataFrame):
         + json.dumps(payload, ensure_ascii=False)
     )
     url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+    j = None
+    for attempt in range(5):
+        try:
+            r = requests.post(
+                url,
+                params={"key": key},
+                json={
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {"temperature": 0.2, "maxOutputTokens": 8192},
+                },
+                timeout=120,
+            )
+            if r.status_code == 429:
+                if attempt < 4:
+                    time.sleep(min(45, 3 * (2**attempt)))
+                    continue
+                he = requests.HTTPError()
+                he.response = r
+                return None, _gemini_user_facing_error(he)
+            r.raise_for_status()
+            j = r.json()
+            break
+        except requests.HTTPError as e:
+            if e.response is not None and e.response.status_code == 429 and attempt < 4:
+                time.sleep(min(45, 3 * (2**attempt)))
+                continue
+            return None, _gemini_user_facing_error(e)
+        except Exception as e:
+            return None, _gemini_user_facing_error(e)
+    if j is None:
+        return None, "Gemini 응답을 받지 못했습니다."
     try:
-        r = requests.post(
-            url,
-            params={"key": key},
-            json={
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {"temperature": 0.2, "maxOutputTokens": 8192},
-            },
-            timeout=120,
-        )
-        r.raise_for_status()
-        j = r.json()
         text = j["candidates"][0]["content"]["parts"][0]["text"]
-    except Exception as e:
-        return None, f"Gemini API 오류: {e}"
+    except (KeyError, IndexError, TypeError) as e:
+        return None, _gemini_user_facing_error(e)
     text = text.strip()
     if text.startswith("```"):
         text = text.split("\n", 1)[-1]
