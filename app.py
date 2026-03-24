@@ -13,6 +13,7 @@ import streamlit.components.v1 as components
 import numpy as np
 import json
 import pathlib
+import os
 
 # 1. 페이지 설정
 st.set_page_config(page_title="PM 통합 공정 관리 v4.5.22", page_icon="🏗️", layout="wide")
@@ -573,15 +574,65 @@ def build_project_status_report_df(pjt_list):
 
 
 def _gemini_api_key():
+    """Cloud Secrets / 로컬 secrets.toml / 환경변수 순으로 후보를 읽음 (이름 오타·앱 혼동 완화)."""
+
+    def _clean(val):
+        if val is None:
+            return ""
+        s = str(val).strip()
+        if not s or s.lower() in ("none", "null", "your-api-key-here"):
+            return ""
+        return s
+
+    k = _clean(os.environ.get("GEMINI_API_KEY"))
+    if k:
+        return k
+
     try:
         if "GEMINI_API_KEY" in st.secrets:
-            return str(st.secrets["GEMINI_API_KEY"]).strip()
+            k = _clean(st.secrets["GEMINI_API_KEY"])
+            if k:
+                return k
         g = st.secrets.get("gemini") or {}
-        if isinstance(g, dict) and g.get("api_key"):
-            return str(g["api_key"]).strip()
+        if isinstance(g, dict):
+            k = _clean(g.get("api_key"))
+            if k:
+                return k
+        if "GOOGLE_API_KEY" in st.secrets:
+            k = _clean(st.secrets["GOOGLE_API_KEY"])
+            if k:
+                return k
     except Exception:
         pass
     return ""
+
+
+def _gemini_key_debug_hint() -> str:
+    """키 값은 노출하지 않고, 어떤 경로에 값이 있는지만 표시 (Cloud 설정 확인용)."""
+    parts = []
+    env_set = bool((os.environ.get("GEMINI_API_KEY") or "").strip())
+    parts.append(f"- 환경변수 `GEMINI_API_KEY`: {'있음' if env_set else '없음'}")
+    try:
+        sk = st.secrets.get("GEMINI_API_KEY")
+        parts.append(
+            f"- Secrets 최상위 `GEMINI_API_KEY`: {'있음(비어 있지 않음)' if sk is not None and str(sk).strip() else '없음 또는 빈 값'}"
+        )
+        g = st.secrets.get("gemini")
+        if isinstance(g, dict):
+            ga = g.get("api_key")
+            parts.append(
+                f"- `[gemini]` → `api_key`: {'있음' if ga is not None and str(ga).strip() else '없음'}"
+            )
+        gk = st.secrets.get("GOOGLE_API_KEY")
+        parts.append(
+            f"- `GOOGLE_API_KEY` (별칭): {'있음' if gk is not None and str(gk).strip() else '없음'}"
+        )
+    except Exception as e:
+        parts.append(f"- Secrets 읽기 예외: `{e}`")
+    parts.append(
+        f"**→ 앱이 실제 사용할 키: {'인식됨' if _gemini_api_key() else '아직 없음'}**"
+    )
+    return "\n".join(parts)
 
 
 def call_gemini_summarize_table(df_report: pd.DataFrame):
@@ -591,7 +642,12 @@ def call_gemini_summarize_table(df_report: pd.DataFrame):
     """
     key = _gemini_api_key()
     if not key:
-        return None, "GEMINI_API_KEY가 설정되지 않았습니다. (로컬: `.streamlit/secrets.toml` / Cloud: App settings → Secrets)"
+        return (
+            None,
+            "Gemini API 키를 찾지 못했습니다. **같은 앱**(예: `pjt`의 Secrets)에 "
+            "`GEMINI_API_KEY = \"...\"` 가 있는지 확인하고, 저장 후 **Reboot** 하세요. "
+            "아래 Expander의 진단 표를 참고하세요.",
+        )
     if df_report.empty:
         return None, "요약할 데이터가 없습니다."
     payload = df_report[
@@ -839,11 +895,17 @@ def view_weekly_final_report(sh, pjt_list):
 
     with st.expander("✨ Gemini로 금주·차주 요약 열 추가", expanded=False):
         st.markdown(
-            "로컬은 `.streamlit/secrets.toml`, **Streamlit Cloud**는 **App settings → Secrets**에 "
-            "`GEMINI_API_KEY = \"...\"` 를 넣으면 "
-            "[Google AI Studio](https://aistudio.google.com/apikey) 키로 요약을 실행할 수 있습니다. "
+            "로컬은 `.streamlit/secrets.toml`, **Streamlit Cloud**는 해당 앱 **⋮ → Settings → Secrets**에 "
+            "아래 **한 줄**을 **최상위**(다른 `[표제]` 블록 밖이어도 됨)로 넣으세요.\n\n"
+            "```toml\nGEMINI_API_KEY = \"여기에_키\"\n```\n\n"
+            "- **`chatbot`과 `pjt`는 Secrets가 각각 따로입니다.** 지금 보는 앱과 동일한 앱에 넣었는지 확인하세요.\n"
+            "- 저장 후 메뉴의 **Reboot**로 한 번 재시작하면 반영이 확실합니다.\n"
+            "- 이름은 대문자 `GEMINI_API_KEY` 권장 (`Gemini_api_key` 등은 인식 안 될 수 있음).\n\n"
+            "[Google AI Studio](https://aistudio.google.com/apikey)에서 키 발급. "
             "(외부 전송 전 회사 보안 정책을 확인하세요.)"
         )
+        with st.expander("🔧 키 인식 진단 (값은 표시하지 않음)", expanded=False):
+            st.markdown(_gemini_key_debug_hint())
         if st.button("Gemini로 요약 표 생성", type="primary", use_container_width=True):
             with st.spinner("Gemini 요약 중…"):
                 summ, err = call_gemini_summarize_table(report_df.copy())
