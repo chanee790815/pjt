@@ -13,6 +13,8 @@ import streamlit.components.v1 as components
 import numpy as np
 import json
 import pathlib
+import os
+import re
 
 # 1. 페이지 설정
 st.set_page_config(page_title="PM 통합 공정 관리 v4.5.22", page_icon="🏗️", layout="wide")
@@ -511,6 +513,232 @@ def render_print_button():
 # [SECTION 2] 뷰(View) 함수
 # ---------------------------------------------------------
 
+def build_project_status_report_df(pjt_list):
+    """
+    구글 시트 프로젝트 탭과 동일 규칙으로 집계 (통합 대시보드와 동일 데이터 소스).
+    - PM/금주/차주: 2행 H,I,J
+    - 진행률: 공정표 '진행률' 열 평균, 계획: 시작~종료일 기준 calc_planned_progress 평균
+    """
+    rows = []
+    for p_name in pjt_list:
+        try:
+            data = cached_get_head("pms_db", p_name, max_rows=200)
+            pm_name = "미지정"
+            this_w = "금주 실적 미입력"
+            next_w = "차주 계획 미입력"
+            if len(data) > 0:
+                header = data[0][:7]
+                df = (
+                    pd.DataFrame([r[:7] for r in data[1:]], columns=header)
+                    if len(data) > 1
+                    else pd.DataFrame(columns=header)
+                )
+                if len(data) > 1 and len(data[1]) > 7 and str(data[1][7]).strip():
+                    pm_name = str(data[1][7]).strip()
+                if len(data) > 1 and len(data[1]) > 8 and str(data[1][8]).strip():
+                    this_w = str(data[1][8]).strip()
+                if len(data) > 1 and len(data[1]) > 9 and str(data[1][9]).strip():
+                    next_w = str(data[1][9]).strip()
+            else:
+                df = pd.DataFrame()
+            if not df.empty and "진행률" in df.columns:
+                avg_act = round(pd.to_numeric(df["진행률"], errors="coerce").fillna(0).mean(), 1)
+                avg_plan = round(
+                    df.apply(
+                        lambda r: calc_planned_progress(r.get("시작일"), r.get("종료일")),
+                        axis=1,
+                    ).mean(),
+                    1,
+                )
+            else:
+                avg_act = 0.0
+                avg_plan = 0.0
+            status_ui = "정상"
+            if (avg_plan - avg_act) >= 10:
+                status_ui = "지연"
+            elif avg_act >= 100:
+                status_ui = "완료"
+            rows.append(
+                {
+                    "프로젝트명": p_name,
+                    "담당자": pm_name,
+                    "진행률_실적%": avg_act,
+                    "계획진행률%": avg_plan,
+                    "상태": status_ui,
+                    "금주_주요": this_w,
+                    "차주_주요": next_w,
+                }
+            )
+        except Exception:
+            pass
+    return pd.DataFrame(rows)
+
+
+def _gemini_api_key():
+    """Cloud Secrets / 로컬 secrets.toml / 환경변수 순으로 후보를 읽음 (이름 오타·앱 혼동 완화)."""
+
+    def _clean(val):
+        if val is None:
+            return ""
+        s = str(val).strip()
+        if not s or s.lower() in ("none", "null", "your-api-key-here"):
+            return ""
+        return s
+
+    k = _clean(os.environ.get("GEMINI_API_KEY"))
+    if k:
+        return k
+
+    try:
+        if "GEMINI_API_KEY" in st.secrets:
+            k = _clean(st.secrets["GEMINI_API_KEY"])
+            if k:
+                return k
+        g = st.secrets.get("gemini") or {}
+        if isinstance(g, dict):
+            k = _clean(g.get("api_key"))
+            if k:
+                return k
+        if "GOOGLE_API_KEY" in st.secrets:
+            k = _clean(st.secrets["GOOGLE_API_KEY"])
+            if k:
+                return k
+    except Exception:
+        pass
+    return ""
+
+
+def _gemini_key_debug_hint() -> str:
+    """키 값은 노출하지 않고, 어떤 경로에 값이 있는지만 표시 (Cloud 설정 확인용)."""
+    parts = []
+    env_set = bool((os.environ.get("GEMINI_API_KEY") or "").strip())
+    parts.append(f"- 환경변수 `GEMINI_API_KEY`: {'있음' if env_set else '없음'}")
+    try:
+        sk = st.secrets.get("GEMINI_API_KEY")
+        parts.append(
+            f"- Secrets 최상위 `GEMINI_API_KEY`: {'있음(비어 있지 않음)' if sk is not None and str(sk).strip() else '없음 또는 빈 값'}"
+        )
+        g = st.secrets.get("gemini")
+        if isinstance(g, dict):
+            ga = g.get("api_key")
+            parts.append(
+                f"- `[gemini]` → `api_key`: {'있음' if ga is not None and str(ga).strip() else '없음'}"
+            )
+        gk = st.secrets.get("GOOGLE_API_KEY")
+        parts.append(
+            f"- `GOOGLE_API_KEY` (별칭): {'있음' if gk is not None and str(gk).strip() else '없음'}"
+        )
+    except Exception as e:
+        parts.append(f"- Secrets 읽기 예외: `{e}`")
+    parts.append(
+        f"**→ 앱이 실제 사용할 키: {'인식됨' if _gemini_api_key() else '아직 없음'}**"
+    )
+    return "\n".join(parts)
+
+
+def _gemini_user_facing_error(exc: BaseException) -> str:
+    """화면에 키·전체 URL이 노출되지 않도록 정리 (스크린샷 유출 방지)."""
+    if isinstance(exc, requests.HTTPError) and exc.response is not None:
+        code = exc.response.status_code
+        if code == 429:
+            return (
+                "Gemini **요청 한도(429)**에 걸렸습니다. API 키는 이미 전달된 상태입니다. "
+                "1~5분 뒤 다시 시도하거나, [Google AI Studio](https://aistudio.google.com/)에서 "
+                "**사용량·무료 한도**를 확인하세요. (테스트를 짧은 간격으로 많이 누르면 자주 발생합니다.)"
+            )
+        if code == 403:
+            return "Gemini **접근 거부(403)**입니다. API 키 활성화·제한(지역/IP)을 확인하세요."
+        if code == 400:
+            return "Gemini **요청 오류(400)**입니다. 잠시 후 다시 시도해 주세요."
+        return f"Gemini HTTP 오류 ({code}). 잠시 후 다시 시도해 주세요."
+    s = str(exc)
+    s = re.sub(r"key=AIza[A-Za-z0-9_-]{10,}", "key=(숨김)", s)
+    s = re.sub(r"\?key=[^&\s\"']+", "?key=(숨김)", s)
+    return f"Gemini API 오류: {s}"
+
+
+def call_gemini_summarize_table(df_report: pd.DataFrame):
+    """
+    금주/차주 텍스트를 핵심 위주로 짧게 요약한 열을 추가한 표 반환.
+    secrets: GEMINI_API_KEY 또는 [gemini] api_key
+    """
+    key = _gemini_api_key()
+    if not key:
+        return (
+            None,
+            "Gemini API 키를 찾지 못했습니다. **같은 앱**(예: `pjt`의 Secrets)에 "
+            "`GEMINI_API_KEY = \"...\"` 가 있는지 확인하고, 저장 후 **Reboot** 하세요. "
+            "아래 Expander의 진단 표를 참고하세요.",
+        )
+    if df_report.empty:
+        return None, "요약할 데이터가 없습니다."
+    payload = df_report[
+        ["프로젝트명", "담당자", "진행률_실적%", "금주_주요", "차주_주요"]
+    ].to_dict(orient="records")
+    prompt = (
+        "다음은 프로젝트 주간보고 표(JSON)입니다. 각 항목에 대해 "
+        "'금주_주요_요약', '차주_주요_요약'을 각각 불릿 2~4개 이내로 한국어로 압축하세요. "
+        "원문에 없는 내용은 만들지 마세요. "
+        "응답은 반드시 JSON 배열만 출력하세요. 키: 프로젝트명, 금주_주요_요약, 차주_주요_요약.\n\n"
+        + json.dumps(payload, ensure_ascii=False)
+    )
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+    j = None
+    for attempt in range(5):
+        try:
+            r = requests.post(
+                url,
+                params={"key": key},
+                json={
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {"temperature": 0.2, "maxOutputTokens": 8192},
+                },
+                timeout=120,
+            )
+            if r.status_code == 429:
+                if attempt < 4:
+                    time.sleep(min(45, 3 * (2**attempt)))
+                    continue
+                he = requests.HTTPError()
+                he.response = r
+                return None, _gemini_user_facing_error(he)
+            r.raise_for_status()
+            j = r.json()
+            break
+        except requests.HTTPError as e:
+            if e.response is not None and e.response.status_code == 429 and attempt < 4:
+                time.sleep(min(45, 3 * (2**attempt)))
+                continue
+            return None, _gemini_user_facing_error(e)
+        except Exception as e:
+            return None, _gemini_user_facing_error(e)
+    if j is None:
+        return None, "Gemini 응답을 받지 못했습니다."
+    try:
+        text = j["candidates"][0]["content"]["parts"][0]["text"]
+    except (KeyError, IndexError, TypeError) as e:
+        return None, _gemini_user_facing_error(e)
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[-1]
+        if "```" in text:
+            text = text.rsplit("```", 1)[0]
+        text = text.strip()
+    try:
+        arr = json.loads(text)
+    except json.JSONDecodeError:
+        return None, "Gemini 응답을 JSON으로 파싱하지 못했습니다. 다시 시도해 주세요."
+    sum_df = pd.DataFrame(arr)
+    if sum_df.empty or "프로젝트명" not in sum_df.columns:
+        return None, "요약 결과 형식이 올바르지 않습니다."
+    out = df_report.merge(
+        sum_df[["프로젝트명", "금주_주요_요약", "차주_주요_요약"]],
+        on="프로젝트명",
+        how="left",
+    )
+    return out, None
+
+
 # 1. 통합 대시보드
 def view_dashboard(sh, pjt_list):
     if "dashboard_report_font_size" not in st.session_state:
@@ -656,6 +884,81 @@ def view_dashboard(sh, pjt_list):
                     
                     st.progress(min(1.0, max(0.0, d['avg_act']/100)))
 
+
+def view_weekly_final_report(sh, pjt_list):
+    """프로젝트별 진행 현황 표 + 엑셀 다운로드 (선택: Gemini 요약)"""
+    col_title, col_btn = st.columns([7, 2])
+    with col_title:
+        st.title("📋 프로젝트별 주간 최종 보고 (표)")
+    with col_btn:
+        render_print_button()
+    st.caption(
+        "데이터는 구글 시트 `pms_db`의 각 프로젝트 시트(공정 진행률 평균, 2행 H·I·J의 PM·금주·차주)와 동일합니다."
+    )
+
+    with st.spinner("프로젝트별 데이터를 불러오는 중…"):
+        report_df = build_project_status_report_df(pjt_list)
+
+    if report_df.empty:
+        st.info("표시할 프로젝트가 없습니다.")
+        return
+
+    all_pms = sorted(report_df["담당자"].dropna().unique().tolist())
+    f1, f2 = st.columns([1, 3])
+    with f1:
+        pm_sel = st.selectbox("담당자 필터", ["전체"] + all_pms, key="report_pm_filter")
+    base_df = st.session_state.get("gemini_summary_df")
+    display_df = base_df if base_df is not None else report_df
+    filt = display_df if pm_sel == "전체" else display_df[display_df["담당자"] == pm_sel]
+
+    st.metric("조회 건수", f"{len(filt)}건")
+    show_df = filt.copy()
+
+    st.dataframe(show_df, use_container_width=True, height=min(520, 120 + len(show_df) * 36))
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        buf = io.BytesIO()
+        with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+            show_df.to_excel(writer, index=False, sheet_name="주간최종보고")
+        st.download_button(
+            label="📥 엑셀(xlsx) 다운로드",
+            data=buf.getvalue(),
+            file_name=f"프로젝트별_주간최종보고_{datetime.date.today()}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+    with c2:
+        if st.button("🔄 원본 표로 초기화", use_container_width=True):
+            st.session_state["gemini_summary_df"] = None
+            st.rerun()
+    with c3:
+        pass
+
+    with st.expander("✨ Gemini로 금주·차주 요약 열 추가", expanded=False):
+        st.markdown(
+            "로컬은 `.streamlit/secrets.toml`, **Streamlit Cloud**는 해당 앱 **⋮ → Settings → Secrets**에 "
+            "아래 **한 줄**을 **최상위**(다른 `[표제]` 블록 밖이어도 됨)로 넣으세요.\n\n"
+            "```toml\nGEMINI_API_KEY = \"여기에_키\"\n```\n\n"
+            "- **`chatbot`과 `pjt`는 Secrets가 각각 따로입니다.** 지금 보는 앱과 동일한 앱에 넣었는지 확인하세요.\n"
+            "- 저장 후 메뉴의 **Reboot**로 한 번 재시작하면 반영이 확실합니다.\n"
+            "- 이름은 대문자 `GEMINI_API_KEY` 권장 (`Gemini_api_key` 등은 인식 안 될 수 있음).\n\n"
+            "[Google AI Studio](https://aistudio.google.com/apikey)에서 키 발급. "
+            "(외부 전송 전 회사 보안 정책을 확인하세요.)"
+        )
+        with st.expander("🔧 키 인식 진단 (값은 표시하지 않음)", expanded=False):
+            st.markdown(_gemini_key_debug_hint())
+        if st.button("Gemini로 요약 표 생성", type="primary", use_container_width=True):
+            with st.spinner("Gemini 요약 중…"):
+                summ, err = call_gemini_summarize_table(report_df.copy())
+            if err:
+                st.error(err)
+            else:
+                st.session_state["gemini_summary_df"] = summ
+                st.success("요약 열이 추가되었습니다. 위 표와 엑셀 다운로드에 반영됩니다.")
+                st.rerun()
+
+
 # 2. 프로젝트 상세 관리
 def view_project_detail(sh, pjt_list):
     col_title, col_btn = st.columns([8, 2])
@@ -691,6 +994,70 @@ def view_project_detail(sh, pjt_list):
 
         if '진행률' in df.columns:
             df['진행률'] = pd.to_numeric(df['진행률'], errors='coerce').fillna(0)
+
+        # 편집용 복사본: 시작일/종료일 정규화 후 date 타입으로 변환 (잘못된 입력도 YYYY-MM-DD로 표시)
+        df_edit = df.copy()
+
+        def _normalize_date_string(val):
+            """구글 시트 숫자(20260313.0), '2026.03.13', '20260313' 등 → '2026-03-13' 형태로 정규화."""
+            if val is None:
+                return ""
+            if isinstance(val, (int, float)):
+                if pd.isna(val):
+                    return ""
+                # 시트에서 숫자로 들어온 경우 (예: 20260313.0, 20260313)
+                i = int(val)
+                if 19000101 <= i <= 21001231:
+                    sc = str(i)
+                    if len(sc) == 8:
+                        return f"{sc[:4]}-{sc[4:6]}-{sc[6:8]}"
+                return ""
+            s = str(val).strip()
+            if not s or s.lower() in ("nan", "none", "."):
+                return ""
+            # 앞에 붙은 마이너스(오타) 제거
+            if s.startswith("-"):
+                s = s[1:].strip()
+            # 이미 YYYY-MM-DD 형태면 그대로
+            if len(s) >= 10 and s[4] == "-" and s[7] == "-":
+                return s[:10]
+            # 숫자만 추출 (20260313.0 → 20260313)
+            s_clean = "".join(c for c in s if c.isdigit())
+            if len(s_clean) >= 8:
+                s_clean = s_clean[:8]
+                return f"{s_clean[:4]}-{s_clean[4:6]}-{s_clean[6:8]}"
+            # 점/슬래시를 dash로 통일 후 처리
+            s = s.replace(".", "-").replace("/", "-")
+            parts = s.split("-")
+            if len(parts) == 2 and len(parts[0]) == 4 and len(parts[1]) == 4:
+                return f"{parts[0]}-{parts[1][:2]}-{parts[1][2:]}"
+            return s
+
+        def _to_date_or_none(ser):
+            def one(val):
+                norm = _normalize_date_string(val)
+                if not norm:
+                    return None
+                try:
+                    parsed = pd.to_datetime(norm, errors="coerce")
+                    return parsed.date() if pd.notna(parsed) else None
+                except Exception:
+                    return None
+            return ser.apply(one)
+
+        df_edit['시작일'] = _to_date_or_none(df_edit['시작일'])
+        df_edit['종료일'] = _to_date_or_none(df_edit['종료일'])
+
+        # 텍스트 컬럼에서 'None', 'nan' 표기 제거 → 빈 칸으로 표시
+        for col in ['대분류', '구분', '진행상태', '비고']:
+            if col in df_edit.columns:
+                df_edit[col] = df_edit[col].astype(str).replace({"None": "", "nan": "", "NaN": ""})
+
+        # 편집 내용 유지: 프로젝트별로 에디터용 데이터프레임을 세션에 보관
+        if "process_edit_df" not in st.session_state or st.session_state.get("process_edit_pjt") != selected_pjt:
+            st.session_state.process_edit_df = df_edit.copy()
+            st.session_state.process_edit_pjt = selected_pjt
+        process_df = st.session_state.process_edit_df
 
         ws = safe_api_call(sh.worksheet, selected_pjt)
 
@@ -901,8 +1268,35 @@ def view_project_detail(sh, pjt_list):
                         """, unsafe_allow_html=True)
                     else: 
                         st.info("아직 등록된 주간 업무 기록이 없습니다.")
+                else:
+                    st.info("아직 등록된 주간 업무 기록이 없습니다.")
             except: 
                 st.warning("이력 데이터를 불러오는 중 오류가 발생했습니다.")
+
+            # ---------- [추가] 전체 주간 보고 히스토리 (history 시트 전체 내역) ----------
+            st.subheader("📜 전체 주간 보고 히스토리")
+            try:
+                h_data_full = cached_get_all_records('pms_db', 'weekly_history')
+                h_df_full = pd.DataFrame(h_data_full)
+                if not h_df_full.empty:
+                    h_df_full['프로젝트명'] = h_df_full['프로젝트명'].astype(str).str.strip()
+                    hist_for_pjt = h_df_full[h_df_full['프로젝트명'] == selected_pjt.strip()].copy()
+                    if not hist_for_pjt.empty:
+                        # 날짜 컬럼이 있으면 최신순 정렬
+                        if '날짜' in hist_for_pjt.columns:
+                            hist_for_pjt['_sort_date'] = pd.to_datetime(hist_for_pjt['날짜'], errors='coerce')
+                            hist_for_pjt = hist_for_pjt.sort_values('_sort_date', ascending=False).drop(columns=['_sort_date'], errors='ignore')
+                        # 표시용: 프로젝트명 컬럼은 제거 (이미 선택된 프로젝트이므로)
+                        display_cols = [c for c in hist_for_pjt.columns if c != '프로젝트명']
+                        hist_display = hist_for_pjt[display_cols] if display_cols else hist_for_pjt
+                        st.caption(f"총 {len(hist_for_pjt)}건의 주간 보고 이력 (최신순)")
+                        st.dataframe(hist_display, use_container_width=True, height=min(400, 80 + len(hist_display) * 38))
+                    else:
+                        st.info("이 프로젝트에 대한 주간 보고 이력이 없습니다.")
+                else:
+                    st.info("히스토리 시트에 데이터가 없습니다.")
+            except Exception as e:
+                st.warning(f"전체 히스토리를 불러오는 중 오류가 발생했습니다: {e}")
 
             st.divider()
 
@@ -928,26 +1322,93 @@ def view_project_detail(sh, pjt_list):
 
         st.write("---")
         st.subheader("📝 상세 공정표 편집 (A~G열 전용)")
-        edited = st.data_editor(df, use_container_width=True, num_rows="dynamic")
+        st.info("✏️ **날짜·내용을 모두 입력한 뒤**, 맨 아래 **💾 변경사항 전체 저장** 버튼 **한 번만** 누르면 시트에 반영됩니다. (중간에 화면이 갱신되지 않도록 달력 적용은 폼으로 묶어 두었습니다.)")
+
+        # ---------- 달력: 폼으로 묶어서 '이 행에 적용' 클릭 시에만 전송 → 리프레시 최소화 ----------
+        with st.expander("📅 달력으로 날짜 선택 (행 선택 후 시작일/종료일 설정)", expanded=False):
+            n_rows = len(process_df)
+            if n_rows == 0:
+                st.caption("아래 표에서 행을 추가한 뒤 여기서 날짜를 설정할 수 있습니다.")
+            else:
+                with st.form("calendar_apply_form"):
+                    row_options = list(range(n_rows))
+                    def _row_label(i):
+                        g = str(process_df.iloc[i].get("구분", ""))[:18]
+                        return f"{i+1}행 - {g}" if g else f"{i+1}행"
+                    sel_row = st.selectbox("행 선택", row_options, format_func=_row_label, key="calendar_row_sel")
+                    cur_start = process_df.iloc[sel_row].get("시작일")
+                    cur_end = process_df.iloc[sel_row].get("종료일")
+                    default_start = cur_start if isinstance(cur_start, datetime.date) else datetime.date.today()
+                    default_end = cur_end if isinstance(cur_end, datetime.date) else datetime.date.today()
+                    cal_start = st.date_input("시작일", value=default_start, min_value=datetime.date(2020, 1, 1), max_value=datetime.date(2035, 12, 31), key="cal_start")
+                    cal_end = st.date_input("종료일", value=default_end, min_value=datetime.date(2020, 1, 1), max_value=datetime.date(2035, 12, 31), key="cal_end")
+                    calendar_submitted = st.form_submit_button("✅ 이 행에 적용")
+                if calendar_submitted:
+                    _proc = st.session_state.process_edit_df.copy()
+                    _proc.at[_proc.index[sel_row], "시작일"] = cal_start
+                    _proc.at[_proc.index[sel_row], "종료일"] = cal_end
+                    st.session_state.process_edit_df = _proc
+                    st.success(f"{sel_row+1}행 날짜가 반영되었습니다. 아래 표에서 다른 항목도 수정한 뒤 **변경사항 전체 저장**을 누르세요.")
+                    st.rerun()
+
+        st.caption("표에서 날짜·대분류·구분·진행상태·비고·진행률을 입력/수정한 뒤, **한 번만** 맨 아래 **💾 변경사항 전체 저장**을 누르세요.")
+        # 시작일/종료일 컬럼을 달력(DateColumn)으로 설정
+        column_config = {
+            "시작일": st.column_config.DateColumn(
+                "시작일",
+                format="YYYY-MM-DD",
+                min_value=datetime.date(2020, 1, 1),
+                max_value=datetime.date(2035, 12, 31),
+                step=1,
+                help="셀 클릭 또는 위 달력에서 선택",
+            ),
+            "종료일": st.column_config.DateColumn(
+                "종료일",
+                format="YYYY-MM-DD",
+                min_value=datetime.date(2020, 1, 1),
+                max_value=datetime.date(2035, 12, 31),
+                step=1,
+                help="셀 클릭 또는 위 달력에서 선택",
+            ),
+        }
+        edited = st.data_editor(process_df, column_config=column_config, use_container_width=True, num_rows="dynamic", key="process_schedule_editor")
+        st.session_state.process_edit_df = edited
         
+        def _date_cell_to_str(val):
+            """날짜/datetime 셀을 YYYY-MM-DD 문자열로 변환"""
+            if val is None or (isinstance(val, float) and pd.isna(val)):
+                return ""
+            if hasattr(val, "strftime"):
+                return val.strftime("%Y-%m-%d")
+            s = str(val).strip()
+            if not s or s.lower() == "nan":
+                return ""
+            # 이미 "2025-01-15" 형태면 그대로, "2025-01-15 00:00:00" 형태면 앞 10자만
+            return s[:10] if len(s) >= 10 else s
+
         if st.button("💾 변경사항 전체 저장"):
             full_data = []
-            header_7 = edited.columns.values.tolist()[:7]
-            while len(header_7) < 7: header_7.append("")
-            
+            header_7 = list(edited.columns.values)[:7]
+            while len(header_7) < 7:
+                header_7.append("")
             full_data.append(header_7 + ["PM", "금주", "차주"])
-            
-            edited_rows = edited.fillna("").astype(str).values.tolist()
-            if len(edited_rows) > 0:
-                for i, r in enumerate(edited_rows):
-                    r_7 = r[:7]
-                    while len(r_7) < 7: r_7.append("")
-                    
+
+            if len(edited) > 0:
+                for i in range(len(edited)):
+                    row = edited.iloc[i]
+                    r_7 = []
+                    for c in edited.columns[:7]:
+                        val = row[c]
+                        if c in ("시작일", "종료일"):
+                            r_7.append(_date_cell_to_str(val))
+                        else:
+                            r_7.append("" if (val is None or (isinstance(val, float) and pd.isna(val))) else str(val))
+                    while len(r_7) < 7:
+                        r_7.append("")
                     if i == 0:
                         r_7.extend([new_pm, in_this, in_next])
                     else:
                         r_7.extend([new_pm, "", ""])
-                        
                     full_data.append(r_7)
             else:
                 full_data.append([""] * 7 + [new_pm, in_this, in_next])
@@ -1334,11 +1795,29 @@ if check_login():
                 st.session_state.selected_pjt = "선택"
             
             st.sidebar.title("📁 PMO 메뉴")
-            menu = st.sidebar.radio("메뉴 선택", ["통합 대시보드", "프로젝트 상세", "일 발전량 분석", "경영지표(KPI)", "마스터 설정"], key="selected_menu")
+            menu = st.sidebar.radio(
+                "메뉴 선택",
+                [
+                    "통합 대시보드",
+                    "주간 최종 보고(표)",
+                    "프로젝트 상세",
+                    "일 발전량 분석",
+                    "경영지표(KPI)",
+                    "마스터 설정",
+                ],
+                key="selected_menu",
+            )
             
             # 상단 가로 메뉴 (사이드바와 동기화, 테두리 없음)
-            menu_options = ["통합 대시보드", "프로젝트 상세", "일 발전량 분석", "경영지표(KPI)", "마스터 설정"]
-            top_cols = st.columns(5)
+            menu_options = [
+                "통합 대시보드",
+                "주간 최종 보고(표)",
+                "프로젝트 상세",
+                "일 발전량 분석",
+                "경영지표(KPI)",
+                "마스터 설정",
+            ]
+            top_cols = st.columns(6)
             for idx, opt in enumerate(menu_options):
                 with top_cols[idx]:
                     if opt == menu:
@@ -1348,6 +1827,8 @@ if check_login():
             
             if menu == "통합 대시보드": 
                 view_dashboard(sh, pjt_list)
+            elif menu == "주간 최종 보고(표)":
+                view_weekly_final_report(sh, pjt_list)
             elif menu == "프로젝트 상세": 
                 view_project_detail(sh, pjt_list)
             elif menu == "일 발전량 분석": 
