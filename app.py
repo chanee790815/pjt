@@ -519,6 +519,22 @@ def build_project_status_report_df(pjt_list):
     - PM/금주/차주: 2행 H,I,J
     - 진행률: 공정표 '진행률' 열 평균, 계획: 시작~종료일 기준 calc_planned_progress 평균
     """
+    def _extract_capacity_mw(project_name: str):
+        """
+        프로젝트명 끝의 용량 표기에서 MW 추출.
+        예) '..._1MW', '..._0.4MW', '... 2MW' -> 1.0, 0.4, 2.0
+        """
+        s = str(project_name or "").strip()
+        if not s:
+            return ""
+        m = re.search(r"(?:[_\s-])(\d+(?:\.\d+)?)\s*mw\s*$", s, flags=re.IGNORECASE)
+        if not m:
+            return ""
+        try:
+            return float(m.group(1))
+        except Exception:
+            return ""
+
     rows = []
     for p_name in pjt_list:
         try:
@@ -561,6 +577,7 @@ def build_project_status_report_df(pjt_list):
             rows.append(
                 {
                     "프로젝트명": p_name,
+                    "용량(MW)": _extract_capacity_mw(p_name),
                     "담당자": pm_name,
                     "진행률_실적%": avg_act,
                     "계획진행률%": avg_plan,
@@ -913,6 +930,31 @@ def view_weekly_final_report(sh, pjt_list):
 
     st.metric("조회 건수", f"{len(filt)}건")
     show_df = filt.copy()
+    show_df = show_df.reset_index(drop=True)
+    show_df.insert(0, "번호", range(1, len(show_df) + 1))
+
+    # 표 표시용 컬럼명/순서 정리
+    rename_map = {
+        "계획진행률%": "계획진행률",
+        "진행률_실적%": "진행률 실적",
+        "금주_주요": "금주 주요업무",
+        "차주_주요": "차주 주요업무",
+    }
+    show_df = show_df.rename(columns=rename_map)
+
+    base_cols = [
+        "번호",
+        "프로젝트명",
+        "용량(MW)",
+        "담당자",
+        "계획진행률",
+        "진행률 실적",
+        "금주 주요업무",
+        "차주 주요업무",
+    ]
+    extra_cols = [c for c in ["금주_주요_요약", "차주_주요_요약"] if c in show_df.columns]
+    ordered_cols = [c for c in base_cols if c in show_df.columns] + extra_cols
+    show_df = show_df[ordered_cols]
 
     st.dataframe(show_df, use_container_width=True, height=min(520, 120 + len(show_df) * 36))
 
