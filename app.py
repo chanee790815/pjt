@@ -931,26 +931,28 @@ def view_weekly_final_report(sh, pjt_list):
     st.metric("조회 건수", f"{len(filt)}건")
     show_df = filt.copy()
     show_df = show_df.reset_index(drop=True)
-    show_df.insert(0, "번호", range(1, len(show_df) + 1))
+    show_df.insert(0, "순번", range(1, len(show_df) + 1))
 
     # 표 표시용 컬럼명/순서 정리
     rename_map = {
-        "계획진행률%": "계획진행률",
-        "진행률_실적%": "진행률 실적",
-        "금주_주요": "금주 주요업무",
-        "차주_주요": "차주 주요업무",
+        "용량(MW)": "용량",
+        "계획진행률%": "계획",
+        "진행률_실적%": "실적",
+        "금주_주요": "금주",
+        "차주_주요": "차주",
     }
     show_df = show_df.rename(columns=rename_map)
 
     base_cols = [
-        "번호",
+        "순번",
         "프로젝트명",
-        "용량(MW)",
+        "용량",
         "담당자",
-        "계획진행률",
-        "진행률 실적",
-        "금주 주요업무",
-        "차주 주요업무",
+        "계획",
+        "실적",
+        "상태",
+        "금주",
+        "차주",
     ]
     extra_cols = [c for c in ["금주_주요_요약", "차주_주요_요약"] if c in show_df.columns]
     ordered_cols = [c for c in base_cols if c in show_df.columns] + extra_cols
