@@ -149,6 +149,103 @@ st.markdown("""
 CACHE_DIR = pathlib.Path("pms_sheet_cache")
 FILE_CACHE_TTL = 300  # 초 (5분). 이 시간 안에는 파일에서만 읽음
 WORKSHEET_LIST_CACHE = CACHE_DIR / "worksheet_list.json"  # 프로젝트 목록 캐시 파일
+MENU_VISIBILITY_CACHE = CACHE_DIR / "menu_visibility.json"  # 일반 사용자 메뉴 숨김 설정
+
+ALL_PMO_MENUS = [
+    "통합 대시보드",
+    "주간 최종 보고(표)",
+    "프로젝트 상세",
+    "일 발전량 분석",
+    "경영지표(KPI)",
+    "마스터 설정",
+]
+ADMIN_MENU = "마스터 설정"
+ADMIN_USER_ID = "admin"
+MENU_CONFIG_SHEET = "Control_Center"
+MENU_CONFIG_KEY = "hidden_pmo_menus"
+
+
+def is_admin_user() -> bool:
+    return str(st.session_state.get("user_id", "")).strip().lower() == ADMIN_USER_ID
+
+
+def _normalize_hidden_menu_list(hidden) -> list:
+    if not isinstance(hidden, list):
+        return []
+    return [m for m in hidden if m in ALL_PMO_MENUS and m != ADMIN_MENU]
+
+
+def _load_user_hidden_menus_from_file() -> list:
+    if not MENU_VISIBILITY_CACHE.exists():
+        return []
+    try:
+        with open(MENU_VISIBILITY_CACHE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return _normalize_hidden_menu_list(data.get("hidden_menus", []))
+    except Exception:
+        pass
+    return []
+
+
+def _load_user_hidden_menus_from_sheet(sh) -> Optional[list]:
+    try:
+        ws = safe_api_call(sh.worksheet, MENU_CONFIG_SHEET)
+        rows = safe_api_call(ws.get_all_values)
+        for row in rows:
+            if len(row) >= 2 and str(row[0]).strip() == MENU_CONFIG_KEY:
+                parsed = json.loads(str(row[1]).strip() or "[]")
+                return _normalize_hidden_menu_list(parsed)
+    except Exception:
+        pass
+    return None
+
+
+def _save_user_hidden_menus_to_sheet(sh, hidden: list) -> None:
+    valid = _normalize_hidden_menu_list(hidden)
+    payload = json.dumps(valid, ensure_ascii=False)
+    try:
+        ws = safe_api_call(sh.worksheet, MENU_CONFIG_SHEET)
+    except WorksheetNotFound:
+        ws = safe_api_call(sh.add_worksheet, title=MENU_CONFIG_SHEET, rows="100", cols="10")
+        safe_api_call(ws.update, "A1", [["설정키", "설정값"]])
+    rows = safe_api_call(ws.get_all_values)
+    target_row = None
+    for idx, row in enumerate(rows, start=1):
+        if row and str(row[0]).strip() == MENU_CONFIG_KEY:
+            target_row = idx
+            break
+    if target_row is None:
+        safe_api_call(ws.append_row, [MENU_CONFIG_KEY, payload])
+    else:
+        safe_api_call(ws.update, f"B{target_row}", [[payload]])
+
+
+def load_user_hidden_menus(sh=None) -> list:
+    """파일 캐시 + 구글 시트(Control_Center)에서 숨김 메뉴 로드 (시트 우선)"""
+    if sh is not None:
+        sheet_hidden = _load_user_hidden_menus_from_sheet(sh)
+        if sheet_hidden is not None:
+            _save_file_cache(MENU_VISIBILITY_CACHE, {"hidden_menus": sheet_hidden})
+            return sheet_hidden
+    return _load_user_hidden_menus_from_file()
+
+
+def save_user_hidden_menus(sh, hidden: list) -> None:
+    valid = _normalize_hidden_menu_list(hidden)
+    _save_file_cache(MENU_VISIBILITY_CACHE, {"hidden_menus": valid})
+    if sh is not None:
+        _save_user_hidden_menus_to_sheet(sh, valid)
+
+
+def get_pmo_menus_for_current_user(sh=None) -> list:
+    """현재 로그인 사용자에게 표시할 PMO 메뉴 (admin은 전체, 일반 사용자는 숨김 설정 반영)"""
+    if is_admin_user():
+        return list(ALL_PMO_MENUS)
+    hidden = set(load_user_hidden_menus(sh))
+    hidden.add(ADMIN_MENU)
+    return [m for m in ALL_PMO_MENUS if m not in hidden]
+
 
 def _sheet_name_to_filename(name: str) -> str:
     """시트명을 파일명으로 사용 가능하게 정리"""
@@ -1835,16 +1932,45 @@ def view_kpi(sh):
     except: 
         st.warning("KPI 시트를 찾을 수 없습니다.")
 
+def view_admin_menu_visibility(sh):
+    """admin 전용: 일반 사용자 PMO 메뉴 표시/숨김 설정"""
+    st.subheader("👁️ PMO 메뉴 표시 설정")
+    st.caption("체크한 메뉴는 **일반 사용자** 화면(사이드바·상단 메뉴)에서 숨겨집니다.")
+    st.info(
+        f"**{ADMIN_MENU}**은 `{ADMIN_USER_ID}` 계정 전용이며, 일반 사용자에게는 항상 표시되지 않습니다. "
+        f"설정은 구글 시트 `{MENU_CONFIG_SHEET}`에도 저장되어 배포 환경에서도 유지됩니다."
+    )
+
+    configurable = [m for m in ALL_PMO_MENUS if m != ADMIN_MENU]
+    current_hidden = set(load_user_hidden_menus(sh))
+
+    with st.form("menu_visibility_form"):
+        hide_states = {
+            m: st.checkbox(f"{m} — 일반 사용자에게 숨김", value=m in current_hidden)
+            for m in configurable
+        }
+        if st.form_submit_button("💾 메뉴 표시 설정 저장", use_container_width=True):
+            hidden = [m for m, hide in hide_states.items() if hide]
+            save_user_hidden_menus(sh, hidden)
+            st.success("메뉴 표시 설정이 저장되었습니다. (로컬 + 구글 시트)")
+            st.rerun()
+
+
 # 5. 마스터 관리
 def view_project_admin(sh, pjt_list):
+    if not is_admin_user():
+        st.error("마스터 설정은 admin 계정만 이용할 수 있습니다.")
+        return
+
     col_title, col_btn = st.columns([8, 2])
     with col_title:
         st.title("⚙️ 마스터 관리")
     with col_btn:
         st.write("")
         render_print_button()
-        
-    t1, t2, t3, t4, t5 = st.tabs(["➕ 등록", "✏️ 수정", "🗑️ 삭제", "🔄 업로드", "📥 다운로드"])
+
+    tab_labels = ["➕ 등록", "✏️ 수정", "🗑️ 삭제", "🔄 업로드", "📥 다운로드", "👁️ 메뉴 표시"]
+    t1, t2, t3, t4, t5, t6 = st.tabs(tab_labels)
     
     with t1:
         new_n = st.text_input("신규 프로젝트명")
@@ -1932,6 +2058,9 @@ def view_project_admin(sh, pjt_list):
                         pass
             st.download_button("📥 통합 파일 받기", output.getvalue(), f"Backup_{datetime.date.today()}.xlsx")
 
+    with t6:
+        view_admin_menu_visibility(sh)
+
 # ---------------------------------------------------------
 # [SECTION 3] 메인 컨트롤러
 # ---------------------------------------------------------
@@ -1947,36 +2076,26 @@ if check_login():
                 pjt_list = [ws.title for ws in sh.worksheets() if ws.title not in sys_names]
                 _save_file_cache(WORKSHEET_LIST_CACHE, pjt_list)
             
+            visible_menus = get_pmo_menus_for_current_user(sh)
             if "selected_menu" not in st.session_state:
-                st.session_state.selected_menu = "통합 대시보드"
+                st.session_state.selected_menu = visible_menus[0]
+            elif st.session_state.selected_menu not in visible_menus:
+                st.session_state.selected_menu = visible_menus[0]
             if "selected_pjt" not in st.session_state:
                 st.session_state.selected_pjt = "선택"
             
             st.sidebar.title("📁 PMO 메뉴")
+            if not is_admin_user():
+                st.sidebar.caption("일부 메뉴는 관리자 설정에 따라 숨겨져 있을 수 있습니다.")
             menu = st.sidebar.radio(
                 "메뉴 선택",
-                [
-                    "통합 대시보드",
-                    "주간 최종 보고(표)",
-                    "프로젝트 상세",
-                    "일 발전량 분석",
-                    "경영지표(KPI)",
-                    "마스터 설정",
-                ],
+                visible_menus,
                 key="selected_menu",
             )
             
             # 상단 가로 메뉴 (사이드바와 동기화, 테두리 없음)
-            menu_options = [
-                "통합 대시보드",
-                "주간 최종 보고(표)",
-                "프로젝트 상세",
-                "일 발전량 분석",
-                "경영지표(KPI)",
-                "마스터 설정",
-            ]
-            top_cols = st.columns(6)
-            for idx, opt in enumerate(menu_options):
+            top_cols = st.columns(max(1, len(visible_menus)))
+            for idx, opt in enumerate(visible_menus):
                 with top_cols[idx]:
                     if opt == menu:
                         st.button(f"● {opt}", key=f"topmenu_{idx}", disabled=True, use_container_width=True, type="primary")
