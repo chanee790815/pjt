@@ -695,6 +695,58 @@ def calc_planned_progress(start, end, target_date=None):
     except: 
         return 0.0
 
+
+def _task_duration_days(start, end) -> float:
+    """공정 1건의 가중치 = 일정 기간(일). 날짜 없으면 1일."""
+    try:
+        s = pd.to_datetime(start, errors="coerce")
+        e = pd.to_datetime(end, errors="coerce")
+        if pd.isna(s) or pd.isna(e):
+            return 1.0
+        days = abs((pd.Timestamp(e) - pd.Timestamp(s)).days)
+        return float(max(1, days))
+    except Exception:
+        return 1.0
+
+
+def calc_weighted_progress_mean(df: pd.DataFrame, progress_values: pd.Series) -> float:
+    """
+    공정 진행률의 기간 가중 평균.
+    실적% = Σ(진행률 × 공정일수) / Σ(공정일수)
+    """
+    if df is None or df.empty or progress_values is None or len(progress_values) == 0:
+        return 0.0
+    p = pd.to_numeric(progress_values, errors="coerce").fillna(0).astype(float)
+    if len(df) != len(p):
+        return float(p.mean())
+    weights = df.apply(
+        lambda r: _task_duration_days(r.get("시작일"), r.get("종료일")),
+        axis=1,
+    ).astype(float)
+    total_w = float(weights.sum())
+    if total_w <= 0:
+        return float(p.mean())
+    return float((p * weights).sum() / total_w)
+
+
+def calc_weighted_actual_progress(df: pd.DataFrame) -> float:
+    """실적(실행) 진행률 — 기간 가중 평균"""
+    if df.empty or "진행률" not in df.columns:
+        return 0.0
+    return round(calc_weighted_progress_mean(df, df["진행률"]), 1)
+
+
+def calc_weighted_planned_progress(df: pd.DataFrame, target_date=None) -> float:
+    """계획 진행률 — 기간 가중 평균"""
+    if df.empty:
+        return 0.0
+    planned = df.apply(
+        lambda r: calc_planned_progress(r.get("시작일"), r.get("종료일"), target_date),
+        axis=1,
+    )
+    return round(calc_weighted_progress_mean(df, planned), 1)
+
+
 def navigate_to_project(p_name):
     st.session_state.selected_menu = "프로젝트 상세"
     st.session_state.selected_pjt = p_name
@@ -874,7 +926,7 @@ def build_project_status_report_df(pjt_list):
     """
     구글 시트 프로젝트 탭과 동일 규칙으로 집계 (통합 대시보드와 동일 데이터 소스).
     - PM/금주/차주: 2행 H,I,J
-    - 진행률: 공정표 '진행률' 열 평균, 계획: 시작~종료일 기준 calc_planned_progress 평균
+    - 진행률: 공정표 '진행률' 열 기간(일정) 가중 평균, 계획: 시작~종료일 기준 calc_planned_progress 기간 가중 평균
     """
     def _extract_capacity_mw(project_name: str):
         """
@@ -915,14 +967,8 @@ def build_project_status_report_df(pjt_list):
             else:
                 df = pd.DataFrame()
             if not df.empty and "진행률" in df.columns:
-                avg_act = round(pd.to_numeric(df["진행률"], errors="coerce").fillna(0).mean(), 1)
-                avg_plan = round(
-                    df.apply(
-                        lambda r: calc_planned_progress(r.get("시작일"), r.get("종료일")),
-                        axis=1,
-                    ).mean(),
-                    1,
-                )
+                avg_act = calc_weighted_actual_progress(df)
+                avg_plan = calc_weighted_planned_progress(df)
             else:
                 avg_act = 0.0
                 avg_plan = 0.0
@@ -1151,13 +1197,8 @@ def view_dashboard(sh, pjt_list):
                     df = pd.DataFrame()
 
                 if not df.empty and '진행률' in df.columns:
-                    avg_act = round(pd.to_numeric(df['진행률'], errors='coerce').fillna(0).mean(), 1)
-                    avg_plan = round(
-                        df.apply(
-                            lambda r: calc_planned_progress(r.get('시작일'), r.get('종료일')),
-                            axis=1
-                        ).mean(), 1
-                    )
+                    avg_act = calc_weighted_actual_progress(df)
+                    avg_plan = calc_weighted_planned_progress(df)
                 else:
                     avg_act = 0.0; avg_plan = 0.0
                 
@@ -1297,7 +1338,8 @@ def view_weekly_final_report(sh, pjt_list):
     with col_btn:
         render_print_button()
     st.caption(
-        "데이터는 구글 시트 `pms_db`의 각 프로젝트 시트(공정 진행률 평균, 2행 H·I·J의 PM·금주·차주)와 동일합니다."
+        "데이터는 구글 시트 `pms_db`의 각 프로젝트 시트와 동일합니다. "
+        "**실적·계획%**는 공정별 진행률을 **일정 기간(종료일−시작일)으로 가중**한 평균입니다."
     )
 
     with st.spinner("프로젝트별 데이터를 불러오는 중…"):
@@ -1680,8 +1722,17 @@ def view_project_detail(sh, pjt_list):
                 if not sdf.empty:
                     min_d, max_d = sdf['시작일'].min(), sdf['종료일'].max()
                     d_range = pd.date_range(min_d, max_d, freq='W-MON').date.tolist()
-                    p_trend = [sdf.apply(lambda r: calc_planned_progress(r['시작일'], r['종료일'], d), axis=1).mean() for d in d_range]
-                    a_prog = pd.to_numeric(sdf['진행률'], errors='coerce').fillna(0).mean()
+                    p_trend = [
+                        calc_weighted_progress_mean(
+                            sdf,
+                            sdf.apply(
+                                lambda r: calc_planned_progress(r['시작일'], r['종료일'], d),
+                                axis=1,
+                            ),
+                        )
+                        for d in d_range
+                    ]
+                    a_prog = calc_weighted_actual_progress(sdf)
                     fig_s = go.Figure()
                     fig_s.add_trace(go.Scatter(x=[d.strftime("%Y-%m-%d") for d in d_range], y=p_trend, mode='lines+markers', name='계획'))
                     fig_s.add_trace(go.Scatter(x=[datetime.date.today().strftime("%Y-%m-%d")], y=[a_prog], mode='markers', name='현재 실적', marker=dict(size=12, color='red', symbol='star')))
