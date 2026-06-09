@@ -15,6 +15,10 @@ import json
 import pathlib
 import os
 import re
+from typing import Optional
+import hmac
+import hashlib
+import base64
 
 # 1. 페이지 설정
 st.set_page_config(page_title="PM 통합 공정 관리 v4.5.22", page_icon="🏗️", layout="wide")
@@ -217,8 +221,87 @@ def safe_api_call(func, *args, **kwargs):
             else:
                 raise e
 
+# --- [세션 유지] WebSocket 순단·백그라운드 탭 등으로 세션이 끊길 때 로그인이 풀리는 완화 ---
+# 1) 같은 폴더의 `.streamlit/config.toml` → server.disconnectedSessionTTL (기본 120초보다 크게)
+# 2) 아래 URL 토큰: 재접속 시 브라우저 URL에 pm_auth 가 남아 있으면 서명 검증 후 로그인 복구
+LOGIN_URL_TOKEN_PARAM = "pm_auth"
+LOGIN_URL_TOKEN_TTL_SEC = int(os.environ.get("PM_LOGIN_TOKEN_TTL", str(7 * 24 * 3600)))  # 기본 7일
+
+
+def _session_signing_secret() -> Optional[bytes]:
+    """Secrets의 SESSION_SIGNING_KEY(권장) 없으면 passwords 항목으로부터 안정적인 파생키."""
+    try:
+        raw = str(st.secrets.get("SESSION_SIGNING_KEY", "")).strip()
+        if raw and raw.lower() not in ("none", "null"):
+            return raw.encode("utf-8")
+    except Exception:
+        pass
+    try:
+        pw = st.secrets.get("passwords")
+        if isinstance(pw, dict) and pw:
+            return hashlib.sha256(json.dumps(pw, sort_keys=True, ensure_ascii=False).encode("utf-8")).digest()
+    except Exception:
+        pass
+    return None
+
+
+def _persist_login_to_url(user_id: str) -> None:
+    """로그인 직후 URL에 서명 토큰을 붙여, 세션 ID가 바뀌어도 같은 탭에서 복구 가능하게 함."""
+    secret = _session_signing_secret()
+    if not secret or not user_id:
+        return
+    try:
+        exp = int(time.time()) + LOGIN_URL_TOKEN_TTL_SEC
+        body = json.dumps({"u": user_id, "exp": exp}, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        sig = hmac.new(secret, body, hashlib.sha256).hexdigest()
+        token = base64.urlsafe_b64encode(body).decode("ascii").rstrip("=") + "." + sig
+        st.query_params[LOGIN_URL_TOKEN_PARAM] = token
+    except Exception:
+        pass
+
+
+def _try_restore_login_from_query() -> None:
+    if st.session_state.get("logged_in", False):
+        return
+    secret = _session_signing_secret()
+    if not secret:
+        return
+    try:
+        token = st.query_params.get(LOGIN_URL_TOKEN_PARAM)
+        if not token or "." not in token:
+            return
+        b64, sig = token.split(".", 1)
+        pad = "=" * ((4 - len(b64) % 4) % 4)
+        body = base64.urlsafe_b64decode(b64 + pad)
+        expected = hmac.new(secret, body, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expected, sig):
+            return
+        obj = json.loads(body.decode("utf-8"))
+        uid = str(obj.get("u", "")).strip()
+        exp = int(obj.get("exp", 0))
+        if not uid or exp < int(time.time()):
+            return
+        if uid not in st.secrets.get("passwords", {}):
+            return
+        st.session_state["logged_in"] = True
+        st.session_state["user_id"] = uid
+    except Exception:
+        pass
+
+
+def _clear_login_url_token() -> None:
+    try:
+        if LOGIN_URL_TOKEN_PARAM in st.query_params:
+            del st.query_params[LOGIN_URL_TOKEN_PARAM]
+    except Exception:
+        pass
+
+
 def check_login():
-    if st.session_state.get("logged_in", False): 
+    if st.session_state.get("logged_in", False):
+        return True
+    _try_restore_login_from_query()
+    if st.session_state.get("logged_in", False):
         return True
     st.title("🏗️ PM 통합 관리 시스템")
     with st.form("login"):
@@ -228,6 +311,7 @@ def check_login():
             if u_id in st.secrets["passwords"] and u_pw == st.secrets["passwords"][u_id]:
                 st.session_state["logged_in"] = True
                 st.session_state["user_id"] = u_id
+                _persist_login_to_url(u_id)
                 st.rerun()
             else:
                 st.error("정보 불일치")
@@ -804,12 +888,15 @@ def view_dashboard(sh, pjt_list):
                 else:
                     avg_act = 0.0; avg_plan = 0.0
                 
+                status_key = "정상"
                 status_ui = "🟢 정상"
                 b_style = "status-normal"
                 if (avg_plan - avg_act) >= 10:
+                    status_key = "지연"
                     status_ui = "🔴 지연"
                     b_style = "status-delay"
-                elif avg_act >= 100: 
+                elif avg_act >= 100:
+                    status_key = "완료"
                     status_ui = "🔵 완료"
                     b_style = "status-done"
                 
@@ -820,6 +907,7 @@ def view_dashboard(sh, pjt_list):
                     "next_w": next_w,
                     "avg_act": avg_act,
                     "avg_plan": avg_plan,
+                    "status_key": status_key,
                     "status_ui": status_ui,
                     "b_style": b_style
                 })
@@ -829,24 +917,48 @@ def view_dashboard(sh, pjt_list):
 
     all_pms = sorted(list(set([d["pm_name"] for d in dashboard_data])))
     
-    f_col1, f_col2 = st.columns([1, 3])
+    _STATUS_FILTER_OPTS = ["🟢 정상", "🔴 지연", "🔵 완료"]
+    _STATUS_KEY_MAP = {"🟢 정상": "정상", "🔴 지연": "지연", "🔵 완료": "완료"}
+
+    f_col1, f_col2, f_col3 = st.columns([1, 1.2, 2.8])
     with f_col1:
-        selected_pm = st.selectbox("👤 담당자 조회", ["전체"] + all_pms)
-    if selected_pm != "전체":
-        filtered_data = [d for d in dashboard_data if d["pm_name"] == selected_pm]
-    else:
-        filtered_data = dashboard_data
-
-    total_cnt = len(filtered_data)
-    normal_cnt = len([d for d in filtered_data if d['status_ui'] == "🟢 정상"])
-    delay_cnt = len([d for d in filtered_data if d['status_ui'] == "🔴 지연"])
-    done_cnt = len([d for d in filtered_data if d['status_ui'] == "🔵 완료"])
-
+        selected_pm = st.selectbox("👤 담당자 조회", ["전체"] + all_pms, key="dashboard_pm_filter")
     with f_col2:
+        selected_status_labels = st.multiselect(
+            "📌 상태 필터",
+            _STATUS_FILTER_OPTS,
+            default=["🟢 정상", "🔴 지연"],
+            help="기본값은 진행 중(정상·지연)만 표시합니다. 완료 프로젝트는 '🔵 완료'를 선택하세요.",
+            key="dashboard_status_filter",
+        )
+        selected_status_keys = {_STATUS_KEY_MAP[l] for l in selected_status_labels}
+
+    if selected_pm != "전체":
+        pm_filtered = [d for d in dashboard_data if d["pm_name"] == selected_pm]
+    else:
+        pm_filtered = dashboard_data
+
+    if selected_status_keys:
+        filtered_data = [d for d in pm_filtered if d["status_key"] in selected_status_keys]
+    else:
+        filtered_data = []
+
+    pool_cnt = len(pm_filtered)
+    display_cnt = len(filtered_data)
+    normal_cnt = len([d for d in pm_filtered if d["status_key"] == "정상"])
+    delay_cnt = len([d for d in pm_filtered if d["status_key"] == "지연"])
+    done_cnt = len([d for d in pm_filtered if d["status_key"] == "완료"])
+    pool_hint = (
+        f" <span style='opacity:0.75;font-size:12px;'>(전체 {pool_cnt}건)</span>"
+        if pool_cnt != display_cnt
+        else ""
+    )
+
+    with f_col3:
         st.markdown(f"""
-            <div class="metric-container" style="display: flex; gap: 10px; align-items: center; height: 100%; padding-top: 28px;">
+            <div class="metric-container" style="display: flex; gap: 10px; align-items: center; height: 100%; padding-top: 28px; flex-wrap: wrap;">
                 <div style="background: rgba(128,128,128,0.1); padding: 7px 12px; border-radius: 6px; font-weight: bold; font-size: 13px;">
-                    📊 조회된 프로젝트: <span style="color: #2196f3; font-size: 15px;">{total_cnt}</span>건
+                    📊 표시: <span style="color: #2196f3; font-size: 15px;">{display_cnt}</span>건{pool_hint}
                 </div>
                 <div style="background: rgba(33,150,243,0.1); padding: 7px 12px; border-radius: 6px; font-weight: bold; font-size: 13px; color: #1976d2;">
                     🟢 정상: {normal_cnt}건
@@ -862,8 +974,10 @@ def view_dashboard(sh, pjt_list):
         
     st.divider()
 
-    if total_cnt == 0:
-        st.info("선택된 담당자의 프로젝트가 없습니다.")
+    if not selected_status_keys:
+        st.info("상태 필터에서 하나 이상을 선택해 주세요. (기본: 정상·지연)")
+    elif display_cnt == 0:
+        st.info("선택한 담당자·상태 조건에 맞는 프로젝트가 없습니다. 완료 건은 상태 필터에 '🔵 완료'를 추가하세요.")
     else:
         cols = st.columns(2)
         for idx, d in enumerate(filtered_data):
@@ -1882,8 +1996,9 @@ if check_login():
             elif menu == "마스터 설정": 
                 view_project_admin(sh, pjt_list)
             
-            if st.sidebar.button("로그아웃"): 
+            if st.sidebar.button("로그아웃"):
                 st.session_state.logged_in = False
+                _clear_login_url_token()
                 st.rerun()
         except Exception:
             st.error("서버 접속이 지연되고 있습니다. 잠시 후 새로고침 해주세요.")
