@@ -19,6 +19,7 @@ from typing import Optional
 import hmac
 import hashlib
 import base64
+import html as html_module
 
 # 1. 페이지 설정
 st.set_page_config(page_title="PM 통합 공정 관리 v4.5.22", page_icon="🏗️", layout="wide")
@@ -161,6 +162,107 @@ st.markdown("""
     @media (max-width: 768px) {
         .gantt-month-ruler-spacer { flex: 0 0 62px; min-width: 62px; }
         .gantt-month-ruler-track { padding-right: 72px; font-size: 10px; }
+    }
+
+    /* ========================================================= */
+    /* [일일보고] 엑셀 양식형 화면 */
+    /* ========================================================= */
+    .daily-report-viewport {
+        overflow-x: auto;
+        margin: 8px 0 16px 0;
+        border: 1px solid #b4b4b4;
+        border-radius: 4px;
+        background: #fff;
+    }
+    .daily-report-sheet {
+        min-width: 920px;
+        font-family: 'Pretendard', 'Malgun Gothic', sans-serif;
+        font-size: 12px;
+        color: #111;
+    }
+    .daily-report-top {
+        display: flex;
+        align-items: stretch;
+        border-bottom: 1px solid #b4b4b4;
+    }
+    .daily-report-date-box {
+        flex: 0 0 200px;
+        background: #4f81bd;
+        color: #fff;
+        font-size: 22px;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 18px 12px;
+        border-right: 1px solid #b4b4b4;
+        text-align: center;
+        line-height: 1.35;
+    }
+    .daily-report-legend {
+        flex: 1 1 auto;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        border-collapse: collapse;
+    }
+    .daily-report-legend-cell {
+        border: 1px solid #b4b4b4;
+        border-top: none;
+        padding: 5px 8px;
+        font-size: 11px;
+        background: #fff;
+        vertical-align: middle;
+    }
+    .daily-report-legend-cell b { font-size: 12px; }
+    .daily-report-legend-note {
+        grid-column: 1 / -1;
+        text-align: right;
+        font-size: 10px;
+        color: #444;
+        padding: 2px 8px 4px;
+        background: #fafafa;
+        border-bottom: 1px solid #b4b4b4;
+    }
+    .daily-report-table {
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed;
+    }
+    .daily-report-table th {
+        background: #d9d9d9;
+        border: 1px solid #808080;
+        padding: 6px 4px;
+        font-weight: 700;
+        text-align: center;
+        font-size: 12px;
+    }
+    .daily-report-table td {
+        border: 1px solid #808080;
+        padding: 5px 6px;
+        vertical-align: middle;
+        line-height: 1.45;
+        word-break: keep-all;
+        overflow-wrap: break-word;
+    }
+    .daily-report-table .dr-col-id { width: 52px; text-align: center; }
+    .daily-report-table .dr-col-major { width: 88px; text-align: center; font-weight: 600; background: #fafafa; }
+    .daily-report-table .dr-col-sub { width: 108px; text-align: center; }
+    .daily-report-table .dr-col-work { text-align: left; }
+    .daily-report-table .dr-col-pct { width: 72px; text-align: center; }
+    .daily-report-table .dr-col-note { width: 140px; text-align: left; font-size: 11px; }
+    .daily-report-project-tag {
+        padding: 4px 10px;
+        background: #eef4fb;
+        border-bottom: 1px solid #c5d3e3;
+        font-size: 12px;
+        font-weight: 600;
+        color: #1565c0;
+    }
+    @media (max-width: 768px) {
+        .daily-report-date-box { flex: 0 0 140px; font-size: 16px; padding: 12px 8px; }
+    }
+    @media print {
+        .daily-report-viewport { border: none; overflow: visible; }
     }
 
     /* ========================================================= */
@@ -2427,21 +2529,148 @@ def save_daily_reports_to_sheet(sh, project_name: str, sections: list, user_id: 
     return len(new_rows)
 
 
-def _render_daily_report_section_table(section_rows: list):
+DEFAULT_DAILY_REPORT_LEGEND = [
+    ("RFQ", "Request For Quotation"),
+    ("TBE", "Technical Bid Evaluation"),
+    ("IFA", "Issue For Approved"),
+    ("IFC", "Issue For Construction"),
+]
+
+
+def _daily_report_date_korean(date_iso: str) -> str:
+    try:
+        d = pd.to_datetime(str(date_iso)[:10])
+        return f"{d.year}년 {d.month:02d}월 {d.day:02d}일"
+    except Exception:
+        return str(date_iso)
+
+
+def _daily_report_escape(text) -> str:
+    if text is None or (isinstance(text, float) and pd.isna(text)):
+        return ""
+    return html_module.escape(str(text).strip()).replace("\n", "<br>")
+
+
+def _daily_report_sort_key(row: dict):
+    g = str(row.get("구분", ""))
+    m = re.match(r"(\d+)-(\d+)", g)
+    if m:
+        return (int(m.group(1)), int(m.group(2)))
+    return (99, 99)
+
+
+def _normalize_daily_report_rows(section_rows: list) -> list:
+    """저장 시트·파싱 결과를 동일 키로 정규화"""
+    out = []
+    for row in section_rows or []:
+        if not isinstance(row, dict):
+            continue
+        out.append(
+            {
+                "구분": str(row.get("구분", "")).strip(),
+                "대분류": str(row.get("대분류", "")).strip(),
+                "세부항목": str(row.get("세부항목", "")).strip(),
+                "업무내용": str(row.get("업무내용", "")).strip(),
+                "공정율": str(row.get("공정율", row.get("공정율(%)", ""))).strip(),
+                "비고": str(row.get("비고", "")).strip(),
+            }
+        )
+    return sorted(out, key=_daily_report_sort_key)
+
+
+def _daily_report_major_rowspans(rows: list) -> dict:
+    """대분류 열 rowspan: {시작행인덱스: (rowspan, 텍스트)}"""
+    info = {}
+    i = 0
+    while i < len(rows):
+        cat = rows[i].get("대분류", "")
+        j = i + 1
+        while j < len(rows) and rows[j].get("대분류", "") == cat:
+            j += 1
+        info[i] = (j - i, cat)
+        i = j
+    return info
+
+
+def _build_daily_report_html(
+    date_iso: str,
+    section_rows: list,
+    project_name: str = None,
+    legend_note: str = "(6월24일마감)",
+) -> str:
+    rows = _normalize_daily_report_rows(section_rows)
+    if not rows:
+        return "<p>표시할 항목이 없습니다.</p>"
+
+    major_spans = _daily_report_major_rowspans(rows)
+    legend_cells = ""
+    for abbr, desc in DEFAULT_DAILY_REPORT_LEGEND:
+        legend_cells += (
+            f'<div class="daily-report-legend-cell"><b>{html_module.escape(abbr)}</b> '
+            f"{html_module.escape(desc)}</div>"
+        )
+
+    body_rows = ""
+    for i, row in enumerate(rows):
+        body_rows += "<tr>"
+        body_rows += f'<td class="dr-col-id">{_daily_report_escape(row.get("구분", ""))}</td>'
+        if i in major_spans:
+            span, cat = major_spans[i]
+            body_rows += (
+                f'<td class="dr-col-major" rowspan="{span}">{_daily_report_escape(cat)}</td>'
+            )
+        body_rows += f'<td class="dr-col-sub">{_daily_report_escape(row.get("세부항목", ""))}</td>'
+        body_rows += f'<td class="dr-col-work">{_daily_report_escape(row.get("업무내용", ""))}</td>'
+        pct = row.get("공정율", "")
+        body_rows += f'<td class="dr-col-pct">{_daily_report_escape(pct if pct not in ("-", "") else "")}</td>'
+        body_rows += f'<td class="dr-col-note">{_daily_report_escape(row.get("비고", ""))}</td>'
+        body_rows += "</tr>"
+
+    project_bar = ""
+    if project_name:
+        project_bar = (
+            f'<div class="daily-report-project-tag">🏗️ {html_module.escape(project_name)}</div>'
+        )
+
+    return f"""
+    <div class="daily-report-sheet">
+        {project_bar}
+        <div class="daily-report-top">
+            <div class="daily-report-date-box">{_daily_report_date_korean(date_iso)}</div>
+            <div style="flex:1;display:flex;flex-direction:column;">
+                <div class="daily-report-legend-note">{html_module.escape(legend_note)}</div>
+                <div class="daily-report-legend">{legend_cells}</div>
+            </div>
+        </div>
+        <table class="daily-report-table">
+            <thead>
+                <tr>
+                    <th class="dr-col-id">구분</th>
+                    <th class="dr-col-major">대분류</th>
+                    <th class="dr-col-sub">세부</th>
+                    <th class="dr-col-work">업무 내용</th>
+                    <th class="dr-col-pct">공정율<br>(%)</th>
+                    <th class="dr-col-note">비고</th>
+                </tr>
+            </thead>
+            <tbody>{body_rows}</tbody>
+        </table>
+    </div>
+    """
+
+
+def _render_daily_report_section_table(
+    section_rows: list,
+    date_iso: str,
+    project_name: str = None,
+):
     if not section_rows:
         st.info("표시할 항목이 없습니다.")
         return
-    show_df = pd.DataFrame(section_rows)
-    col_order = ["구분", "대분류", "세부항목", "업무내용", "공정율", "비고"]
-    show_df = show_df[[c for c in col_order if c in show_df.columns]]
-    st.dataframe(
-        show_df,
-        use_container_width=True,
-        height=min(560, 100 + len(show_df) * 38),
-        column_config={
-            "업무내용": st.column_config.TextColumn("업무내용", width="large"),
-            "비고": st.column_config.TextColumn("비고", width="medium"),
-        },
+    sheet_html = _build_daily_report_html(date_iso, section_rows, project_name=project_name)
+    st.markdown(
+        f'<div class="daily-report-viewport">{sheet_html}</div>',
+        unsafe_allow_html=True,
     )
 
 
@@ -2496,8 +2725,12 @@ def view_daily_report(sh, pjt_list):
                 st.success(f"**{len(sections)}개** 일자, 총 **{sum(len(s['rows']) for s in sections)}건** 항목을 읽었습니다.")
                 preview_date = st.selectbox("미리보기 일자", dates, key="daily_report_preview_date")
                 preview_section = next(s for s in sections if s["date"] == preview_date)
-                st.subheader(f"📅 {preview_date} 일일보고 미리보기")
-                _render_daily_report_section_table(preview_section["rows"])
+                preview_pjt = pjt_sel if pjt_sel != "선택" else guess_default
+                _render_daily_report_section_table(
+                    preview_section["rows"],
+                    preview_date,
+                    project_name=preview_pjt or None,
+                )
 
                 save_pjt = pjt_sel if pjt_sel != "선택" else guess_default
                 if not save_pjt:
@@ -2554,15 +2787,31 @@ def view_daily_report(sh, pjt_list):
 
         display_cols = ["날짜", "프로젝트명", "구분", "대분류", "세부항목", "업무내용", "공정율(%)", "비고"]
         show_saved = view_df[display_cols].reset_index(drop=True)
-        st.dataframe(
-            show_saved,
-            use_container_width=True,
-            height=min(600, 120 + len(show_saved) * 36),
-            column_config={
-                "업무내용": st.column_config.TextColumn("업무내용", width="large"),
-                "비고": st.column_config.TextColumn("비고", width="medium"),
-            },
-        )
+
+        sheet_dates = sorted(show_saved["날짜"].astype(str).str[:10].unique().tolist(), reverse=True)
+        if filt_date == "전체" and len(sheet_dates) > 1:
+            view_date = st.selectbox("양식 미리보기 일자", sheet_dates, key="daily_saved_sheet_date")
+        elif filt_date != "전체":
+            view_date = filt_date[:10]
+        else:
+            view_date = sheet_dates[0]
+
+        day_df = show_saved[show_saved["날짜"].astype(str).str.startswith(view_date)]
+        sheet_pjt = ""
+        if filt_pjt != "전체":
+            sheet_pjt = filt_pjt
+        elif not day_df.empty:
+            sheet_pjt = str(day_df.iloc[0]["프로젝트명"])
+
+        sheet_rows = day_df.drop(columns=["날짜", "프로젝트명"], errors="ignore").to_dict(orient="records")
+        _render_daily_report_section_table(sheet_rows, view_date, project_name=sheet_pjt or None)
+
+        with st.expander("📊 표 형태로 보기 / 엑셀 다운로드"):
+            st.dataframe(
+                show_saved,
+                use_container_width=True,
+                height=min(400, 100 + len(show_saved) * 36),
+            )
 
         out = io.BytesIO()
         show_saved.to_excel(out, index=False, sheet_name="일일보고")
