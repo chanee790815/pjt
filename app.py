@@ -147,7 +147,10 @@ st.markdown("""
 
 # --- [파일 캐시] 구글 시트 데이터를 로컬 파일로 저장/로드 (앱 재시작 후에도 유지) ---
 CACHE_DIR = pathlib.Path("pms_sheet_cache")
-FILE_CACHE_TTL = 300  # 초 (5분). 이 시간 안에는 파일에서만 읽음
+FILE_CACHE_TTL = int(os.environ.get("PMS_CACHE_TTL", "300"))  # 초 (기본 5분). 0이면 파일 캐시 미사용
+SHEET_CACHE_ENABLED = os.environ.get("PMS_SHEET_CACHE", "true").strip().lower() not in (
+    "0", "false", "no", "off",
+)
 WORKSHEET_LIST_CACHE = CACHE_DIR / "worksheet_list.json"  # 프로젝트 목록 캐시 파일
 MENU_VISIBILITY_CACHE = CACHE_DIR / "menu_visibility.json"  # 일반 사용자 메뉴 숨김 설정
 
@@ -274,12 +277,14 @@ def _save_file_cache(cache_path: pathlib.Path, data) -> None:
     except Exception:
         pass
 
-def clear_file_cache(worksheet_name: str = None):
-    """파일 캐시 삭제. worksheet_name 이 None 이면 전체 삭제"""
+def clear_file_cache(worksheet_name: str = None, preserve_menu_config: bool = True):
+    """파일 캐시 삭제. worksheet_name 이 None 이면 전체 삭제 (메뉴 표시 설정 파일은 유지 가능)"""
     if not CACHE_DIR.exists():
         return
     if worksheet_name is None:
         for f in CACHE_DIR.glob("*.json"):
+            if preserve_menu_config and f.name == MENU_VISIBILITY_CACHE.name:
+                continue
             try:
                 f.unlink()
             except Exception:
@@ -304,6 +309,49 @@ def clear_file_cache(worksheet_name: str = None):
                 f.unlink()
             except Exception:
                 pass
+
+
+def refresh_sheet_data_cache(project_names=None, invalidate_editor: bool = True) -> None:
+    """
+    구글 시트 읽기 캐시(메모리 + 파일)를 비우고 다음 조회 시 시트에서 다시 읽게 함.
+    project_names 가 있으면 해당 프로젝트 파일 캐시만 삭제.
+    """
+    cached_get_all_values.clear()
+    cached_get_all_records.clear()
+    cached_get_head.clear()
+    if project_names:
+        for p in project_names:
+            clear_file_cache(p, preserve_menu_config=True)
+    else:
+        clear_file_cache(preserve_menu_config=True)
+    if invalidate_editor:
+        invalidate_process_edit_cache(project_names if project_names else None)
+        if project_names:
+            for p in project_names:
+                st.session_state.pop(f"process_edit_sig_{p}", None)
+        else:
+            for key in list(st.session_state.keys()):
+                if str(key).startswith("process_edit_sig_"):
+                    st.session_state.pop(key, None)
+    st.session_state["sheet_cache_refreshed_at"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def render_sidebar_cache_controls():
+    """사이드바: 캐시 안내 + 수동 새로고침 (5분 캐시는 유지, 필요 시 즉시 갱신)"""
+    st.sidebar.divider()
+    if SHEET_CACHE_ENABLED and FILE_CACHE_TTL > 0:
+        refreshed = st.session_state.get("sheet_cache_refreshed_at")
+        if refreshed:
+            st.sidebar.caption(f"📦 시트 캐시: 최근 새로고침 {refreshed}")
+        else:
+            st.sidebar.caption(f"📦 시트 캐시: 최대 {FILE_CACHE_TTL // 60}분 유지 (빠른 조회용)")
+    else:
+        st.sidebar.caption("📦 시트 캐시: 꺼짐 (매번 구글 시트 조회)")
+    if st.sidebar.button("🔄 구글 시트 새로고침", use_container_width=True, key="sidebar_refresh_sheet_cache"):
+        with st.spinner("구글 시트에서 최신 데이터를 불러오는 중…"):
+            refresh_sheet_data_cache()
+        st.rerun()
+
 
 def safe_api_call(func, *args, **kwargs):
     """API 할당량 초과(429) 방지를 위한 자동 재시도 함수"""
@@ -439,7 +487,7 @@ def get_client():
 @st.cache_data(ttl=300, show_spinner=False)
 def cached_get_all_values(spreadsheet_name: str, worksheet_name: str):
     """지정 워크시트 전체 데이터를 5분간 메모리 + 파일 캐시"""
-    if spreadsheet_name == "pms_db":
+    if SHEET_CACHE_ENABLED and FILE_CACHE_TTL > 0 and spreadsheet_name == "pms_db":
         cache_path = CACHE_DIR / f"{_sheet_name_to_filename(worksheet_name)}.json"
         loaded = _load_file_cache(cache_path, FILE_CACHE_TTL)
         if loaded is not None:
@@ -450,7 +498,7 @@ def cached_get_all_values(spreadsheet_name: str, worksheet_name: str):
     sh = safe_api_call(client.open, spreadsheet_name)
     ws = safe_api_call(sh.worksheet, worksheet_name)
     data = safe_api_call(ws.get_all_values)
-    if spreadsheet_name == "pms_db":
+    if SHEET_CACHE_ENABLED and FILE_CACHE_TTL > 0 and spreadsheet_name == "pms_db":
         cache_path = CACHE_DIR / f"{_sheet_name_to_filename(worksheet_name)}.json"
         _save_file_cache(cache_path, data)
     return data
@@ -471,7 +519,7 @@ def cached_get_head(spreadsheet_name: str, worksheet_name: str, max_rows: int = 
     대시보드용: 상단 N행(A1~J{max_rows})만 읽어서 평균 진척 계산
     → 프로젝트별 행이 많아져도 속도 유지. 파일 캐시 지원.
     """
-    if spreadsheet_name == "pms_db":
+    if SHEET_CACHE_ENABLED and FILE_CACHE_TTL > 0 and spreadsheet_name == "pms_db":
         cache_path = CACHE_DIR / f"{_sheet_name_to_filename(worksheet_name)}_head_{max_rows}.json"
         loaded = _load_file_cache(cache_path, FILE_CACHE_TTL)
         if loaded is not None:
@@ -483,7 +531,7 @@ def cached_get_head(spreadsheet_name: str, worksheet_name: str, max_rows: int = 
     ws = safe_api_call(sh.worksheet, worksheet_name)
     rng = f"A1:J{max_rows}"
     data = safe_api_call(ws.get, rng)
-    if spreadsheet_name == "pms_db":
+    if SHEET_CACHE_ENABLED and FILE_CACHE_TTL > 0 and spreadsheet_name == "pms_db":
         cache_path = CACHE_DIR / f"{_sheet_name_to_filename(worksheet_name)}_head_{max_rows}.json"
         _save_file_cache(cache_path, data)
     return data
@@ -654,6 +702,134 @@ def navigate_to_project(p_name):
 def set_top_menu(menu_name: str):
     """상단 메뉴 클릭 시 선택 메뉴 변경 (콜백 종료 후 Streamlit이 자동 리런)"""
     st.session_state.selected_menu = menu_name
+
+
+SCHEDULE_COLUMNS = ["시작일", "종료일", "대분류", "구분", "진행상태", "비고", "진행률"]
+
+
+def _sheet_data_signature(data: list) -> str:
+    """구글 시트 원본 데이터 변경 여부 감지용 (엑셀 업로드 후 화면 갱신)"""
+    try:
+        payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+        return hashlib.md5(payload.encode("utf-8")).hexdigest()
+    except Exception:
+        return str(time.time())
+
+
+def invalidate_process_edit_cache(project_names=None):
+    """엑셀 업로드·시트 동기화 후 프로젝트 상세 편집기 세션 캐시 무효화"""
+    if project_names is None:
+        st.session_state.pop("process_edit_df", None)
+        st.session_state.pop("process_edit_pjt", None)
+        st.session_state.pop("process_edit_invalidated_pjts", None)
+        return
+    names = {str(p).strip() for p in project_names if str(p).strip()}
+    if not names:
+        return
+    invalidated = set(st.session_state.get("process_edit_invalidated_pjts") or [])
+    invalidated.update(names)
+    st.session_state["process_edit_invalidated_pjts"] = invalidated
+    if st.session_state.get("process_edit_pjt") in names:
+        st.session_state.pop("process_edit_df", None)
+        st.session_state.pop("process_edit_pjt", None)
+
+
+def _excel_cell_to_sheet_str(val) -> str:
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return ""
+    if isinstance(val, (datetime.date, datetime.datetime)):
+        return val.strftime("%Y-%m-%d")
+    if hasattr(val, "strftime"):
+        try:
+            return val.strftime("%Y-%m-%d")
+        except Exception:
+            pass
+    s = str(val).strip()
+    if not s or s.lower() in ("nan", "none", "nat"):
+        return ""
+    if len(s) >= 10 and s[4] == "-" and s[7] == "-":
+        return s[:10]
+    try:
+        parsed = pd.to_datetime(s, errors="coerce")
+        if pd.notna(parsed):
+            return parsed.strftime("%Y-%m-%d")
+    except Exception:
+        pass
+    return s
+
+
+def _normalize_excel_schedule_df(df_up: pd.DataFrame) -> pd.DataFrame:
+    """엑셀 시트 → 공정표 A~G열 DataFrame (헤더·빈행·날짜 형식 정리)"""
+    if df_up is None or df_up.empty:
+        return pd.DataFrame(columns=SCHEDULE_COLUMNS)
+
+    df = df_up.copy()
+    df.columns = [str(c).strip() for c in df.columns]
+    rename_map = {}
+    for i, col in enumerate(df.columns):
+        if col in SCHEDULE_COLUMNS:
+            rename_map[col] = col
+        elif i < len(SCHEDULE_COLUMNS):
+            rename_map[col] = SCHEDULE_COLUMNS[i]
+    df = df.rename(columns=rename_map)
+    for col in SCHEDULE_COLUMNS:
+        if col not in df.columns:
+            df[col] = ""
+    df = df[SCHEDULE_COLUMNS]
+    df = df.dropna(how="all")
+    df = df[~df.apply(lambda r: str(r.get("시작일", "")).strip() == "시작일", axis=1)]
+
+    for col in ("시작일", "종료일"):
+        df[col] = df[col].apply(_excel_cell_to_sheet_str)
+    for col in ("대분류", "구분", "진행상태", "비고"):
+        df[col] = df[col].apply(
+            lambda v: "" if pd.isna(v) else str(v).strip().replace("nan", "").replace("None", "")
+        )
+    df["진행률"] = pd.to_numeric(df["진행률"], errors="coerce").fillna(0)
+    return df.reset_index(drop=True)
+
+
+def _extract_pm_weekly_from_sheet_rows(existing_rows: list):
+    pm, this_w, next_w = "", "", ""
+    if len(existing_rows) > 1:
+        row = existing_rows[1]
+        if len(row) > 7:
+            pm = str(row[7]).strip()
+        if len(row) > 8:
+            this_w = str(row[8]).strip()
+        if len(row) > 9:
+            next_w = str(row[9]).strip()
+    return pm, this_w, next_w
+
+
+def _schedule_df_to_sheet_rows(df: pd.DataFrame, pm: str = "", this_w: str = "", next_w: str = "") -> list:
+    """공정표 DataFrame → 구글 시트 A1 형식 (헤더 + PM/금주/차주 열 포함)"""
+    header = SCHEDULE_COLUMNS + ["PM", "금주", "차주"]
+    rows = [header]
+    if df.empty:
+        rows.append([""] * 7 + [pm, this_w, next_w])
+        return rows
+    for i, (_, row) in enumerate(df.iterrows()):
+        r7 = [_excel_cell_to_sheet_str(row[c]) for c in SCHEDULE_COLUMNS]
+        r7[6] = str(int(row["진행률"])) if pd.notna(row["진행률"]) else "0"
+        if i == 0:
+            r7.extend([pm, this_w, next_w])
+        else:
+            r7.extend([pm, "", ""])
+        rows.append(r7)
+    return rows
+
+
+def sync_worksheet_from_excel_df(ws, df_up: pd.DataFrame) -> int:
+    """엑셀 DataFrame을 프로젝트 시트 형식에 맞게 업로드 (PM·금주·차주 유지)"""
+    existing = safe_api_call(ws.get_all_values)
+    pm, this_w, next_w = _extract_pm_weekly_from_sheet_rows(existing)
+    df_norm = _normalize_excel_schedule_df(df_up)
+    full_data = _schedule_df_to_sheet_rows(df_norm, pm, this_w, next_w)
+    safe_api_call(ws.clear)
+    safe_api_call(ws.update, "A1", full_data)
+    return len(df_norm)
+
 
 def render_print_button():
     """자바스크립트를 이용해 브라우저 인쇄(PDF 저장) 창을 띄우는 버튼"""
@@ -1308,10 +1484,24 @@ def view_project_detail(sh, pjt_list):
             if col in df_edit.columns:
                 df_edit[col] = df_edit[col].astype(str).replace({"None": "", "nan": "", "NaN": ""})
 
-        # 편집 내용 유지: 프로젝트별로 에디터용 데이터프레임을 세션에 보관
-        if "process_edit_df" not in st.session_state or st.session_state.get("process_edit_pjt") != selected_pjt:
+        # 편집 내용 유지: 프로젝트별 세션 보관 (단, 시트 데이터가 바뀌면 자동 재로드)
+        data_sig = _sheet_data_signature(data)
+        sig_key = f"process_edit_sig_{selected_pjt}"
+        invalidated = set(st.session_state.get("process_edit_invalidated_pjts") or ())
+        sheet_changed = st.session_state.get(sig_key) != data_sig
+        need_reload = (
+            "process_edit_df" not in st.session_state
+            or st.session_state.get("process_edit_pjt") != selected_pjt
+            or selected_pjt in invalidated
+            or sheet_changed
+        )
+        if need_reload:
             st.session_state.process_edit_df = df_edit.copy()
             st.session_state.process_edit_pjt = selected_pjt
+            st.session_state[sig_key] = data_sig
+            if selected_pjt in invalidated:
+                invalidated.discard(selected_pjt)
+                st.session_state.process_edit_invalidated_pjts = invalidated
         process_df = st.session_state.process_edit_df
 
         ws = safe_api_call(sh.worksheet, selected_pjt)
@@ -1576,8 +1766,16 @@ def view_project_detail(sh, pjt_list):
                     st.success("성공적으로 업데이트 및 저장되었습니다!"); time.sleep(1); st.rerun()
 
         st.write("---")
-        st.subheader("📝 상세 공정표 편집 (A~G열 전용)")
-        st.info("✏️ **날짜·내용을 모두 입력한 뒤**, 맨 아래 **💾 변경사항 전체 저장** 버튼 **한 번만** 누르면 시트에 반영됩니다. (중간에 화면이 갱신되지 않도록 달력 적용은 폼으로 묶어 두었습니다.)")
+        h_edit1, h_edit2 = st.columns([5, 1])
+        with h_edit1:
+            st.subheader("📝 상세 공정표 편집 (A~G열 전용)")
+        with h_edit2:
+            st.write("")
+            if st.button("🔄 시트에서 새로고침", use_container_width=True, key=f"reload_sheet_{selected_pjt}"):
+                refresh_sheet_data_cache([selected_pjt])
+                st.session_state.pop(sig_key, None)
+                st.rerun()
+        st.info("✏️ **날짜·내용을 모두 입력한 뒤**, 맨 아래 **💾 변경사항 전체 저장** 버튼 **한 번만** 누르면 시트에 반영됩니다. (마스터 설정 엑셀 업로드 후에는 자동 반영되며, 안 보이면 **시트에서 새로고침**을 누르세요.)")
 
         # ---------- 달력: 폼으로 묶어서 '이 행에 적용' 클릭 시에만 전송 → 리프레시 최소화 ----------
         with st.expander("📅 달력으로 날짜 선택 (행 선택 후 시작일/종료일 설정)", expanded=False):
@@ -1626,7 +1824,13 @@ def view_project_detail(sh, pjt_list):
                 help="셀 클릭 또는 위 달력에서 선택",
             ),
         }
-        edited = st.data_editor(process_df, column_config=column_config, use_container_width=True, num_rows="dynamic", key="process_schedule_editor")
+        edited = st.data_editor(
+            process_df,
+            column_config=column_config,
+            use_container_width=True,
+            num_rows="dynamic",
+            key=f"process_schedule_editor_{selected_pjt}_{data_sig[:12]}",
+        )
         st.session_state.process_edit_df = edited
         
         def _date_cell_to_str(val):
@@ -1673,6 +1877,8 @@ def view_project_detail(sh, pjt_list):
             cached_get_all_values.clear()
             cached_get_head.clear()
             clear_file_cache(selected_pjt)
+            invalidate_process_edit_cache([selected_pjt])
+            st.session_state.pop(f"process_edit_sig_{selected_pjt}", None)
             st.success("데이터가 완벽하게 저장되었습니다!"); time.sleep(1); st.rerun()
 
 # 3. 일 발전량 및 일조 분석
@@ -2015,26 +2221,27 @@ def view_project_admin(sh, pjt_list):
                 updated_count = 0
                 skipped_sheets = []
                 
+                updated_projects = []
                 with st.spinner("데이터를 매칭하여 일괄 업데이트 중입니다..."):
                     for sheet_name, df_up in all_sheets.items():
                         s_name = sheet_name.strip()
                         
                         if s_name in pjt_list:
                             ws = safe_api_call(sh.worksheet, s_name)
-                            df_up = df_up.fillna("").astype(str)
-                            
-                            safe_api_call(ws.clear)
-                            safe_api_call(ws.update, [df_up.columns.values.tolist()] + df_up.values.tolist())
+                            sync_worksheet_from_excel_df(ws, df_up)
                             updated_count += 1
+                            updated_projects.append(s_name)
                         else:
                             skipped_sheets.append(s_name)
                 
                 cached_get_all_values.clear()
                 cached_get_head.clear()
                 clear_file_cache()  # 일괄 업로드 후 전체 갱신
+                invalidate_process_edit_cache(updated_projects)
 
                 if updated_count > 0:
                     st.success(f"🎉 총 {updated_count}개의 프로젝트가 성공적으로 일괄 업데이트되었습니다!")
+                    st.rerun()
                 else:
                     st.warning("⚠️ 일치하는 시트 이름이 없어 업데이트된 항목이 없습니다.")
                     
@@ -2115,6 +2322,8 @@ if check_login():
             elif menu == "마스터 설정": 
                 view_project_admin(sh, pjt_list)
             
+            render_sidebar_cache_controls()
+
             if st.sidebar.button("로그아웃"):
                 st.session_state.logged_in = False
                 _clear_login_url_token()
