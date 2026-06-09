@@ -120,6 +120,50 @@ st.markdown("""
     }
 
     /* ========================================================= */
+    /* [간트 차트] 상단 월 눈금(틀 고정) + 본문 스크롤 */
+    /* ========================================================= */
+    .gantt-freeze-panel {
+        border: 1px solid rgba(128, 128, 128, 0.28);
+        border-radius: 8px;
+        overflow: hidden;
+        background: #fafbfc;
+        margin-bottom: 8px;
+    }
+    .gantt-month-ruler-wrap {
+        display: flex;
+        align-items: stretch;
+        background: linear-gradient(180deg, #eef3f8 0%, #e3eaf2 100%);
+        border-bottom: 2px solid rgba(33, 150, 243, 0.28);
+    }
+    .gantt-month-ruler-spacer {
+        flex: 0 0 78px;
+        min-width: 78px;
+        border-right: 1px solid rgba(128, 128, 128, 0.2);
+        background: rgba(255, 255, 255, 0.55);
+    }
+    .gantt-month-ruler-track {
+        flex: 1 1 auto;
+        display: flex;
+        justify-content: space-between;
+        gap: 4px;
+        padding: 7px 92px 7px 8px;
+        font-size: 11px;
+        font-weight: 700;
+        color: #1565c0;
+        overflow: hidden;
+        white-space: nowrap;
+    }
+    .gantt-month-cell {
+        flex: 1 1 0;
+        text-align: center;
+        min-width: 0;
+    }
+    @media (max-width: 768px) {
+        .gantt-month-ruler-spacer { flex: 0 0 62px; min-width: 62px; }
+        .gantt-month-ruler-track { padding-right: 72px; font-size: 10px; }
+    }
+
+    /* ========================================================= */
     /* [보고서 인쇄/PDF 최적화 CSS] */
     /* ========================================================= */
     @media print {
@@ -883,6 +927,33 @@ def sync_worksheet_from_excel_df(ws, df_up: pd.DataFrame) -> int:
     return len(df_norm)
 
 
+def _gantt_month_labels(min_d: pd.Timestamp, max_d: pd.Timestamp) -> list:
+    """간트 상단 월 눈금 라벨 (26.4 형식)"""
+    start = pd.Timestamp(year=min_d.year, month=min_d.month, day=1)
+    end = pd.Timestamp(year=max_d.year, month=max_d.month, day=1)
+    months = pd.date_range(start, end, freq="MS")
+    if len(months) == 0:
+        return [f"{min_d.year % 100}.{min_d.month}"]
+    return [f"{d.year % 100}.{d.month}" for d in months]
+
+
+def _render_gantt_month_ruler(min_d: pd.Timestamp, max_d: pd.Timestamp) -> None:
+    """차트 본문 스크롤 시에도 남는 상단 월(년.월) 눈금 — 엑셀 틀 고정 상단 행과 유사"""
+    labels = _gantt_month_labels(min_d, max_d)
+    cells = "".join(f'<span class="gantt-month-cell">{lbl}</span>' for lbl in labels)
+    st.markdown(
+        f"""
+        <div class="gantt-freeze-panel">
+            <div class="gantt-month-ruler-wrap">
+                <div class="gantt-month-ruler-spacer" title="공정명 영역"></div>
+                <div class="gantt-month-ruler-track">{cells}</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def render_print_button():
     """자바스크립트를 이용해 브라우저 인쇄(PDF 저장) 창을 띄우는 버튼"""
     components.html(
@@ -1608,11 +1679,13 @@ def view_project_detail(sh, pjt_list):
                     period_start = f"{min_d.year % 100}.{min_d.month}"
                     period_end = f"{max_d.year % 100}.{max_d.month}"
                     
-                    # 상단 고정: 프로젝트 기간 표시 (스크롤해도 보이도록)
+                    # 상단 고정: 프로젝트 기간 + 월 눈금(스크롤해도 유지)
                     st.markdown(
                         f'<div class="gantt-sticky-header">📅 프로젝트 기간: <strong>{period_start}</strong> ~ <strong>{period_end}</strong></div>',
                         unsafe_allow_html=True
                     )
+                    _render_gantt_month_ruler(min_d, max_d)
+                    st.caption("↕ 공정이 많으면 아래 차트 영역만 스크롤됩니다. 상단 기간·월 눈금은 고정됩니다.")
                     
                     # 진행률별 색상 대비 강화 (0=빨강, 30=주황, 60=노랑·연두, 100=초록)
                     progress_colorscale = [
@@ -1656,7 +1729,7 @@ def view_project_detail(sh, pjt_list):
                         line_dash="dash",
                         line_color="rgb(120, 60, 180)",
                         annotation_text=" 오늘 ",
-                        annotation_position="top",
+                        annotation_position="bottom",
                         annotation_font=dict(color="rgb(120, 60, 180)", size=12, weight="bold"),
                         annotation_bgcolor="rgba(240,230,255,0.9)",
                         annotation_borderpad=4,
@@ -1664,10 +1737,12 @@ def view_project_detail(sh, pjt_list):
                     
                     fig.update_xaxes(
                         type="date",
+                        side="top",
                         dtick="M1",
                         tickformat="%y.%-m",
                         tickangle=0,
                         tickfont=dict(size=11),
+                        showticklabels=False,
                         showgrid=True,
                         gridwidth=1,
                         gridcolor='rgba(200, 200, 200, 0.7)',
@@ -1696,18 +1771,25 @@ def view_project_detail(sh, pjt_list):
                     )
                     
                     # 좌측 여백 축소 → 차트 영역 확대 (모바일에서 그래프가 크게 보이도록)
+                    chart_h = max(500, len(cdf) * 40)
                     fig.update_layout(
-                        height=max(500, len(cdf) * 40),
+                        height=chart_h,
                         bargap=0.25,
                         bargroupgap=0.08,
                         plot_bgcolor='rgb(252,252,252)',
                         paper_bgcolor='white',
-                        margin=dict(l=78, r=88, t=36, b=45),
+                        margin=dict(l=78, r=88, t=28, b=28),
                         font=dict(family="Pretendard, sans-serif", size=10),
                         showlegend=False,
                     )
                     
-                    st.plotly_chart(fig, use_container_width=True)
+                    gantt_panel_h = min(720, max(380, min(chart_h, len(cdf) * 36 + 90)))
+                    with st.container(height=gantt_panel_h, border=True):
+                        st.plotly_chart(
+                            fig,
+                            use_container_width=True,
+                            key=f"gantt_chart_{selected_pjt}_{data_sig[:10]}",
+                        )
                 else:
                     st.info("차트를 그릴 수 있는 유효한 날짜 데이터가 부족합니다. 편집기에서 날짜를 확인해 주세요.")
             except Exception as e:
