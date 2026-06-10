@@ -20,6 +20,7 @@ import hmac
 import hashlib
 import base64
 import html as html_module
+import copy
 
 # 1. 페이지 설정
 st.set_page_config(page_title="PM 통합 공정 관리 v4.5.22", page_icon="🏗️", layout="wide")
@@ -260,6 +261,29 @@ st.markdown("""
     }
     @media (max-width: 768px) {
         .daily-report-date-box { flex: 0 0 140px; font-size: 16px; padding: 12px 8px; }
+    }
+    .daily-report-viewport--dashboard {
+        max-height: 420px;
+        overflow: auto;
+        margin: 4px 0 0 0;
+    }
+    .daily-report-viewport--dashboard .daily-report-sheet {
+        min-width: 520px;
+        font-size: 11px;
+    }
+    .daily-report-viewport--dashboard .daily-report-date-box {
+        flex: 0 0 130px;
+        font-size: 15px;
+        padding: 10px 8px;
+    }
+    .daily-report-top--compact {
+        border-bottom: 1px solid #b4b4b4;
+    }
+    .dashboard-report-split-title {
+        font-size: 13px;
+        font-weight: 700;
+        margin: 8px 0 6px 0;
+        color: #333;
     }
     @media print {
         .daily-report-viewport { border: none; overflow: visible; }
@@ -1480,32 +1504,34 @@ def view_dashboard(sh, pjt_list):
     elif display_cnt == 0:
         st.info("선택한 담당자·상태 조건에 맞는 프로젝트가 없습니다. 완료 건은 상태 필터에 '🔵 완료'를 추가하세요.")
     else:
-        cols = st.columns(2)
-        for idx, d in enumerate(filtered_data):
-            with cols[idx % 2]:
-                with st.container(border=True):
-                    h_col1, h_col2 = st.columns([7.5, 2.5], gap="small")
-                    
-                    with h_col1:
-                        st.markdown(f"""
-                            <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 2px;">
-                                <h4 style="font-weight:700; margin:0; font-size:clamp(13.5px, 3.5vw, 16px); word-break:keep-all; line-height:1.2;">
-                                    🏗️ {d['p_name']}
-                                </h4>
-                                <span class="pm-tag" style="margin:0;">PM: {d['pm_name']}</span>
-                                <span class="status-badge {d['b_style']}" style="margin:0;">{d['status_ui']}</span>
-                            </div>
-                        """, unsafe_allow_html=True)
-                        
-                    with h_col2:
-                        st.button("🔍 상세", key=f"btn_go_{d['p_name']}", on_click=navigate_to_project, args=(d['p_name'],), use_container_width=True)
-                    
-                    this_w_html = str(d['this_w']).replace('\n', '<br>')
-                    next_w_html = str(d['next_w']).replace('\n', '<br>')
-                    fs = st.session_state.get("dashboard_report_font_size", 12)
+        daily_df = load_daily_report_df(sh)
+        for d in filtered_data:
+            with st.container(border=True):
+                h_col1, h_col2 = st.columns([7.5, 2.5], gap="small")
 
+                with h_col1:
+                    st.markdown(f"""
+                        <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 2px;">
+                            <h4 style="font-weight:700; margin:0; font-size:clamp(13.5px, 3.5vw, 16px); word-break:keep-all; line-height:1.2;">
+                                🏗️ {d['p_name']}
+                            </h4>
+                            <span class="pm-tag" style="margin:0;">PM: {d['pm_name']}</span>
+                            <span class="status-badge {d['b_style']}" style="margin:0;">{d['status_ui']}</span>
+                        </div>
+                    """, unsafe_allow_html=True)
+
+                with h_col2:
+                    st.button("🔍 상세", key=f"btn_go_{d['p_name']}", on_click=navigate_to_project, args=(d['p_name'],), use_container_width=True)
+
+                weekly_col, daily_col = st.columns([1, 1.05], gap="medium")
+                fs = st.session_state.get("dashboard_report_font_size", 12)
+                this_w_html = html_module.escape(str(d['this_w'])).replace('\n', '<br>')
+                next_w_html = html_module.escape(str(d['next_w'])).replace('\n', '<br>')
+
+                with weekly_col:
+                    st.markdown('<p class="dashboard-report-split-title">📋 주간보고</p>', unsafe_allow_html=True)
                     st.markdown(f'''
-                        <div style="margin-bottom:4px; margin-top:2px;">
+                        <div style="margin-bottom:4px;">
                             <p style="font-size:{fs}px; opacity: 0.7; margin-top:0; margin-bottom:4px;">계획: {d['avg_plan']}% | 실적: {d['avg_act']}%</p>
                             <div class="weekly-box" style="margin-top:0; font-size:{fs}px;">
                                 <div style="margin-bottom: 8px;"><b>[금주]</b><br>{this_w_html}</div>
@@ -1513,8 +1539,27 @@ def view_dashboard(sh, pjt_list):
                             </div>
                         </div>
                     ''', unsafe_allow_html=True)
-                    
                     st.progress(min(1.0, max(0.0, d['avg_act']/100)))
+
+                with daily_col:
+                    st.markdown('<p class="dashboard-report-split-title">📋 일일보고</p>', unsafe_allow_html=True)
+                    dr_date, dr_rows = _get_latest_daily_report_for_project(daily_df, d['p_name'])
+                    if dr_rows:
+                        st.caption(f"최근 일자: {_daily_report_date_korean(dr_date)}")
+                        _render_daily_report_section_table(
+                            dr_rows,
+                            dr_date,
+                            project_name=None,
+                            compact=True,
+                        )
+                    else:
+                        st.markdown(
+                            '<div class="weekly-box" style="font-size:12px; opacity:0.85;">'
+                            "저장된 일일보고가 없습니다.<br>"
+                            "<span style='font-size:11px;'>일일보고 메뉴에서 작성·업로드하세요.</span>"
+                            "</div>",
+                            unsafe_allow_html=True,
+                        )
 
 
 def view_weekly_final_report(sh, pjt_list):
@@ -2592,11 +2637,39 @@ def _daily_report_major_rowspans(rows: list) -> dict:
     return info
 
 
+def _get_latest_daily_report_for_project(daily_df: pd.DataFrame, project_name: str):
+    """프로젝트별 가장 최근 일일보고 (일자, 행 목록)"""
+    if daily_df is None or daily_df.empty or not project_name:
+        return None, []
+    sub = daily_df[daily_df["프로젝트명"].astype(str) == str(project_name)]
+    if sub.empty:
+        return None, []
+    dates = sorted(sub["날짜"].astype(str).str[:10].unique().tolist(), reverse=True)
+    latest = dates[0]
+    rows = []
+    day_mask = sub["날짜"].astype(str).str.startswith(latest)
+    for _, r in sub.loc[day_mask].iterrows():
+        rows.append(
+            {
+                "구분": r.get("구분", ""),
+                "대분류": r.get("대분류", ""),
+                "세부항목": r.get("세부항목", ""),
+                "업무내용": r.get("업무내용", ""),
+                "공정율": r.get("공정율(%)", ""),
+                "비고": r.get("비고", ""),
+            }
+        )
+    return latest, _normalize_daily_report_rows(rows)
+
+
 def _build_daily_report_html(
     date_iso: str,
     section_rows: list,
     project_name: str = None,
     legend_note: str = "(6월24일마감)",
+    *,
+    show_legend: bool = True,
+    show_project_tag: bool = True,
 ) -> str:
     rows = _normalize_daily_report_rows(section_rows)
     if not rows:
@@ -2627,21 +2700,30 @@ def _build_daily_report_html(
         body_rows += "</tr>"
 
     project_bar = ""
-    if project_name:
+    if project_name and show_project_tag:
         project_bar = (
             f'<div class="daily-report-project-tag">🏗️ {html_module.escape(project_name)}</div>'
         )
 
-    return f"""
-    <div class="daily-report-sheet">
-        {project_bar}
+    if show_legend:
+        top_block = f"""
         <div class="daily-report-top">
             <div class="daily-report-date-box">{_daily_report_date_korean(date_iso)}</div>
             <div style="flex:1;display:flex;flex-direction:column;">
                 <div class="daily-report-legend-note">{html_module.escape(legend_note)}</div>
                 <div class="daily-report-legend">{legend_cells}</div>
             </div>
-        </div>
+        </div>"""
+    else:
+        top_block = f"""
+        <div class="daily-report-top daily-report-top--compact">
+            <div class="daily-report-date-box">{_daily_report_date_korean(date_iso)}</div>
+        </div>"""
+
+    return f"""
+    <div class="daily-report-sheet">
+        {project_bar}
+        {top_block}
         <table class="daily-report-table">
             <thead>
                 <tr>
@@ -2663,15 +2745,238 @@ def _render_daily_report_section_table(
     section_rows: list,
     date_iso: str,
     project_name: str = None,
+    *,
+    compact: bool = False,
 ):
     if not section_rows:
         st.info("표시할 항목이 없습니다.")
         return
-    sheet_html = _build_daily_report_html(date_iso, section_rows, project_name=project_name)
+    sheet_html = _build_daily_report_html(
+        date_iso,
+        section_rows,
+        project_name=project_name,
+        show_legend=not compact,
+        show_project_tag=not compact,
+    )
+    viewport_cls = "daily-report-viewport daily-report-viewport--dashboard" if compact else "daily-report-viewport"
     st.markdown(
-        f'<div class="daily-report-viewport">{sheet_html}</div>',
+        f'<div class="{viewport_cls}">{sheet_html}</div>',
         unsafe_allow_html=True,
     )
+
+
+def load_daily_report_rows(sh, project_name: str, date_iso: str) -> list:
+    """구글 시트에서 특정 프로젝트·일자 일일보고 행 목록"""
+    df = load_daily_report_df(sh)
+    if df.empty or not project_name:
+        return []
+    d = str(date_iso)[:10]
+    mask = (df["프로젝트명"].astype(str) == str(project_name)) & (
+        df["날짜"].astype(str).str.startswith(d)
+    )
+    rows = []
+    for _, r in df.loc[mask].iterrows():
+        rows.append(
+            {
+                "구분": r.get("구분", ""),
+                "대분류": r.get("대분류", ""),
+                "세부항목": r.get("세부항목", ""),
+                "업무내용": r.get("업무내용", ""),
+                "공정율": r.get("공정율(%)", ""),
+                "비고": r.get("비고", ""),
+            }
+        )
+    return _normalize_daily_report_rows(rows)
+
+
+def _copy_daily_report_rows(rows: list) -> list:
+    return copy.deepcopy(_normalize_daily_report_rows(rows))
+
+
+def _editor_df_from_rows(rows: list) -> pd.DataFrame:
+    cols = ["구분", "대분류", "세부항목", "업무내용", "공정율", "비고"]
+    norm = _normalize_daily_report_rows(rows)
+    if not norm:
+        return pd.DataFrame(columns=cols)
+    df = pd.DataFrame(norm)
+    for c in cols:
+        if c not in df.columns:
+            df[c] = ""
+    return df[cols]
+
+
+def _rows_from_editor_df(df: pd.DataFrame) -> list:
+    if df is None or df.empty:
+        return []
+    rows = []
+    for _, r in df.iterrows():
+        item = {
+            "구분": "" if pd.isna(r.get("구분")) else str(r.get("구분", "")).strip(),
+            "대분류": "" if pd.isna(r.get("대분류")) else str(r.get("대분류", "")).strip(),
+            "세부항목": "" if pd.isna(r.get("세부항목")) else str(r.get("세부항목", "")).strip(),
+            "업무내용": "" if pd.isna(r.get("업무내용")) else str(r.get("업무내용", "")).strip(),
+            "공정율": "" if pd.isna(r.get("공정율")) else str(r.get("공정율", "")).strip(),
+            "비고": "" if pd.isna(r.get("비고")) else str(r.get("비고", "")).strip(),
+        }
+        if not any(item[c] for c in ("구분", "세부항목", "업무내용", "대분류")):
+            continue
+        rows.append(item)
+    return _normalize_daily_report_rows(rows)
+
+
+def _daily_report_source_dates(sh, project_name: str, exclude_date: str = None) -> list:
+    df = load_daily_report_df(sh)
+    if df.empty or not project_name:
+        return []
+    mask = df["프로젝트명"].astype(str) == str(project_name)
+    dates = sorted(df.loc[mask, "날짜"].astype(str).str[:10].unique().tolist(), reverse=True)
+    if exclude_date:
+        dates = [d for d in dates if d != str(exclude_date)[:10]]
+    return dates
+
+
+def _render_daily_report_edit_and_save(
+    sh,
+    project_name: str,
+    date_iso: str,
+    initial_rows: list,
+    key_prefix: str,
+    show_html_preview: bool = True,
+):
+    """일일보고 편집기 + 미리보기 + 구글 시트 저장 + 일자 복사"""
+    if not project_name:
+        st.warning("프로젝트를 선택하세요.")
+        return
+
+    date_iso = str(date_iso)[:10]
+    draft_key = f"dr_draft_{key_prefix}_{project_name}_{date_iso}"
+    src_dates = _daily_report_source_dates(sh, project_name, exclude_date=date_iso)
+
+    st.markdown("##### 📋 일자 복사 (다음날 작성용)")
+    cp1, cp2, cp3, cp4 = st.columns([1.3, 1, 1, 1.2])
+    with cp1:
+        copy_from = st.selectbox(
+            "복사 원본 일자",
+            ["선택"] + src_dates,
+            key=f"dr_copy_from_{key_prefix}_{project_name}_{date_iso}",
+        )
+    with cp2:
+        if st.button("📋 원본 복사", key=f"dr_copy_btn_{key_prefix}", use_container_width=True):
+            if copy_from == "선택":
+                st.warning("복사할 원본 일자를 선택하세요.")
+            else:
+                st.session_state[draft_key] = _copy_daily_report_rows(
+                    load_daily_report_rows(sh, project_name, copy_from)
+                )
+                st.success(f"{copy_from} 내용을 불러왔습니다. 수정 후 저장하세요.")
+                st.rerun()
+    with cp3:
+        if st.button("📋 최근 보고 복사", key=f"dr_copy_latest_{key_prefix}", use_container_width=True):
+            all_dates = _daily_report_source_dates(sh, project_name)
+            if not all_dates:
+                st.warning("복사할 저장된 일일보고가 없습니다.")
+            else:
+                src = all_dates[0]
+                if src == date_iso and len(all_dates) > 1:
+                    src = all_dates[1]
+                elif src == date_iso:
+                    st.warning("다른 일자의 저장 데이터가 없습니다.")
+                    src = None
+                if src:
+                    st.session_state[draft_key] = _copy_daily_report_rows(
+                        load_daily_report_rows(sh, project_name, src)
+                    )
+                    st.success(f"{src} 보고를 복사했습니다.")
+                    st.rerun()
+    with cp4:
+        try:
+            default_new = pd.to_datetime(date_iso).date() + datetime.timedelta(days=1)
+        except Exception:
+            default_new = datetime.date.today() + datetime.timedelta(days=1)
+        new_date = st.date_input(
+            "새 일자",
+            value=default_new,
+            key=f"dr_new_date_{key_prefix}_{project_name}_{date_iso}",
+        )
+
+    cp5, cp6 = st.columns([1, 3])
+    with cp5:
+        if st.button("📅 새 일자로 복사 작성", key=f"dr_newday_{key_prefix}", use_container_width=True):
+            src = copy_from if copy_from != "선택" else (
+                _daily_report_source_dates(sh, project_name)[0]
+                if _daily_report_source_dates(sh, project_name)
+                else None
+            )
+            if not src:
+                st.warning("복사 원본 일자를 선택하거나, 저장된 보고가 있어야 합니다.")
+            else:
+                new_iso = new_date.strftime("%Y-%m-%d")
+                new_draft_key = f"dr_draft_{key_prefix}_{project_name}_{new_iso}"
+                st.session_state[new_draft_key] = _copy_daily_report_rows(
+                    load_daily_report_rows(sh, project_name, src)
+                )
+                st.session_state["dr_jump_project"] = project_name
+                st.session_state["dr_jump_date"] = new_iso
+                st.success(f"{src} → {new_iso} 복사 완료. 작성·수정 탭에서 이어서 편집하세요.")
+                st.rerun()
+    with cp6:
+        st.caption(
+            "다음날 보고는 **원본 일자 선택 → 새 일자 지정 → 새 일자로 복사 작성** 순서로 사용하세요. "
+            "복사 후 업무 내용만 수정해 저장하면 됩니다."
+        )
+
+    if draft_key not in st.session_state:
+        st.session_state[draft_key] = _copy_daily_report_rows(initial_rows)
+
+    st.markdown(f"##### ✏️ 편집 — {_daily_report_date_korean(date_iso)} · {project_name}")
+    edit_df = _editor_df_from_rows(st.session_state[draft_key])
+    edited = st.data_editor(
+        edit_df,
+        num_rows="dynamic",
+        use_container_width=True,
+        height=min(520, 120 + max(len(edit_df), 8) * 36),
+        key=f"dr_editor_{key_prefix}_{project_name}_{date_iso}",
+        column_config={
+            "구분": st.column_config.TextColumn("구분", width="small"),
+            "대분류": st.column_config.TextColumn("대분류", width="small"),
+            "세부항목": st.column_config.TextColumn("세부", width="small"),
+            "업무내용": st.column_config.TextColumn("업무 내용", width="large"),
+            "공정율": st.column_config.TextColumn("공정율(%)", width="small"),
+            "비고": st.column_config.TextColumn("비고", width="medium"),
+        },
+    )
+    st.session_state[draft_key] = _rows_from_editor_df(edited)
+
+    btn1, btn2, btn3 = st.columns([1, 1, 2])
+    with btn1:
+        if st.button("💾 구글 시트에 저장", type="primary", key=f"dr_save_{key_prefix}", use_container_width=True):
+            rows = st.session_state.get(draft_key, [])
+            if not rows:
+                st.error("저장할 항목이 없습니다.")
+            else:
+                with st.spinner("저장 중…"):
+                    cnt = save_daily_reports_to_sheet(
+                        sh,
+                        project_name,
+                        [{"date": date_iso, "rows": rows}],
+                        st.session_state.get("user_id", ""),
+                        overwrite_dates=True,
+                    )
+                st.session_state.pop(draft_key, None)
+                st.success(f"`{DAILY_REPORT_SHEET}`에 {cnt}건 저장되었습니다.")
+                st.rerun()
+    with btn2:
+        if st.button("↩️ 편집 초기화", key=f"dr_reset_{key_prefix}", use_container_width=True):
+            st.session_state[draft_key] = _copy_daily_report_rows(initial_rows)
+            st.rerun()
+
+    if show_html_preview:
+        st.markdown("##### 👁️ 양식 미리보기")
+        _render_daily_report_section_table(
+            st.session_state[draft_key],
+            date_iso,
+            project_name,
+        )
 
 
 def view_daily_report(sh, pjt_list):
@@ -2682,11 +2987,51 @@ def view_daily_report(sh, pjt_list):
         render_print_button()
 
     st.caption(
-        "일일보고 엑셀(예: `260602 합천댐2단계 일일보고.xlsx`)을 업로드하면 내용을 확인하고 "
-        f"구글 시트 `{DAILY_REPORT_SHEET}` 탭에 저장할 수 있습니다. 시트가 없으면 자동 생성됩니다."
+        "일일보고를 화면에서 **편집·저장**하거나, 엑셀을 업로드할 수 있습니다. "
+        f"데이터는 구글 시트 `{DAILY_REPORT_SHEET}` 탭에 저장됩니다."
     )
 
-    tab_upload, tab_saved = st.tabs(["📤 엑셀 업로드", "📂 저장된 일일보고"])
+    tab_edit, tab_upload, tab_saved = st.tabs(["✏️ 작성·수정", "📤 엑셀 업로드", "📂 저장된 일일보고"])
+
+    with tab_edit:
+        jump_pjt = st.session_state.pop("dr_jump_project", None)
+        jump_date = st.session_state.pop("dr_jump_date", None)
+        if jump_pjt and jump_pjt in pjt_list:
+            st.session_state["dr_edit_pjt"] = jump_pjt
+        if jump_date:
+            try:
+                st.session_state["dr_edit_date"] = pd.to_datetime(str(jump_date)[:10]).date()
+            except Exception:
+                pass
+        e1, e2 = st.columns(2)
+        with e1:
+            edit_pjt = st.selectbox(
+                "프로젝트",
+                ["선택"] + pjt_list,
+                key="dr_edit_pjt",
+            )
+        with e2:
+            if "dr_edit_date" not in st.session_state:
+                st.session_state["dr_edit_date"] = datetime.date.today()
+            edit_date = st.date_input("보고 일자", key="dr_edit_date")
+
+        if edit_pjt == "선택":
+            st.info("프로젝트를 선택하면 일일보고를 작성·수정할 수 있습니다.")
+        else:
+            edit_iso = edit_date.strftime("%Y-%m-%d")
+            existing_rows = load_daily_report_rows(sh, edit_pjt, edit_iso)
+            if existing_rows:
+                st.caption(f"저장된 데이터 **{len(existing_rows)}건** 불러옴 — 수정 후 저장하면 덮어씁니다.")
+            else:
+                st.info("이 일자는 아직 저장된 보고가 없습니다. 아래 **복사**로 양식을 가져온 뒤 작성하세요.")
+            _render_daily_report_edit_and_save(
+                sh,
+                edit_pjt,
+                edit_iso,
+                existing_rows,
+                "edit",
+                show_html_preview=True,
+            )
 
     with tab_upload:
         up_col1, up_col2 = st.columns([1, 1])
@@ -2726,6 +3071,11 @@ def view_daily_report(sh, pjt_list):
                 preview_date = st.selectbox("미리보기 일자", dates, key="daily_report_preview_date")
                 preview_section = next(s for s in sections if s["date"] == preview_date)
                 preview_pjt = pjt_sel if pjt_sel != "선택" else guess_default
+                upload_draft_key = f"dr_upload_sections_{uploaded.name}"
+                if upload_draft_key not in st.session_state:
+                    st.session_state[upload_draft_key] = sections
+
+                st.markdown("##### 👁️ 업로드 미리보기")
                 _render_daily_report_section_table(
                     preview_section["rows"],
                     preview_date,
@@ -2733,19 +3083,38 @@ def view_daily_report(sh, pjt_list):
                 )
 
                 save_pjt = pjt_sel if pjt_sel != "선택" else guess_default
-                if not save_pjt:
-                    st.warning("저장할 프로젝트를 선택하세요.")
-                elif st.button("💾 구글 시트에 저장", type="primary", key="daily_report_save_btn"):
-                    with st.spinner("일일보고 시트에 저장 중…"):
-                        cnt = save_daily_reports_to_sheet(
-                            sh,
-                            save_pjt,
-                            sections,
-                            st.session_state.get("user_id", ""),
-                            overwrite_dates=overwrite,
-                        )
-                    st.success(f"`{DAILY_REPORT_SHEET}` 시트에 {cnt}건 저장되었습니다. (프로젝트: {save_pjt})")
-                    st.rerun()
+                if save_pjt:
+                    st.markdown("##### ✏️ 업로드 내용 편집·저장")
+                    sec_for_edit = next(
+                        s for s in st.session_state[upload_draft_key] if s["date"] == preview_date
+                    )
+                    _render_daily_report_edit_and_save(
+                        sh,
+                        save_pjt,
+                        preview_date,
+                        sec_for_edit["rows"],
+                        "upload",
+                        show_html_preview=False,
+                    )
+
+                    if st.button("💾 파일 전체 일자 한번에 저장", key="daily_report_save_all_btn"):
+                        all_sections = []
+                        for s in st.session_state[upload_draft_key]:
+                            draft_k = f"dr_draft_upload_{save_pjt}_{s['date']}"
+                            rows = st.session_state.get(draft_k, s["rows"])
+                            all_sections.append({"date": s["date"], "rows": rows})
+                        with st.spinner("전체 일자 저장 중…"):
+                            cnt = save_daily_reports_to_sheet(
+                                sh,
+                                save_pjt,
+                                all_sections,
+                                st.session_state.get("user_id", ""),
+                                overwrite_dates=overwrite,
+                            )
+                        st.success(f"총 {cnt}건 저장되었습니다.")
+                        st.rerun()
+                else:
+                    st.warning("저장·편집하려면 프로젝트를 선택하세요.")
 
                 buf = io.BytesIO()
                 export_rows = []
@@ -2803,8 +3172,19 @@ def view_daily_report(sh, pjt_list):
         elif not day_df.empty:
             sheet_pjt = str(day_df.iloc[0]["프로젝트명"])
 
-        sheet_rows = day_df.drop(columns=["날짜", "프로젝트명"], errors="ignore").to_dict(orient="records")
+        sheet_rows = load_daily_report_rows(sh, sheet_pjt, view_date) if sheet_pjt else []
         _render_daily_report_section_table(sheet_rows, view_date, project_name=sheet_pjt or None)
+
+        if sheet_pjt:
+            with st.expander("✏️ 이 일자 수정·저장", expanded=False):
+                _render_daily_report_edit_and_save(
+                    sh,
+                    sheet_pjt,
+                    view_date,
+                    sheet_rows,
+                    "saved",
+                    show_html_preview=False,
+                )
 
         with st.expander("📊 표 형태로 보기 / 엑셀 다운로드"):
             st.dataframe(
