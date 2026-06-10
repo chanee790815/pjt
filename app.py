@@ -2741,6 +2741,138 @@ def _build_daily_report_html(
     """
 
 
+# st.markdown은 <table> 등 블록 HTML을 렌더하지 못함 → st.html / components.html 사용
+_DAILY_REPORT_EMBED_CSS = """
+@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+body { margin: 0; padding: 0; font-family: 'Pretendard', 'Malgun Gothic', sans-serif; background: #fff; }
+.daily-report-viewport {
+    overflow-x: auto;
+    margin: 8px 0 16px 0;
+    border: 1px solid #b4b4b4;
+    border-radius: 4px;
+    background: #fff;
+}
+.daily-report-sheet {
+    min-width: 920px;
+    font-size: 12px;
+    color: #111;
+}
+.daily-report-top {
+    display: flex;
+    align-items: stretch;
+    border-bottom: 1px solid #b4b4b4;
+}
+.daily-report-date-box {
+    flex: 0 0 200px;
+    background: #4f81bd;
+    color: #fff;
+    font-size: 22px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 18px 12px;
+    border-right: 1px solid #b4b4b4;
+    text-align: center;
+    line-height: 1.35;
+}
+.daily-report-legend {
+    flex: 1 1 auto;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+}
+.daily-report-legend-cell {
+    border: 1px solid #b4b4b4;
+    border-top: none;
+    padding: 5px 8px;
+    font-size: 11px;
+    background: #fff;
+}
+.daily-report-legend-cell b { font-size: 12px; }
+.daily-report-legend-note {
+    grid-column: 1 / -1;
+    text-align: right;
+    font-size: 10px;
+    color: #444;
+    padding: 2px 8px 4px;
+    background: #fafafa;
+    border-bottom: 1px solid #b4b4b4;
+}
+.daily-report-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+}
+.daily-report-table th {
+    background: #d9d9d9;
+    border: 1px solid #808080;
+    padding: 6px 4px;
+    font-weight: 700;
+    text-align: center;
+    font-size: 12px;
+}
+.daily-report-table td {
+    border: 1px solid #808080;
+    padding: 5px 6px;
+    vertical-align: middle;
+    line-height: 1.45;
+    word-break: keep-all;
+    overflow-wrap: break-word;
+}
+.daily-report-table .dr-col-id { width: 52px; text-align: center; }
+.daily-report-table .dr-col-major { width: 88px; text-align: center; font-weight: 600; background: #fafafa; }
+.daily-report-table .dr-col-sub { width: 108px; text-align: center; }
+.daily-report-table .dr-col-work { text-align: left; }
+.daily-report-table .dr-col-pct { width: 72px; text-align: center; }
+.daily-report-table .dr-col-note { width: 140px; text-align: left; font-size: 11px; }
+.daily-report-project-tag {
+    padding: 4px 10px;
+    background: #eef4fb;
+    border-bottom: 1px solid #c5d3e3;
+    font-size: 12px;
+    font-weight: 600;
+    color: #1565c0;
+}
+.daily-report-viewport--dashboard {
+    max-height: 420px;
+    overflow: auto;
+    margin: 4px 0 0 0;
+}
+.daily-report-viewport--dashboard .daily-report-sheet {
+    min-width: 520px;
+    font-size: 11px;
+}
+.daily-report-viewport--dashboard .daily-report-date-box {
+    flex: 0 0 130px;
+    font-size: 15px;
+    padding: 10px 8px;
+}
+.daily-report-top--compact { border-bottom: 1px solid #b4b4b4; }
+"""
+
+
+def _estimate_daily_report_embed_height(row_count: int, compact: bool) -> int:
+    n = max(row_count, 1)
+    if compact:
+        return min(450, max(180, 72 + n * 28))
+    return min(1200, max(300, 140 + n * 32))
+
+
+def _render_daily_report_html_viewport(viewport_cls: str, sheet_html: str, *, row_count: int = 0, compact: bool = False):
+    """일일보고 HTML을 실제 표로 렌더 (markdown은 table 미지원)"""
+    payload = f'<div class="{viewport_cls}">{sheet_html}</div>'
+    if hasattr(st, "html"):
+        st.html(payload)
+        return
+    height = _estimate_daily_report_embed_height(row_count, compact)
+    doc = (
+        f"<!DOCTYPE html><html><head><meta charset='utf-8'>"
+        f"<style>{_DAILY_REPORT_EMBED_CSS}</style></head>"
+        f"<body>{payload}</body></html>"
+    )
+    components.html(doc, height=height, scrolling=True)
+
+
 def _render_daily_report_section_table(
     section_rows: list,
     date_iso: str,
@@ -2759,9 +2891,11 @@ def _render_daily_report_section_table(
         show_project_tag=not compact,
     )
     viewport_cls = "daily-report-viewport daily-report-viewport--dashboard" if compact else "daily-report-viewport"
-    st.markdown(
-        f'<div class="{viewport_cls}">{sheet_html}</div>',
-        unsafe_allow_html=True,
+    _render_daily_report_html_viewport(
+        viewport_cls,
+        sheet_html,
+        row_count=len(section_rows),
+        compact=compact,
     )
 
 
