@@ -730,7 +730,12 @@ GEO_FALLBACK_COORDS = {
     "서산(당진)": (36.7840, 126.4500),
     "당진": (36.8940, 126.6290),
     "서산": (36.7840, 126.4500),
+    "여주": (37.2983, 127.6370),
+    "부산": (35.1796, 129.0756),
 }
+
+SOLAR_CLIMATOLOGY_YEARS = 10
+SOLAR_ANALYSIS_FOCUS_YEARS = [2024, 2025]
 
 def _geocode_one_query(query: str):
     """단일 쿼리로 Open-Meteo Geocoding 시도"""
@@ -819,6 +824,414 @@ def _pick_daily_value(forecast_json: dict, target_date: datetime.date, key: str)
         return values[idx]
     except ValueError:
         return None
+
+
+def get_location_lat_lon(name: str):
+    """지점명 → (위도, 경도, geocode 정보 dict)"""
+    geo = geocode_location_open_meteo(name)
+    if geo and geo.get("latitude") is not None and geo.get("longitude") is not None:
+        return float(geo["latitude"]), float(geo["longitude"]), geo
+    return None, None, geo
+
+
+@st.cache_data(ttl=7 * 24 * 3600, show_spinner=False)
+def fetch_open_meteo_archive_daily(
+    latitude: float,
+    longitude: float,
+    start_date: str,
+    end_date: str,
+    timezone: str = "Asia/Seoul",
+):
+    """Open-Meteo Archive API — 과거 일별 일사량(MJ/m²)"""
+    url = "https://archive-api.open-meteo.com/v1/archive"
+    params = {
+        "latitude": latitude,
+        "longitude": longitude,
+        "start_date": start_date,
+        "end_date": end_date,
+        "daily": "shortwave_radiation_sum",
+        "timezone": timezone,
+    }
+    r = requests.get(url, params=params, timeout=90)
+    r.raise_for_status()
+    return r.json()
+
+
+def archive_json_to_daily_df(archive_json: dict) -> pd.DataFrame:
+    daily = (archive_json or {}).get("daily") or {}
+    times = daily.get("time") or []
+    rad = daily.get("shortwave_radiation_sum") or []
+    if not times:
+        return pd.DataFrame(columns=["날짜", "일사량합계"])
+    df = pd.DataFrame(
+        {
+            "날짜": pd.to_datetime(times),
+            "일사량합계": pd.to_numeric(rad, errors="coerce"),
+        }
+    )
+    return df.dropna(subset=["일사량합계"])
+
+
+def fetch_climatology_daily_df(latitude: float, longitude: float, end_year: int) -> pd.DataFrame:
+    """직전 N년(기본 10년) 일별 일사량 reanalysis 데이터"""
+    start_year = end_year - SOLAR_CLIMATOLOGY_YEARS
+    start_date = f"{start_year}-01-01"
+    end_date = f"{end_year - 1}-12-31"
+    try:
+        archive = fetch_open_meteo_archive_daily(latitude, longitude, start_date, end_date)
+        return archive_json_to_daily_df(archive)
+    except Exception:
+        return pd.DataFrame(columns=["날짜", "일사량합계"])
+
+
+def build_monthly_climatology(daily_df: pd.DataFrame) -> pd.DataFrame:
+    """10년 일별 데이터 → 월별 평균 일사량(기후값)"""
+    if daily_df is None or daily_df.empty:
+        return pd.DataFrame(columns=["월", "기후_월평균_일사량"])
+    tmp = daily_df.copy()
+    tmp["월"] = tmp["날짜"].dt.month
+    monthly = (
+        tmp.groupby("월", as_index=False)["일사량합계"]
+        .mean()
+        .rename(columns={"일사량합계": "기후_월평균_일사량"})
+    )
+    monthly["월"] = monthly["월"].astype(int)
+    return monthly.sort_values("월")
+
+
+def summarize_yearly_radiation(actual_df: pd.DataFrame, years: list) -> pd.DataFrame:
+    """실측(또는 시트) 데이터의 연도별 일평균·연합계 일사량"""
+    if actual_df is None or actual_df.empty:
+        return pd.DataFrame()
+    tmp = actual_df.copy()
+    tmp["연도"] = tmp["날짜"].dt.year
+    rows = []
+    for yr in years:
+        sub = tmp[tmp["연도"] == yr]
+        if sub.empty:
+            continue
+        rows.append(
+            {
+                "연도": int(yr),
+                "일수": len(sub),
+                "일평균_일사량": round(float(sub["일사량합계"].mean()), 2),
+                "연합계_일사량": round(float(sub["일사량합계"].sum()), 1),
+                "일평균_발전시간": round(float(sub["발전시간"].mean()), 2) if "발전시간" in sub.columns else None,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def build_yearly_vs_climatology_table(
+    actual_df: pd.DataFrame,
+    clim_daily_df: pd.DataFrame,
+    years: list = None,
+) -> pd.DataFrame:
+    """연도별 실측 일평균 일사량 vs 직전 10년 기후 평균 비교표"""
+    if years is None:
+        years = SOLAR_ANALYSIS_FOCUS_YEARS
+    if clim_daily_df is None or clim_daily_df.empty:
+        return pd.DataFrame()
+    climate_daily_mean = float(clim_daily_df["일사량합계"].mean())
+    climate_annual_sum = float(clim_daily_df.groupby(clim_daily_df["날짜"].dt.year)["일사량합계"].sum().mean())
+    yearly = summarize_yearly_radiation(actual_df, years)
+    if yearly.empty:
+        return pd.DataFrame()
+    yearly["기후_10년_일평균"] = round(climate_daily_mean, 2)
+    yearly["기후_10년_연평균합계"] = round(climate_annual_sum, 1)
+    yearly["일평균_편차(MJ/m²)"] = (yearly["일평균_일사량"] - yearly["기후_10년_일평균"]).round(2)
+    yearly["일평균_편차(%)"] = (
+        (yearly["일평균_일사량"] / yearly["기후_10년_일평균"] - 1.0) * 100.0
+    ).round(1)
+    yearly["연합계_편차(%)"] = (
+        (yearly["연합계_일사량"] / yearly["기후_10년_연평균합계"] - 1.0) * 100.0
+    ).round(1)
+    return yearly
+
+
+def build_monthly_comparison_df(
+    actual_df: pd.DataFrame,
+    clim_monthly_df: pd.DataFrame,
+    years: list = None,
+) -> pd.DataFrame:
+    """월별: 10년 기후평균 vs 지정 연도(2024·2025 등) 실측 월평균"""
+    if years is None:
+        years = SOLAR_ANALYSIS_FOCUS_YEARS
+    if actual_df is None or actual_df.empty or clim_monthly_df is None or clim_monthly_df.empty:
+        return pd.DataFrame()
+    tmp = actual_df.copy()
+    tmp["월"] = tmp["날짜"].dt.month
+    tmp["연도"] = tmp["날짜"].dt.year
+    out = clim_monthly_df.copy()
+    for yr in years:
+        sub = tmp[tmp["연도"] == yr]
+        if sub.empty:
+            continue
+        m = sub.groupby("월", as_index=False)["일사량합계"].mean().rename(
+            columns={"일사량합계": f"{yr}년_월평균"}
+        )
+        out = out.merge(m, on="월", how="left")
+    return out.sort_values("월")
+
+
+def estimate_generation_hours_from_radiation(radiation_mj_m2: float, ref_df: pd.DataFrame = None) -> float:
+    """발전시간 추정 — 참조 지점 회귀식 우선, 없으면 PR 0.8"""
+    if ref_df is not None and not ref_df.empty:
+        pred, _, _ = fit_predict_generation_hours(ref_df, radiation_mj_m2)
+        return pred
+    return max(0.0, min(24.0, float((radiation_mj_m2 / 3.6) * 0.8)))
+
+
+def build_solar_db_rows_from_archive(
+    location_name: str,
+    archive_df: pd.DataFrame,
+    ref_df: pd.DataFrame = None,
+) -> list:
+    """Archive 일사량 → Solar_DB 저장용 행 목록"""
+    rows = []
+    for _, r in archive_df.iterrows():
+        rad = float(r["일사량합계"])
+        gen_h = estimate_generation_hours_from_radiation(rad, ref_df)
+        rows.append(
+            [
+                pd.Timestamp(r["날짜"]).strftime("%Y-%m-%d"),
+                str(location_name),
+                round(gen_h, 2),
+                round(rad, 2),
+            ]
+        )
+    return rows
+
+
+def append_solar_db_rows(sh, rows: list, overwrite_location_dates: bool = True) -> int:
+    """Solar_DB 시트에 발전량 행 추가 (동일 지점·날짜 덮어쓰기 옵션)"""
+    if not rows:
+        return 0
+    try:
+        ws = safe_api_call(sh.worksheet, "Solar_DB")
+    except WorksheetNotFound:
+        ws = safe_api_call(sh.add_worksheet, title="Solar_DB", rows="5000", cols="10")
+        safe_api_call(ws.append_row, ["날짜", "지점", "발전시간", "일사량합계"])
+    existing = safe_api_call(ws.get_all_values)
+    header = existing[0] if existing else ["날짜", "지점", "발전시간", "일사량합계"]
+    upload_dates_by_loc = {}
+    for row in rows:
+        if len(row) >= 2:
+            upload_dates_by_loc.setdefault(str(row[1]).strip(), set()).add(str(row[0])[:10])
+    if overwrite_location_dates and existing and len(existing) > 1:
+        kept = [header]
+        for row in existing[1:]:
+            if len(row) < 2:
+                kept.append(row)
+                continue
+            d = str(row[0]).strip()[:10]
+            loc = str(row[1]).strip()
+            if loc in upload_dates_by_loc and d in upload_dates_by_loc[loc]:
+                continue
+            kept.append(row)
+        safe_api_call(ws.clear)
+        if kept:
+            safe_api_call(ws.update, "A1", kept)
+    for row in rows:
+        safe_api_call(ws.append_row, row, value_input_option="USER_ENTERED")
+    cached_get_all_records.clear()
+    return len(rows)
+
+
+def render_solar_climatology_analysis(sel_loc: str, f_df: pd.DataFrame, df_db: pd.DataFrame):
+    """연평균 일사량 vs 과거 10년 평균 분석 (2024·2025 중심)"""
+    st.subheader("📈 연평균 일사량 vs 과거 10년 평균")
+    st.caption(
+        f"**{sel_loc}** 지점의 **2024·2025년** 실측(시트) 일사량을 "
+        f"Open-Meteo 재분석 기반 **직전 {SOLAR_CLIMATOLOGY_YEARS}년({SOLAR_ANALYSIS_FOCUS_YEARS[0]-SOLAR_CLIMATOLOGY_YEARS}~{SOLAR_ANALYSIS_FOCUS_YEARS[0]-1})** "
+        "기후 평균과 비교합니다. (기상청 실측과 reanalysis 간 오차가 있을 수 있습니다.)"
+    )
+    lat, lon, geo = get_location_lat_lon(sel_loc)
+    if lat is None or lon is None:
+        st.warning("좌표를 찾지 못해 10년 평균 비교를 할 수 없습니다. `GEO_FALLBACK_COORDS`에 지점을 등록하세요.")
+        return
+
+    place = " / ".join([str(x) for x in [geo.get("name"), geo.get("admin1"), geo.get("country")] if x]) if geo else sel_loc
+    st.caption(f"분석 좌표: {place} (lat={lat:.4f}, lon={lon:.4f})")
+
+    baseline_end_year = max(SOLAR_ANALYSIS_FOCUS_YEARS)
+    with st.spinner(f"과거 {SOLAR_CLIMATOLOGY_YEARS}년 일사량 기후 데이터 조회 중…"):
+        clim_daily = fetch_climatology_daily_df(lat, lon, baseline_end_year)
+    if clim_daily.empty:
+        st.error("10년 기후 데이터를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.")
+        return
+
+    clim_monthly = build_monthly_climatology(clim_daily)
+    loc_all = df_db[df_db["지점"] == sel_loc].copy() if df_db is not None and not df_db.empty else f_df.copy()
+    if loc_all.empty:
+        compare_years = []
+    else:
+        compare_years = [y for y in SOLAR_ANALYSIS_FOCUS_YEARS if y in loc_all["날짜"].dt.year.unique()]
+        if not compare_years:
+            yrs = sorted(loc_all["날짜"].dt.year.unique().tolist())
+            compare_years = yrs[-2:] if yrs else []
+    yearly_tbl = build_yearly_vs_climatology_table(loc_all, clim_daily, compare_years)
+
+    if yearly_tbl.empty:
+        st.info(f"{sel_loc} 지점의 2024·2025년(또는 비교 대상 연도) 데이터가 없습니다. 아래 **지역 데이터 생성**에서 먼저 데이터를 만드세요.")
+    else:
+        c1, c2 = st.columns(2)
+        for i, (_, row) in enumerate(yearly_tbl.iterrows()):
+            col = c1 if i % 2 == 0 else c2
+            delta_pct = row["일평균_편차(%)"]
+            col.metric(
+                f"{int(row['연도'])}년 일평균 일사량",
+                f"{row['일평균_일사량']:.2f} MJ/m²",
+                delta=f"{delta_pct:+.1f}% vs 10년 평균",
+                delta_color="normal" if delta_pct >= 0 else "inverse",
+            )
+        st.dataframe(
+            yearly_tbl.rename(
+                columns={
+                    "일평균_일사량": "실측_일평균",
+                    "연합계_일사량": "실측_연합계",
+                }
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        fig_year = go.Figure()
+        fig_year.add_trace(
+            go.Bar(
+                x=[f"{int(y)}년" for y in yearly_tbl["연도"]],
+                y=yearly_tbl["일평균_일사량"],
+                name="실측 일평균",
+                marker_color=["#1976d2", "#42a5f5"][: len(yearly_tbl)],
+                text=yearly_tbl["일평균_편차(%)"].apply(lambda v: f"{v:+.1f}%"),
+                textposition="outside",
+            )
+        )
+        fig_year.add_hline(
+            y=float(yearly_tbl["기후_10년_일평균"].iloc[0]),
+            line_dash="dash",
+            line_color="#ef5350",
+            annotation_text=f"10년 평균 {yearly_tbl['기후_10년_일평균'].iloc[0]:.2f}",
+            annotation_position="top right",
+        )
+        fig_year.update_layout(
+            title=f"[{sel_loc}] 연도별 일평균 일사량 vs 10년 기후 평균",
+            yaxis_title="일평균 일사량 (MJ/m²)",
+            height=380,
+            showlegend=False,
+        )
+        st.plotly_chart(fig_year, use_container_width=True)
+
+    monthly_cmp = build_monthly_comparison_df(loc_all, clim_monthly, compare_years)
+    if not monthly_cmp.empty:
+        fig_m = go.Figure()
+        fig_m.add_trace(
+            go.Scatter(
+                x=monthly_cmp["월"],
+                y=monthly_cmp["기후_월평균_일사량"],
+                mode="lines+markers",
+                name=f"10년 월평균 ({baseline_end_year - SOLAR_CLIMATOLOGY_YEARS}~{baseline_end_year - 1})",
+                line=dict(color="#ef5350", width=3, dash="dash"),
+            )
+        )
+        palette = ["#1976d2", "#66bb6a", "#ffa726"]
+        for i, yr in enumerate(compare_years):
+            col_name = f"{yr}년_월평균"
+            if col_name in monthly_cmp.columns:
+                fig_m.add_trace(
+                    go.Bar(
+                        x=monthly_cmp["월"],
+                        y=monthly_cmp[col_name],
+                        name=f"{yr}년 실측",
+                        marker_color=palette[i % len(palette)],
+                        opacity=0.85,
+                    )
+                )
+        fig_m.update_layout(
+            title=f"[{sel_loc}] 월별 일평균 일사량 — 10년 기후평균 vs 실측",
+            xaxis_title="월",
+            yaxis_title="월평균 일사량 (MJ/m²)",
+            barmode="group",
+            height=420,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        )
+        st.plotly_chart(fig_m, use_container_width=True)
+        st.dataframe(monthly_cmp, use_container_width=True, hide_index=True)
+
+
+def render_yeoju_data_builder(sh, df_db: pd.DataFrame):
+    """여주(및 신규 지점) Archive 기반 발전량·일사량 데이터 생성 → Solar_DB 저장"""
+    st.subheader("🏗️ 신규 지역 데이터 생성 (여주 등)")
+    st.caption(
+        "Open-Meteo 과거 재분석 일사량으로 **일사량합계**를 채우고, "
+        "참조 지점 회귀식(또는 PR 0.8)으로 **발전시간**을 추정해 `Solar_DB`에 저장합니다. "
+        "실제 발전량이 확보되면 시트에서 발전시간만 수정하세요."
+    )
+    preset_locs = sorted(set(list(GEO_FALLBACK_COORDS.keys()) + ["여주"]))
+    db_locs = sorted(df_db["지점"].dropna().astype(str).unique().tolist()) if df_db is not None and not df_db.empty else []
+    new_loc = st.selectbox(
+        "생성할 지점",
+        preset_locs,
+        index=preset_locs.index("여주") if "여주" in preset_locs else 0,
+        key="solar_new_loc_builder",
+    )
+    if new_loc in db_locs:
+        st.info(f"`{new_loc}` 데이터가 이미 Solar_DB에 있습니다. 저장 시 **같은 날짜는 덮어씁니다.**")
+
+    b1, b2, b3 = st.columns(3)
+    with b1:
+        gen_start = st.date_input("시작일", value=datetime.date(2024, 1, 1), key="solar_gen_start")
+    with b2:
+        gen_end = st.date_input("종료일", value=datetime.date(2025, 12, 31), key="solar_gen_end")
+    with b3:
+        ref_opts = ["PR 0.8 추정"] + [loc for loc in db_locs if loc != new_loc]
+        ref_loc = st.selectbox("발전시간 추정 참조", ref_opts, key="solar_gen_ref")
+
+    lat, lon, geo = get_location_lat_lon(new_loc)
+    if lat is None:
+        st.error(f"`{new_loc}` 좌표를 찾지 못했습니다. `GEO_FALLBACK_COORDS`에 추가해 주세요.")
+        return
+    st.caption(f"좌표: lat={lat:.4f}, lon={lon:.4f}")
+
+    ref_df = None
+    if ref_loc != "PR 0.8 추정" and df_db is not None and not df_db.empty:
+        ref_df = df_db[df_db["지점"] == ref_loc].copy()
+
+    if st.button("🔍 미리보기 (다운로드 없이 조회)", key="solar_gen_preview", use_container_width=True):
+        with st.spinner("Archive 일사량 조회 중…"):
+            archive = fetch_open_meteo_archive_daily(
+                lat, lon, gen_start.strftime("%Y-%m-%d"), gen_end.strftime("%Y-%m-%d")
+            )
+            preview_df = archive_json_to_daily_df(archive)
+        if preview_df.empty:
+            st.warning("해당 기간 데이터가 없습니다.")
+        else:
+            preview_df = preview_df.copy()
+            preview_df["발전시간"] = preview_df["일사량합계"].apply(
+                lambda v: estimate_generation_hours_from_radiation(float(v), ref_df)
+            )
+            preview_df["지점"] = new_loc
+            st.metric("생성 일수", f"{len(preview_df)}일")
+            st.metric("기간 일평균 일사량", f"{preview_df['일사량합계'].mean():.2f} MJ/m²")
+            st.metric("기간 일평균 발전시간(추정)", f"{preview_df['발전시간'].mean():.2f} h")
+            st.dataframe(preview_df.tail(30), use_container_width=True)
+            st.session_state[f"solar_gen_preview_{new_loc}"] = preview_df
+
+    if st.button("💾 Solar_DB에 저장", type="primary", key="solar_gen_save", use_container_width=True):
+        with st.spinner("데이터 생성 및 저장 중…"):
+            archive = fetch_open_meteo_archive_daily(
+                lat, lon, gen_start.strftime("%Y-%m-%d"), gen_end.strftime("%Y-%m-%d")
+            )
+            archive_df = archive_json_to_daily_df(archive)
+            if archive_df.empty:
+                st.error("저장할 데이터가 없습니다.")
+            else:
+                rows = build_solar_db_rows_from_archive(new_loc, archive_df, ref_df)
+                cnt = append_solar_db_rows(sh, rows, overwrite_location_dates=True)
+                st.success(f"`{new_loc}` {cnt}건을 Solar_DB에 저장했습니다. 상단에서 지역을 새로고침 후 10년 비교 분석을 확인하세요.")
+                time.sleep(1)
+                st.rerun()
+
 
 def fit_predict_generation_hours(hist_df: pd.DataFrame, radiation_mj_m2: float):
     """
@@ -2199,10 +2612,15 @@ def view_solar(sh):
         with st.expander("🔍 발전량 상세 검색 필터", expanded=True):
             f1, f2 = st.columns(2)
             with f1:
-                locs = sorted(df_db['지점'].unique().tolist())
-                sel_loc = st.selectbox("조회 지역 선택", locs)
+                db_locs = sorted(df_db['지점'].dropna().astype(str).unique().tolist())
+                extra_locs = sorted(set(GEO_FALLBACK_COORDS.keys()) - set(db_locs))
+                locs = db_locs + [f"{x} (미등록)" for x in extra_locs]
+                sel_raw = st.selectbox("조회 지역 선택", locs)
+                sel_loc = sel_raw.replace(" (미등록)", "").strip()
+                if sel_raw.endswith("(미등록)"):
+                    st.caption(f"💡 `{sel_loc}`은 Solar_DB에 없습니다. 아래 **신규 지역 데이터 생성**에서 먼저 만들 수 있습니다.")
             with f2:
-                default_start = datetime.date(2025, 1, 1)
+                default_start = datetime.date(2024, 1, 1)
                 default_end = datetime.date(2025, 12, 31)
                 dr = st.date_input("조회 기간", [default_start, default_end])
         
@@ -2211,6 +2629,17 @@ def view_solar(sh):
             mask = mask & (df_db['날짜'].dt.date >= dr[0]) & (df_db['날짜'].dt.date <= dr[1])
         
         f_df = df_db[mask].sort_values('날짜')
+
+        # -------------------------
+        # [신규] 10년 평균 대비 연평균 일사량 분석 (2024·2025)
+        # -------------------------
+        with st.expander("📈 연평균 일사량 vs 과거 10년 평균 (2024·2025)", expanded=True):
+            render_solar_climatology_analysis(sel_loc, f_df, df_db)
+
+        with st.expander("🏗️ 신규 지역 데이터 생성 (여주 등)", expanded=False):
+            render_yeoju_data_builder(sh, df_db)
+
+        st.divider()
 
         # -------------------------
         # [신규] 내일 예측 섹션
