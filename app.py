@@ -1109,6 +1109,9 @@ def build_yearly_vs_climatology_table(
     yearly["연합계_편차(%)"] = (
         (yearly["연합계_일사량"] / yearly["기후_10년_연평균합계"] - 1.0) * 100.0
     ).round(1)
+    yearly["연합계_편차(MJ/m²)"] = (
+        yearly["연합계_일사량"] - yearly["기후_10년_연평균합계"]
+    ).round(1)
     return yearly
 
 
@@ -1274,13 +1277,13 @@ def migrate_legacy_solar_db_to_location_sheets(sh) -> dict:
 
 
 def render_solar_climatology_analysis(sel_loc: str, f_df: pd.DataFrame, df_db: pd.DataFrame):
-    """연평균 일사량 vs 해당 도시 Solar_DB 10년 누적 평균 (2024·2025 중심)"""
-    st.subheader("📈 연평균 일사량 vs 해당 지역 10년 평균")
+    """연간일사량 합계 vs 해당 도시 10년 누적 평균 (2024·2025, % 표기)"""
+    st.subheader("📈 10년 평균 대비 분석 (2024·2025)")
     baseline_years = solar_baseline_years()
     baseline_label = f"{baseline_years[0]}~{baseline_years[-1]}"
     st.caption(
-        f"**{sel_loc}** 지점 **2024·2025년** 데이터를, "
-        f"같은 지점 전용 시트(`{solar_sheet_title(sel_loc)}`)에 쌓인 **{SOLAR_CLIMATOLOGY_YEARS}년({baseline_label})** 평균과 비교합니다. "
+        f"**{sel_loc}** 지점 **2024·2025년 연간일사량 합계**를, "
+        f"같은 지점 전용 시트에 쌓인 **{SOLAR_CLIMATOLOGY_YEARS}년({baseline_label}) 연평균 합계**와 **%**로 비교합니다. "
         "10년 기준 데이터가 부족하면 아래 **연도별 데이터 쌓기**에서 1년씩 저장하세요."
     )
 
@@ -1308,7 +1311,6 @@ def render_solar_climatology_analysis(sel_loc: str, f_df: pd.DataFrame, df_db: p
             f"(목표 {SOLAR_CLIMATOLOGY_YEARS}년). 나머지 연도를 쌓으면 더 정확해집니다."
         )
 
-    clim_monthly = build_monthly_climatology(clim_daily)
     if loc_all.empty:
         compare_years = []
     else:
@@ -1324,88 +1326,104 @@ def render_solar_climatology_analysis(sel_loc: str, f_df: pd.DataFrame, df_db: p
     if yearly_tbl.empty:
         st.info(f"{sel_loc} 지점의 2024·2025년 데이터가 없습니다. **연도별 데이터 쌓기**에서 해당 연도를 저장하세요.")
     else:
-        c1, c2 = st.columns(2)
-        for i, (_, row) in enumerate(yearly_tbl.iterrows()):
-            col = c1 if i % 2 == 0 else c2
-            delta_pct = row["일평균_편차(%)"]
-            col.metric(
-                f"{int(row['연도'])}년 일평균 일사량",
-                f"{row['일평균_일사량']:.2f} MJ/m²",
-                delta=f"{delta_pct:+.1f}% vs {sel_loc} 10년 평균",
-                delta_color="normal" if delta_pct >= 0 else "inverse",
-            )
-        show_tbl = yearly_tbl.rename(
-            columns={
-                "일평균_일사량": "해당연도_일평균",
-                "연합계_일사량": "해당연도_연합계",
-                "기후_10년_일평균": f"{sel_loc}_10년_일평균",
-                "기후_10년_연평균합계": f"{sel_loc}_10년_연평균합계",
-            }
-        )
-        st.dataframe(show_tbl, use_container_width=True, hide_index=True)
+        ref_annual = float(yearly_tbl["기후_10년_연평균합계"].iloc[0])
 
-        fig_year = go.Figure()
-        fig_year.add_trace(
-            go.Bar(
-                x=[f"{int(y)}년" for y in yearly_tbl["연도"]],
-                y=yearly_tbl["일평균_일사량"],
-                name="해당 연도",
-                marker_color=["#1976d2", "#42a5f5"][: len(yearly_tbl)],
-                text=yearly_tbl["일평균_편차(%)"].apply(lambda v: f"{v:+.1f}%"),
-                textposition="outside",
+        with st.container(border=True):
+            st.markdown(f"##### 📊 {sel_loc} — 2024·2025 vs 10년({baseline_label}) 평균 **증감률**")
+            st.caption(f"10년 연평균 연간합계 기준: **{ref_annual:,.1f} MJ/m²**")
+            summary_tbl = yearly_tbl[
+                [
+                    "연도",
+                    "연합계_일사량",
+                    "기후_10년_연평균합계",
+                    "연합계_편차(MJ/m²)",
+                    "연합계_편차(%)",
+                ]
+            ].copy()
+            summary_tbl = summary_tbl.rename(
+                columns={
+                    "연합계_일사량": "해당연도_연간합계(MJ/m²)",
+                    "기후_10년_연평균합계": "10년_연평균합계(MJ/m²)",
+                    "연합계_편차(MJ/m²)": "10년대비_증감(MJ/m²)",
+                    "연합계_편차(%)": "10년대비_증감(%)",
+                }
             )
-        )
-        ref_mean = float(yearly_tbl["기후_10년_일평균"].iloc[0])
-        fig_year.add_hline(
-            y=ref_mean,
-            line_dash="dash",
-            line_color="#ef5350",
-            annotation_text=f"{sel_loc} 10년 평균 {ref_mean:.2f}",
-            annotation_position="top right",
-        )
-        fig_year.update_layout(
-            title=f"[{sel_loc}] 연도별 일평균 vs 동일 지역 10년 평균({baseline_label})",
-            yaxis_title="일평균 일사량 (MJ/m²)",
-            height=380,
-            showlegend=False,
-        )
-        st.plotly_chart(fig_year, use_container_width=True)
+            summary_tbl["10년대비_증감(%)"] = summary_tbl["10년대비_증감(%)"].apply(
+                lambda v: f"{float(v):+.1f}%"
+            )
+            st.dataframe(summary_tbl, use_container_width=True, hide_index=True)
 
-    monthly_cmp = build_monthly_comparison_df(loc_all, clim_monthly, compare_years)
-    if not monthly_cmp.empty:
-        fig_m = go.Figure()
-        fig_m.add_trace(
-            go.Scatter(
-                x=monthly_cmp["월"],
-                y=monthly_cmp["기후_월평균_일사량"],
-                mode="lines+markers",
-                name=f"{sel_loc} 10년 월평균 ({baseline_label})",
-                line=dict(color="#ef5350", width=3, dash="dash"),
-            )
-        )
-        palette = ["#1976d2", "#66bb6a", "#ffa726"]
-        for i, yr in enumerate(compare_years):
-            col_name = f"{yr}년_월평균"
-            if col_name in monthly_cmp.columns:
-                fig_m.add_trace(
-                    go.Bar(
-                        x=monthly_cmp["월"],
-                        y=monthly_cmp[col_name],
-                        name=f"{yr}년",
-                        marker_color=palette[i % len(palette)],
-                        opacity=0.85,
-                    )
+        clim_monthly = build_monthly_climatology(clim_daily)
+        monthly_cmp = build_monthly_comparison_df(loc_all, clim_monthly, compare_years)
+        if not monthly_cmp.empty:
+            st.markdown("##### 📅 월별 일사량 비교 (막대)")
+            fig_m = go.Figure()
+            fig_m.add_trace(
+                go.Scatter(
+                    x=monthly_cmp["월"],
+                    y=monthly_cmp["기후_월평균_일사량"],
+                    mode="lines+markers",
+                    name=f"{sel_loc} 10년 월평균 ({baseline_label})",
+                    line=dict(color="#ef5350", width=3, dash="dash"),
                 )
-        fig_m.update_layout(
-            title=f"[{sel_loc}] 월별 일평균 — 동일 지역 10년 평균 vs 2024·2025",
-            xaxis_title="월",
-            yaxis_title="월평균 일사량 (MJ/m²)",
-            barmode="group",
-            height=420,
-            legend=dict(orientation="h", yanchor="bottom", y=1.02),
-        )
-        st.plotly_chart(fig_m, use_container_width=True)
-        st.dataframe(monthly_cmp, use_container_width=True, hide_index=True)
+            )
+            palette = ["#1976d2", "#66bb6a", "#ffa726"]
+            for i, yr in enumerate(compare_years):
+                col_name = f"{yr}년_월평균"
+                if col_name in monthly_cmp.columns:
+                    fig_m.add_trace(
+                        go.Bar(
+                            x=monthly_cmp["월"],
+                            y=monthly_cmp[col_name],
+                            name=f"{yr}년",
+                            marker_color=palette[i % len(palette)],
+                            opacity=0.85,
+                        )
+                    )
+            fig_m.update_layout(
+                title=f"[{sel_loc}] 월별 일평균 일사량 — 10년 평균 vs 2024·2025",
+                xaxis_title="월",
+                yaxis_title="월평균 일사량 (MJ/m²)",
+                barmode="group",
+                height=420,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02),
+            )
+            st.plotly_chart(fig_m, use_container_width=True)
+
+        with st.expander("📈 연간합계 막대 차트", expanded=False):
+            fig_year = go.Figure()
+            fig_year.add_trace(
+                go.Bar(
+                    x=[f"{int(y)}년" for y in yearly_tbl["연도"]],
+                    y=yearly_tbl["연합계_일사량"],
+                    name="연간합계",
+                    marker_color=["#1976d2", "#42a5f5"][: len(yearly_tbl)],
+                    text=yearly_tbl["연합계_편차(%)"].apply(lambda v: f"{float(v):+.1f}%"),
+                    textposition="outside",
+                )
+            )
+            fig_year.add_hline(
+                y=ref_annual,
+                line_dash="dash",
+                line_color="#ef5350",
+                annotation_text=f"10년 연평균합계 {ref_annual:,.0f} MJ/m²",
+                annotation_position="top right",
+            )
+            fig_year.update_layout(
+                title=f"[{sel_loc}] 연간일사량 합계 vs 10년 평균",
+                yaxis_title="연간 일사량 합계 (MJ/m²)",
+                height=380,
+                showlegend=False,
+            )
+            st.plotly_chart(fig_year, use_container_width=True)
+
+        baseline_annual = summarize_yearly_radiation(clim_daily, baseline_years)
+        if not baseline_annual.empty:
+            with st.expander(f"📎 10년 기준({baseline_label}) 연도별 합계 참고", expanded=False):
+                ref_tbl = baseline_annual[["연도", "일수", "연합계_일사량"]].rename(
+                    columns={"연합계_일사량": "연간합계(MJ/m²)"}
+                )
+                st.dataframe(ref_tbl, use_container_width=True, hide_index=True)
 
 
 def render_solar_yearly_data_builder(sh, df_db: pd.DataFrame):
@@ -3006,7 +3024,7 @@ def view_solar(sh):
         # -------------------------
         # [신규] 10년 평균 대비 연평균 일사량 분석 (2024·2025)
         # -------------------------
-        with st.expander("📈 연평균 일사량 vs 해당 지역 10년 평균 (2024·2025)", expanded=True):
+        with st.expander("📈 10년 평균 대비 분석 (2024·2025)", expanded=True):
             render_solar_climatology_analysis(sel_loc, f_df, df_db)
 
         with st.expander("🏗️ 연도별 데이터 쌓기 (1년씩)", expanded=False):
