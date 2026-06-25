@@ -574,6 +574,7 @@ def _sheet_batch_update(ws, all_rows: list, value_input_option: str = None) -> N
             r.extend([""] * (max_cols - len(r)))
         normalized.append(r)
     chunk_size = 2000
+    _ensure_worksheet_capacity(ws, len(normalized))
     safe_api_call(ws.clear)
     for start in range(0, len(normalized), chunk_size):
         chunk = normalized[start : start + chunk_size]
@@ -778,6 +779,79 @@ GEO_FALLBACK_COORDS = {
 
 SOLAR_CLIMATOLOGY_YEARS = 10
 SOLAR_ANALYSIS_FOCUS_YEARS = [2024, 2025]
+SOLAR_SHEET_PREFIX = "Solar_"
+SOLAR_LEGACY_SHEET = "Solar_DB"
+SOLAR_FORECAST_SHEET = "Solar_Forecast"
+SOLAR_LOCATION_COLUMNS = ["날짜", "발전시간", "일사량합계"]
+SOLAR_UNIFIED_COLUMNS = ["날짜", "지점", "발전시간", "일사량합계"]
+SOLAR_SHEET_DEFAULT_ROWS = 20000
+
+
+def solar_sheet_title(location: str) -> str:
+    """지점명 → 전용 시트명 (예: Solar_여주)"""
+    name = str(location or "").strip()
+    for ch in ("\\", "/", "?", "*", "[", "]", ":"):
+        name = name.replace(ch, "_")
+    suffix = name[: 100 - len(SOLAR_SHEET_PREFIX)]
+    return f"{SOLAR_SHEET_PREFIX}{suffix}"
+
+
+def location_from_solar_sheet(sheet_title: str) -> Optional[str]:
+    """Solar_여주 → 여주 (시스템 시트는 None)"""
+    title = str(sheet_title or "").strip()
+    if not title.startswith(SOLAR_SHEET_PREFIX):
+        return None
+    suffix = title[len(SOLAR_SHEET_PREFIX) :]
+    if suffix in ("DB", "Forecast") or not suffix:
+        return None
+    return suffix
+
+
+def is_solar_system_sheet(sheet_title: str) -> bool:
+    t = str(sheet_title or "").strip()
+    return t in (SOLAR_LEGACY_SHEET, SOLAR_FORECAST_SHEET)
+
+
+def _ensure_worksheet_capacity(ws, min_rows: int) -> None:
+    """행 수 부족 시 시트 확장 (6000행 한도 오류 방지)"""
+    try:
+        need = max(int(min_rows) + 50, SOLAR_SHEET_DEFAULT_ROWS)
+        current = int(getattr(ws, "row_count", 0) or 0)
+        if current < need:
+            safe_api_call(ws.resize, rows=need, cols=max(10, int(getattr(ws, "col_count", 10) or 10)))
+    except Exception:
+        pass
+
+
+def get_or_create_solar_location_worksheet(sh, location: str):
+    title = solar_sheet_title(location)
+    try:
+        ws = safe_api_call(sh.worksheet, title)
+    except WorksheetNotFound:
+        ws = safe_api_call(
+            sh.add_worksheet,
+            title=title,
+            rows=str(SOLAR_SHEET_DEFAULT_ROWS),
+            cols="10",
+        )
+        _sheet_batch_update(ws, [SOLAR_LOCATION_COLUMNS])
+        return ws
+    _ensure_worksheet_capacity(ws, SOLAR_SHEET_DEFAULT_ROWS)
+    return ws
+
+
+def list_solar_locations(sh, df_db: pd.DataFrame = None) -> list:
+    locs = set(GEO_FALLBACK_COORDS.keys())
+    if df_db is not None and not df_db.empty and "지점" in df_db.columns:
+        locs.update(df_db["지점"].dropna().astype(str).unique().tolist())
+    try:
+        for ws in sh.worksheets():
+            loc = location_from_solar_sheet(ws.title)
+            if loc:
+                locs.add(loc)
+    except Exception:
+        pass
+    return sorted(str(x) for x in locs if str(x).strip())
 
 def _geocode_one_query(query: str):
     """단일 쿼리로 Open-Meteo Geocoding 시도"""
@@ -965,7 +1039,7 @@ def save_single_year_solar_data(
     if archive_df.empty:
         return 0
     rows = build_solar_db_rows_from_archive(location, archive_df, ref_df)
-    return append_solar_db_rows(sh, rows, overwrite_location_dates=True)
+    return append_solar_location_rows(sh, location, rows, overwrite_dates=True)
 
 
 def build_monthly_climatology(daily_df: pd.DataFrame) -> pd.DataFrame:
@@ -1076,7 +1150,7 @@ def build_solar_db_rows_from_archive(
     archive_df: pd.DataFrame,
     ref_df: pd.DataFrame = None,
 ) -> list:
-    """Archive 일사량 → Solar_DB 저장용 행 목록"""
+    """Archive 일사량 → 지역 시트 저장용 행 [날짜, 발전시간, 일사량합계]"""
     rows = []
     for _, r in archive_df.iterrows():
         rad = float(r["일사량합계"])
@@ -1084,7 +1158,6 @@ def build_solar_db_rows_from_archive(
         rows.append(
             [
                 pd.Timestamp(r["날짜"]).strftime("%Y-%m-%d"),
-                str(location_name),
                 round(gen_h, 2),
                 round(rad, 2),
             ]
@@ -1092,38 +1165,112 @@ def build_solar_db_rows_from_archive(
     return rows
 
 
-def append_solar_db_rows(sh, rows: list, overwrite_location_dates: bool = True) -> int:
-    """Solar_DB 시트에 발전량 행 일괄 저장 (API 쓰기 최소화)"""
-    if not rows:
+def _normalize_solar_location_row(row: list) -> list:
+    """4열(구 통합형) 또는 3열 → [날짜, 발전시간, 일사량]"""
+    if not row:
+        return []
+    if len(row) >= 4:
+        return [str(row[0])[:10], row[2], row[3]]
+    if len(row) >= 3:
+        return [str(row[0])[:10], row[1], row[2]]
+    return []
+
+
+def append_solar_location_rows(
+    sh,
+    location: str,
+    rows: list,
+    overwrite_dates: bool = True,
+) -> int:
+    """지역별 전용 시트(Solar_지점명)에 일괄 저장"""
+    loc = str(location or "").strip()
+    norm_rows = [_normalize_solar_location_row(r) for r in rows]
+    norm_rows = [r for r in norm_rows if r and r[0]]
+    if not loc or not norm_rows:
         return 0
-    try:
-        ws = safe_api_call(sh.worksheet, "Solar_DB")
-    except WorksheetNotFound:
-        ws = safe_api_call(sh.add_worksheet, title="Solar_DB", rows="5000", cols="10")
-        _sheet_batch_update(ws, [["날짜", "지점", "발전시간", "일사량합계"]])
+
+    ws = get_or_create_solar_location_worksheet(sh, loc)
+    sheet_title = solar_sheet_title(loc)
     existing = safe_api_call(ws.get_all_values)
-    header = existing[0] if existing else ["날짜", "지점", "발전시간", "일사량합계"]
-    upload_dates_by_loc = {}
-    for row in rows:
-        if len(row) >= 2:
-            upload_dates_by_loc.setdefault(str(row[1]).strip(), set()).add(str(row[0])[:10])
+    header = existing[0] if existing else SOLAR_LOCATION_COLUMNS
+    if header[:3] != SOLAR_LOCATION_COLUMNS:
+        header = SOLAR_LOCATION_COLUMNS
+
+    upload_dates = {str(r[0])[:10] for r in norm_rows}
     merged = [header]
     if existing and len(existing) > 1:
         for row in existing[1:]:
-            if len(row) < 2:
-                merged.append(row)
+            if not row:
                 continue
             d = str(row[0]).strip()[:10]
-            loc = str(row[1]).strip()
-            if overwrite_location_dates and loc in upload_dates_by_loc and d in upload_dates_by_loc[loc]:
+            if overwrite_dates and d in upload_dates:
                 continue
-            merged.append(row)
-    merged.extend(rows)
+            merged.append(row[:3] if len(row) >= 3 else row)
+    merged.extend(norm_rows)
+    _ensure_worksheet_capacity(ws, len(merged))
     _sheet_batch_update(ws, merged, value_input_option="USER_ENTERED")
     cached_get_all_records.clear()
     cached_get_all_values.clear()
-    clear_file_cache("Solar_DB")
-    return len(rows)
+    clear_file_cache(sheet_title)
+    clear_file_cache(SOLAR_LEGACY_SHEET)
+    return len(norm_rows)
+
+
+def append_solar_db_rows(sh, rows: list, overwrite_location_dates: bool = True) -> int:
+    """구 API 호환 — 지점별 전용 시트로 분산 저장"""
+    if not rows:
+        return 0
+    by_loc = {}
+    for row in rows:
+        if len(row) >= 4:
+            loc = str(row[1]).strip()
+            data = _normalize_solar_location_row(row)
+        elif len(row) >= 3:
+            continue
+        else:
+            continue
+        if not loc or not data:
+            continue
+        by_loc.setdefault(loc, []).append(data)
+    total = 0
+    for loc, loc_rows in by_loc.items():
+        total += append_solar_location_rows(sh, loc, loc_rows, overwrite_dates=overwrite_location_dates)
+    return total
+
+
+def migrate_legacy_solar_db_to_location_sheets(sh) -> dict:
+    """기존 Solar_DB(통합) → Solar_지점명 시트로 분리"""
+    result = {"locations": 0, "rows": 0, "error": None}
+    try:
+        values = safe_api_call(sh.worksheet, SOLAR_LEGACY_SHEET)
+        values = safe_api_call(values.get_all_values)
+    except WorksheetNotFound:
+        return result
+    except Exception as e:
+        result["error"] = str(e)
+        return result
+    if not values or len(values) < 2:
+        return result
+    header = values[0]
+    has_loc_col = "지점" in header
+    loc_idx = header.index("지점") if has_loc_col else 1
+    date_idx = header.index("날짜") if "날짜" in header else 0
+    gen_idx = header.index("발전시간") if "발전시간" in header else 2
+    rad_idx = header.index("일사량합계") if "일사량합계" in header else 3
+    by_loc = {}
+    for row in values[1:]:
+        if len(row) <= max(loc_idx, date_idx, gen_idx, rad_idx):
+            continue
+        loc = str(row[loc_idx]).strip()
+        if not loc:
+            continue
+        by_loc.setdefault(loc, []).append(
+            [str(row[date_idx])[:10], row[gen_idx], row[rad_idx]]
+        )
+    for loc, loc_rows in by_loc.items():
+        result["rows"] += append_solar_location_rows(sh, loc, loc_rows, overwrite_dates=False)
+        result["locations"] += 1
+    return result
 
 
 def render_solar_climatology_analysis(sel_loc: str, f_df: pd.DataFrame, df_db: pd.DataFrame):
@@ -1133,7 +1280,7 @@ def render_solar_climatology_analysis(sel_loc: str, f_df: pd.DataFrame, df_db: p
     baseline_label = f"{baseline_years[0]}~{baseline_years[-1]}"
     st.caption(
         f"**{sel_loc}** 지점 **2024·2025년** 데이터를, "
-        f"같은 지점 `Solar_DB`에 쌓인 **{SOLAR_CLIMATOLOGY_YEARS}년({baseline_label})** 평균과 비교합니다. "
+        f"같은 지점 전용 시트(`{solar_sheet_title(sel_loc)}`)에 쌓인 **{SOLAR_CLIMATOLOGY_YEARS}년({baseline_label})** 평균과 비교합니다. "
         "10년 기준 데이터가 부족하면 아래 **연도별 데이터 쌓기**에서 1년씩 저장하세요."
     )
 
@@ -1262,7 +1409,7 @@ def render_solar_climatology_analysis(sel_loc: str, f_df: pd.DataFrame, df_db: p
 
 
 def render_solar_yearly_data_builder(sh, df_db: pd.DataFrame):
-    """지역별 10년+비교연도 데이터를 1년씩 쌓기 → Solar_DB 저장"""
+    """지역별 10년+비교연도 데이터를 1년씩 쌓기 → Solar_지점명 시트 저장"""
     st.subheader("🏗️ 연도별 데이터 쌓기 (1년씩)")
     st.caption(
         "선택한 도시의 **10년 기준(2014~2023) + 비교 연도(2024·2025)** 데이터를 "
@@ -1270,7 +1417,7 @@ def render_solar_yearly_data_builder(sh, df_db: pd.DataFrame):
         "실측 발전시간이 있으면 시트에서 수정하세요."
     )
     preset_locs = sorted(set(list(GEO_FALLBACK_COORDS.keys()) + ["여주"]))
-    db_locs = sorted(df_db["지점"].dropna().astype(str).unique().tolist()) if df_db is not None and not df_db.empty else []
+    db_locs = list_solar_locations(sh, df_db)
     all_locs = sorted(set(preset_locs + db_locs))
     new_loc = st.selectbox(
         "도시(지점) 선택",
@@ -1278,6 +1425,29 @@ def render_solar_yearly_data_builder(sh, df_db: pd.DataFrame):
         index=all_locs.index("여주") if "여주" in all_locs else 0,
         key="solar_new_loc_builder",
     )
+
+    st.caption(
+        f"저장 위치: 구글 시트 **`{SOLAR_SHEET_PREFIX}지점명`** (예: `{solar_sheet_title('여주')}`) — 지역마다 시트 분리"
+    )
+
+    with st.expander("🔄 기존 Solar_DB → 지역별 시트로 분리", expanded=False):
+        st.caption(
+            "통합 `Solar_DB` 시트가 **6000행 한도**에 걸렸을 때 사용합니다. "
+            "지점별로 `Solar_부산`, `Solar_여주` … 시트를 만들고 데이터를 옮깁니다. (기존 Solar_DB는 그대로 둡니다.)"
+        )
+        if st.button("지역별 시트로 마이그레이션", key="solar_migrate_legacy", use_container_width=True):
+            with st.spinner("Solar_DB 분리 중…"):
+                mig = migrate_legacy_solar_db_to_location_sheets(sh)
+            if mig.get("error"):
+                st.error(f"마이그레이션 오류: {mig['error']}")
+            elif mig["locations"] == 0:
+                st.info("옮길 데이터가 없거나 Solar_DB가 비어 있습니다.")
+            else:
+                st.success(
+                    f"**{mig['locations']}개** 지역, **{mig['rows']}행**을 지역별 시트로 옮겼습니다. 페이지를 새로고침하세요."
+                )
+                time.sleep(1)
+                st.rerun()
 
     target_years = solar_stack_target_years()
     baseline_years = solar_baseline_years()
@@ -2728,22 +2898,57 @@ def view_project_detail(sh, pjt_list):
             st.success("데이터가 완벽하게 저장되었습니다!"); time.sleep(1); st.rerun()
 
 # 3. 일 발전량 및 일조 분석
-def load_solar_db_df():
-    """Solar_DB 로드 — records 캐시 우선, 실패 시 values·파일 캐시 폴백"""
+def _load_one_solar_worksheet_df(sheet_name: str, location: str) -> pd.DataFrame:
     for loader in (
-        lambda: cached_get_all_records("pms_db", "Solar_DB"),
-        lambda: _records_from_sheet_values(cached_get_all_values("pms_db", "Solar_DB")),
+        lambda: cached_get_all_records("pms_db", sheet_name),
+        lambda: _records_from_sheet_values(cached_get_all_values("pms_db", sheet_name)),
     ):
         try:
             raw = loader()
-            if raw:
-                df = pd.DataFrame(raw)
-                if df.empty:
-                    continue
-                return _normalize_solar_db_df(df)
+            if not raw:
+                continue
+            df = pd.DataFrame(raw)
+            if df.empty:
+                continue
+            if "지점" not in df.columns:
+                df["지점"] = location
+            return _normalize_solar_db_df(df)
         except Exception:
             continue
-    return pd.DataFrame(columns=["날짜", "지점", "발전시간", "일사량합계"])
+    return pd.DataFrame()
+
+
+def load_solar_db_df(sh):
+    """지역별 시트(Solar_지점명) + 구 Solar_DB 통합 로드"""
+    frames = []
+    seen_sheets = set()
+
+    for ws in sh.worksheets():
+        title = ws.title
+        loc = location_from_solar_sheet(title)
+        if loc:
+            seen_sheets.add(title)
+            part = _load_one_solar_worksheet_df(title, loc)
+            if not part.empty:
+                frames.append(part)
+
+    if SOLAR_LEGACY_SHEET not in seen_sheets:
+        try:
+            safe_api_call(sh.worksheet, SOLAR_LEGACY_SHEET)
+            part = _load_one_solar_worksheet_df(SOLAR_LEGACY_SHEET, "")
+            if not part.empty and "지점" in part.columns:
+                frames.append(part)
+        except WorksheetNotFound:
+            pass
+        except Exception:
+            pass
+
+    if not frames:
+        return pd.DataFrame(columns=SOLAR_UNIFIED_COLUMNS)
+    out = pd.concat(frames, ignore_index=True)
+    if "지점" in out.columns:
+        out = out[out["지점"].astype(str).str.strip() != ""]
+    return out.drop_duplicates(subset=["지점", "날짜"], keep="last").reset_index(drop=True)
 
 
 def _records_from_sheet_values(values: list) -> list:
@@ -2770,7 +2975,7 @@ def view_solar(sh):
         render_print_button()
         
     try:
-        df_db = load_solar_db_df()
+        df_db = load_solar_db_df(sh)
         if df_db.empty:
             st.info("데이터가 없습니다. 아래 **신규 지역 데이터 생성**에서 여주 등 지점 데이터를 만들 수 있습니다.")
             with st.expander("🏗️ 연도별 데이터 쌓기 (1년씩)", expanded=True):
@@ -2780,13 +2985,13 @@ def view_solar(sh):
         with st.expander("🔍 발전량 상세 검색 필터", expanded=True):
             f1, f2 = st.columns(2)
             with f1:
-                db_locs = sorted(df_db['지점'].dropna().astype(str).unique().tolist())
+                db_locs = list_solar_locations(sh, df_db)
                 extra_locs = sorted(set(GEO_FALLBACK_COORDS.keys()) - set(db_locs))
                 locs = db_locs + [f"{x} (미등록)" for x in extra_locs]
                 sel_raw = st.selectbox("조회 지역 선택", locs)
                 sel_loc = sel_raw.replace(" (미등록)", "").strip()
                 if sel_raw.endswith("(미등록)"):
-                    st.caption(f"💡 `{sel_loc}`은 Solar_DB에 없습니다. 아래 **연도별 데이터 쌓기**에서 1년씩 저장하세요.")
+                    st.caption(f"💡 `{sel_loc}` 전용 시트가 없습니다. 아래 **연도별 데이터 쌓기**에서 1년씩 저장하세요.")
             with f2:
                 default_start = datetime.date(2024, 1, 1)
                 default_end = datetime.date(2025, 12, 31)
@@ -3014,9 +3219,13 @@ def view_solar(sh):
         if "429" in err or "Quota exceeded" in err:
             st.error(
                 "구글 시트 **API 쓰기 한도(429)**에 걸렸습니다. "
-                "1~2분 후 **사이드바 → 구글 시트 새로고침** 없이 페이지만 새로고침하거나, "
-                "잠시 기다린 뒤 다시 시도해 주세요. "
-                "(여주 등 대량 저장은 이제 일괄 저장으로 개선되었습니다.)"
+                "1~2분 후 페이지를 새로고침한 뒤 다시 시도해 주세요."
+            )
+        elif "exceeds grid limits" in err or "Max rows" in err:
+            st.error(
+                "통합 `Solar_DB` 시트 **행 한도(6000행)**를 초과했습니다. "
+                "아래 **🔄 기존 Solar_DB → 지역별 시트로 분리**를 실행한 뒤, "
+                "앞으로는 **연도별 데이터 쌓기**로 지역별 시트(`Solar_여주` 등)에 저장하세요."
             )
         else:
             st.error(f"분석 데이터를 불러올 수 없습니다: {e}")
@@ -4103,12 +4312,15 @@ if check_login():
         try:
             sh = safe_api_call(client.open, 'pms_db')
             sys_names = [
-                'weekly_history', 'Solar_DB', 'KPI', 'Sheet1', 'Control_Center',
-                'Dashboard_Control', '통합 대시보드', 'Solar_Forecast', DAILY_REPORT_SHEET,
+                'weekly_history', SOLAR_LEGACY_SHEET, 'KPI', 'Sheet1', 'Control_Center',
+                'Dashboard_Control', '통합 대시보드', SOLAR_FORECAST_SHEET, DAILY_REPORT_SHEET,
             ]
             pjt_list = _load_file_cache(WORKSHEET_LIST_CACHE, FILE_CACHE_TTL)
             if pjt_list is None:
-                pjt_list = [ws.title for ws in sh.worksheets() if ws.title not in sys_names]
+                pjt_list = [
+                    ws.title for ws in sh.worksheets()
+                    if ws.title not in sys_names and not ws.title.startswith(SOLAR_SHEET_PREFIX)
+                ]
                 _save_file_cache(WORKSHEET_LIST_CACHE, pjt_list)
             
             visible_menus = get_pmo_menus_for_current_user(sh)
