@@ -19,6 +19,8 @@ from typing import Optional
 import hmac
 import hashlib
 import base64
+import html as html_module
+import copy
 
 # 1. 페이지 설정
 st.set_page_config(page_title="PM 통합 공정 관리 v4.5.22", page_icon="🏗️", layout="wide")
@@ -120,6 +122,174 @@ st.markdown("""
     }
 
     /* ========================================================= */
+    /* [간트 차트] 상단 월 눈금(틀 고정) + 본문 스크롤 */
+    /* ========================================================= */
+    .gantt-freeze-panel {
+        border: 1px solid rgba(128, 128, 128, 0.28);
+        border-radius: 8px;
+        overflow: hidden;
+        background: #fafbfc;
+        margin-bottom: 8px;
+    }
+    .gantt-month-ruler-wrap {
+        display: flex;
+        align-items: stretch;
+        background: linear-gradient(180deg, #eef3f8 0%, #e3eaf2 100%);
+        border-bottom: 2px solid rgba(33, 150, 243, 0.28);
+    }
+    .gantt-month-ruler-spacer {
+        flex: 0 0 78px;
+        min-width: 78px;
+        border-right: 1px solid rgba(128, 128, 128, 0.2);
+        background: rgba(255, 255, 255, 0.55);
+    }
+    .gantt-month-ruler-track {
+        flex: 1 1 auto;
+        display: flex;
+        justify-content: space-between;
+        gap: 4px;
+        padding: 7px 92px 7px 8px;
+        font-size: 11px;
+        font-weight: 700;
+        color: #1565c0;
+        overflow: hidden;
+        white-space: nowrap;
+    }
+    .gantt-month-cell {
+        flex: 1 1 0;
+        text-align: center;
+        min-width: 0;
+    }
+    @media (max-width: 768px) {
+        .gantt-month-ruler-spacer { flex: 0 0 62px; min-width: 62px; }
+        .gantt-month-ruler-track { padding-right: 72px; font-size: 10px; }
+    }
+
+    /* ========================================================= */
+    /* [일일보고] 엑셀 양식형 화면 */
+    /* ========================================================= */
+    .daily-report-viewport {
+        overflow-x: auto;
+        margin: 8px 0 16px 0;
+        border: 1px solid #b4b4b4;
+        border-radius: 4px;
+        background: #fff;
+    }
+    .daily-report-sheet {
+        min-width: 920px;
+        font-family: 'Pretendard', 'Malgun Gothic', sans-serif;
+        font-size: 12px;
+        color: #111;
+    }
+    .daily-report-top {
+        display: flex;
+        align-items: stretch;
+        border-bottom: 1px solid #b4b4b4;
+    }
+    .daily-report-date-box {
+        flex: 0 0 200px;
+        background: #4f81bd;
+        color: #fff;
+        font-size: 22px;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 18px 12px;
+        border-right: 1px solid #b4b4b4;
+        text-align: center;
+        line-height: 1.35;
+    }
+    .daily-report-legend {
+        flex: 1 1 auto;
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        border-collapse: collapse;
+    }
+    .daily-report-legend-cell {
+        border: 1px solid #b4b4b4;
+        border-top: none;
+        padding: 5px 8px;
+        font-size: 11px;
+        background: #fff;
+        vertical-align: middle;
+    }
+    .daily-report-legend-cell b { font-size: 12px; }
+    .daily-report-legend-note {
+        grid-column: 1 / -1;
+        text-align: right;
+        font-size: 10px;
+        color: #444;
+        padding: 2px 8px 4px;
+        background: #fafafa;
+        border-bottom: 1px solid #b4b4b4;
+    }
+    .daily-report-table {
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed;
+    }
+    .daily-report-table th {
+        background: #d9d9d9;
+        border: 1px solid #808080;
+        padding: 6px 4px;
+        font-weight: 700;
+        text-align: center;
+        font-size: 12px;
+    }
+    .daily-report-table td {
+        border: 1px solid #808080;
+        padding: 5px 6px;
+        vertical-align: middle;
+        line-height: 1.45;
+        word-break: keep-all;
+        overflow-wrap: break-word;
+    }
+    .daily-report-table .dr-col-id { width: 52px; text-align: center; }
+    .daily-report-table .dr-col-major { width: 88px; text-align: center; font-weight: 600; background: #fafafa; }
+    .daily-report-table .dr-col-sub { width: 108px; text-align: center; }
+    .daily-report-table .dr-col-work { text-align: left; }
+    .daily-report-table .dr-col-pct { width: 72px; text-align: center; }
+    .daily-report-table .dr-col-note { width: 140px; text-align: left; font-size: 11px; }
+    .daily-report-project-tag {
+        padding: 4px 10px;
+        background: #eef4fb;
+        border-bottom: 1px solid #c5d3e3;
+        font-size: 12px;
+        font-weight: 600;
+        color: #1565c0;
+    }
+    @media (max-width: 768px) {
+        .daily-report-date-box { flex: 0 0 140px; font-size: 16px; padding: 12px 8px; }
+    }
+    .daily-report-viewport--dashboard {
+        max-height: 420px;
+        overflow: auto;
+        margin: 4px 0 0 0;
+    }
+    .daily-report-viewport--dashboard .daily-report-sheet {
+        min-width: 520px;
+        font-size: 11px;
+    }
+    .daily-report-viewport--dashboard .daily-report-date-box {
+        flex: 0 0 130px;
+        font-size: 15px;
+        padding: 10px 8px;
+    }
+    .daily-report-top--compact {
+        border-bottom: 1px solid #b4b4b4;
+    }
+    .dashboard-report-split-title {
+        font-size: 13px;
+        font-weight: 700;
+        margin: 8px 0 6px 0;
+        color: #333;
+    }
+    @media print {
+        .daily-report-viewport { border: none; overflow: visible; }
+    }
+
+    /* ========================================================= */
     /* [보고서 인쇄/PDF 최적화 CSS] */
     /* ========================================================= */
     @media print {
@@ -147,8 +317,122 @@ st.markdown("""
 
 # --- [파일 캐시] 구글 시트 데이터를 로컬 파일로 저장/로드 (앱 재시작 후에도 유지) ---
 CACHE_DIR = pathlib.Path("pms_sheet_cache")
-FILE_CACHE_TTL = 300  # 초 (5분). 이 시간 안에는 파일에서만 읽음
+FILE_CACHE_TTL = int(os.environ.get("PMS_CACHE_TTL", "300"))  # 초 (기본 5분). 0이면 파일 캐시 미사용
+SHEET_CACHE_ENABLED = os.environ.get("PMS_SHEET_CACHE", "true").strip().lower() not in (
+    "0", "false", "no", "off",
+)
 WORKSHEET_LIST_CACHE = CACHE_DIR / "worksheet_list.json"  # 프로젝트 목록 캐시 파일
+MENU_VISIBILITY_CACHE = CACHE_DIR / "menu_visibility.json"  # 일반 사용자 메뉴 숨김 설정
+
+ALL_PMO_MENUS = [
+    "통합 대시보드",
+    "주간 최종 보고(표)",
+    "일일보고",
+    "프로젝트 상세",
+    "일 발전량 분석",
+    "경영지표(KPI)",
+    "마스터 설정",
+]
+ADMIN_MENU = "마스터 설정"
+ADMIN_USER_ID = "admin"
+MENU_CONFIG_SHEET = "Control_Center"
+MENU_CONFIG_KEY = "hidden_pmo_menus"
+DAILY_REPORT_SHEET = "일일보고"
+DAILY_REPORT_COLUMNS = [
+    "날짜",
+    "프로젝트명",
+    "구분",
+    "대분류",
+    "세부항목",
+    "업무내용",
+    "공정율(%)",
+    "비고",
+    "저장시각",
+    "저장자",
+]
+
+
+def is_admin_user() -> bool:
+    return str(st.session_state.get("user_id", "")).strip().lower() == ADMIN_USER_ID
+
+
+def _normalize_hidden_menu_list(hidden) -> list:
+    if not isinstance(hidden, list):
+        return []
+    return [m for m in hidden if m in ALL_PMO_MENUS and m != ADMIN_MENU]
+
+
+def _load_user_hidden_menus_from_file() -> list:
+    if not MENU_VISIBILITY_CACHE.exists():
+        return []
+    try:
+        with open(MENU_VISIBILITY_CACHE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return _normalize_hidden_menu_list(data.get("hidden_menus", []))
+    except Exception:
+        pass
+    return []
+
+
+def _load_user_hidden_menus_from_sheet(sh) -> Optional[list]:
+    try:
+        ws = safe_api_call(sh.worksheet, MENU_CONFIG_SHEET)
+        rows = safe_api_call(ws.get_all_values)
+        for row in rows:
+            if len(row) >= 2 and str(row[0]).strip() == MENU_CONFIG_KEY:
+                parsed = json.loads(str(row[1]).strip() or "[]")
+                return _normalize_hidden_menu_list(parsed)
+    except Exception:
+        pass
+    return None
+
+
+def _save_user_hidden_menus_to_sheet(sh, hidden: list) -> None:
+    valid = _normalize_hidden_menu_list(hidden)
+    payload = json.dumps(valid, ensure_ascii=False)
+    try:
+        ws = safe_api_call(sh.worksheet, MENU_CONFIG_SHEET)
+    except WorksheetNotFound:
+        ws = safe_api_call(sh.add_worksheet, title=MENU_CONFIG_SHEET, rows="100", cols="10")
+        safe_api_call(ws.update, "A1", [["설정키", "설정값"]])
+    rows = safe_api_call(ws.get_all_values)
+    target_row = None
+    for idx, row in enumerate(rows, start=1):
+        if row and str(row[0]).strip() == MENU_CONFIG_KEY:
+            target_row = idx
+            break
+    if target_row is None:
+        safe_api_call(ws.append_row, [MENU_CONFIG_KEY, payload])
+    else:
+        safe_api_call(ws.update, f"B{target_row}", [[payload]])
+
+
+def load_user_hidden_menus(sh=None) -> list:
+    """파일 캐시 + 구글 시트(Control_Center)에서 숨김 메뉴 로드 (시트 우선)"""
+    if sh is not None:
+        sheet_hidden = _load_user_hidden_menus_from_sheet(sh)
+        if sheet_hidden is not None:
+            _save_file_cache(MENU_VISIBILITY_CACHE, {"hidden_menus": sheet_hidden})
+            return sheet_hidden
+    return _load_user_hidden_menus_from_file()
+
+
+def save_user_hidden_menus(sh, hidden: list) -> None:
+    valid = _normalize_hidden_menu_list(hidden)
+    _save_file_cache(MENU_VISIBILITY_CACHE, {"hidden_menus": valid})
+    if sh is not None:
+        _save_user_hidden_menus_to_sheet(sh, valid)
+
+
+def get_pmo_menus_for_current_user(sh=None) -> list:
+    """현재 로그인 사용자에게 표시할 PMO 메뉴 (admin은 전체, 일반 사용자는 숨김 설정 반영)"""
+    if is_admin_user():
+        return list(ALL_PMO_MENUS)
+    hidden = set(load_user_hidden_menus(sh))
+    hidden.add(ADMIN_MENU)
+    return [m for m in ALL_PMO_MENUS if m not in hidden]
+
 
 def _sheet_name_to_filename(name: str) -> str:
     """시트명을 파일명으로 사용 가능하게 정리"""
@@ -177,12 +461,14 @@ def _save_file_cache(cache_path: pathlib.Path, data) -> None:
     except Exception:
         pass
 
-def clear_file_cache(worksheet_name: str = None):
-    """파일 캐시 삭제. worksheet_name 이 None 이면 전체 삭제"""
+def clear_file_cache(worksheet_name: str = None, preserve_menu_config: bool = True):
+    """파일 캐시 삭제. worksheet_name 이 None 이면 전체 삭제 (메뉴 표시 설정 파일은 유지 가능)"""
     if not CACHE_DIR.exists():
         return
     if worksheet_name is None:
         for f in CACHE_DIR.glob("*.json"):
+            if preserve_menu_config and f.name == MENU_VISIBILITY_CACHE.name:
+                continue
             try:
                 f.unlink()
             except Exception:
@@ -207,6 +493,49 @@ def clear_file_cache(worksheet_name: str = None):
                 f.unlink()
             except Exception:
                 pass
+
+
+def refresh_sheet_data_cache(project_names=None, invalidate_editor: bool = True) -> None:
+    """
+    구글 시트 읽기 캐시(메모리 + 파일)를 비우고 다음 조회 시 시트에서 다시 읽게 함.
+    project_names 가 있으면 해당 프로젝트 파일 캐시만 삭제.
+    """
+    cached_get_all_values.clear()
+    cached_get_all_records.clear()
+    cached_get_head.clear()
+    if project_names:
+        for p in project_names:
+            clear_file_cache(p, preserve_menu_config=True)
+    else:
+        clear_file_cache(preserve_menu_config=True)
+    if invalidate_editor:
+        invalidate_process_edit_cache(project_names if project_names else None)
+        if project_names:
+            for p in project_names:
+                st.session_state.pop(f"process_edit_sig_{p}", None)
+        else:
+            for key in list(st.session_state.keys()):
+                if str(key).startswith("process_edit_sig_"):
+                    st.session_state.pop(key, None)
+    st.session_state["sheet_cache_refreshed_at"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def render_sidebar_cache_controls():
+    """사이드바: 캐시 안내 + 수동 새로고침 (5분 캐시는 유지, 필요 시 즉시 갱신)"""
+    st.sidebar.divider()
+    if SHEET_CACHE_ENABLED and FILE_CACHE_TTL > 0:
+        refreshed = st.session_state.get("sheet_cache_refreshed_at")
+        if refreshed:
+            st.sidebar.caption(f"📦 시트 캐시: 최근 새로고침 {refreshed}")
+        else:
+            st.sidebar.caption(f"📦 시트 캐시: 최대 {FILE_CACHE_TTL // 60}분 유지 (빠른 조회용)")
+    else:
+        st.sidebar.caption("📦 시트 캐시: 꺼짐 (매번 구글 시트 조회)")
+    if st.sidebar.button("🔄 구글 시트 새로고침", use_container_width=True, key="sidebar_refresh_sheet_cache"):
+        with st.spinner("구글 시트에서 최신 데이터를 불러오는 중…"):
+            refresh_sheet_data_cache()
+        st.rerun()
+
 
 def safe_api_call(func, *args, **kwargs):
     """API 할당량 초과(429) 방지를 위한 자동 재시도 함수"""
@@ -342,7 +671,7 @@ def get_client():
 @st.cache_data(ttl=300, show_spinner=False)
 def cached_get_all_values(spreadsheet_name: str, worksheet_name: str):
     """지정 워크시트 전체 데이터를 5분간 메모리 + 파일 캐시"""
-    if spreadsheet_name == "pms_db":
+    if SHEET_CACHE_ENABLED and FILE_CACHE_TTL > 0 and spreadsheet_name == "pms_db":
         cache_path = CACHE_DIR / f"{_sheet_name_to_filename(worksheet_name)}.json"
         loaded = _load_file_cache(cache_path, FILE_CACHE_TTL)
         if loaded is not None:
@@ -353,7 +682,7 @@ def cached_get_all_values(spreadsheet_name: str, worksheet_name: str):
     sh = safe_api_call(client.open, spreadsheet_name)
     ws = safe_api_call(sh.worksheet, worksheet_name)
     data = safe_api_call(ws.get_all_values)
-    if spreadsheet_name == "pms_db":
+    if SHEET_CACHE_ENABLED and FILE_CACHE_TTL > 0 and spreadsheet_name == "pms_db":
         cache_path = CACHE_DIR / f"{_sheet_name_to_filename(worksheet_name)}.json"
         _save_file_cache(cache_path, data)
     return data
@@ -374,7 +703,7 @@ def cached_get_head(spreadsheet_name: str, worksheet_name: str, max_rows: int = 
     대시보드용: 상단 N행(A1~J{max_rows})만 읽어서 평균 진척 계산
     → 프로젝트별 행이 많아져도 속도 유지. 파일 캐시 지원.
     """
-    if spreadsheet_name == "pms_db":
+    if SHEET_CACHE_ENABLED and FILE_CACHE_TTL > 0 and spreadsheet_name == "pms_db":
         cache_path = CACHE_DIR / f"{_sheet_name_to_filename(worksheet_name)}_head_{max_rows}.json"
         loaded = _load_file_cache(cache_path, FILE_CACHE_TTL)
         if loaded is not None:
@@ -386,7 +715,7 @@ def cached_get_head(spreadsheet_name: str, worksheet_name: str, max_rows: int = 
     ws = safe_api_call(sh.worksheet, worksheet_name)
     rng = f"A1:J{max_rows}"
     data = safe_api_call(ws.get, rng)
-    if spreadsheet_name == "pms_db":
+    if SHEET_CACHE_ENABLED and FILE_CACHE_TTL > 0 and spreadsheet_name == "pms_db":
         cache_path = CACHE_DIR / f"{_sheet_name_to_filename(worksheet_name)}_head_{max_rows}.json"
         _save_file_cache(cache_path, data)
     return data
@@ -550,6 +879,58 @@ def calc_planned_progress(start, end, target_date=None):
     except: 
         return 0.0
 
+
+def _task_duration_days(start, end) -> float:
+    """공정 1건의 가중치 = 일정 기간(일). 날짜 없으면 1일."""
+    try:
+        s = pd.to_datetime(start, errors="coerce")
+        e = pd.to_datetime(end, errors="coerce")
+        if pd.isna(s) or pd.isna(e):
+            return 1.0
+        days = abs((pd.Timestamp(e) - pd.Timestamp(s)).days)
+        return float(max(1, days))
+    except Exception:
+        return 1.0
+
+
+def calc_weighted_progress_mean(df: pd.DataFrame, progress_values: pd.Series) -> float:
+    """
+    공정 진행률의 기간 가중 평균.
+    실적% = Σ(진행률 × 공정일수) / Σ(공정일수)
+    """
+    if df is None or df.empty or progress_values is None or len(progress_values) == 0:
+        return 0.0
+    p = pd.to_numeric(progress_values, errors="coerce").fillna(0).astype(float)
+    if len(df) != len(p):
+        return float(p.mean())
+    weights = df.apply(
+        lambda r: _task_duration_days(r.get("시작일"), r.get("종료일")),
+        axis=1,
+    ).astype(float)
+    total_w = float(weights.sum())
+    if total_w <= 0:
+        return float(p.mean())
+    return float((p * weights).sum() / total_w)
+
+
+def calc_weighted_actual_progress(df: pd.DataFrame) -> float:
+    """실적(실행) 진행률 — 기간 가중 평균"""
+    if df.empty or "진행률" not in df.columns:
+        return 0.0
+    return round(calc_weighted_progress_mean(df, df["진행률"]), 1)
+
+
+def calc_weighted_planned_progress(df: pd.DataFrame, target_date=None) -> float:
+    """계획 진행률 — 기간 가중 평균"""
+    if df.empty:
+        return 0.0
+    planned = df.apply(
+        lambda r: calc_planned_progress(r.get("시작일"), r.get("종료일"), target_date),
+        axis=1,
+    )
+    return round(calc_weighted_progress_mean(df, planned), 1)
+
+
 def navigate_to_project(p_name):
     st.session_state.selected_menu = "프로젝트 상세"
     st.session_state.selected_pjt = p_name
@@ -557,6 +938,161 @@ def navigate_to_project(p_name):
 def set_top_menu(menu_name: str):
     """상단 메뉴 클릭 시 선택 메뉴 변경 (콜백 종료 후 Streamlit이 자동 리런)"""
     st.session_state.selected_menu = menu_name
+
+
+SCHEDULE_COLUMNS = ["시작일", "종료일", "대분류", "구분", "진행상태", "비고", "진행률"]
+
+
+def _sheet_data_signature(data: list) -> str:
+    """구글 시트 원본 데이터 변경 여부 감지용 (엑셀 업로드 후 화면 갱신)"""
+    try:
+        payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+        return hashlib.md5(payload.encode("utf-8")).hexdigest()
+    except Exception:
+        return str(time.time())
+
+
+def invalidate_process_edit_cache(project_names=None):
+    """엑셀 업로드·시트 동기화 후 프로젝트 상세 편집기 세션 캐시 무효화"""
+    if project_names is None:
+        st.session_state.pop("process_edit_df", None)
+        st.session_state.pop("process_edit_pjt", None)
+        st.session_state.pop("process_edit_invalidated_pjts", None)
+        return
+    names = {str(p).strip() for p in project_names if str(p).strip()}
+    if not names:
+        return
+    invalidated = set(st.session_state.get("process_edit_invalidated_pjts") or [])
+    invalidated.update(names)
+    st.session_state["process_edit_invalidated_pjts"] = invalidated
+    if st.session_state.get("process_edit_pjt") in names:
+        st.session_state.pop("process_edit_df", None)
+        st.session_state.pop("process_edit_pjt", None)
+
+
+def _excel_cell_to_sheet_str(val) -> str:
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return ""
+    if isinstance(val, (datetime.date, datetime.datetime)):
+        return val.strftime("%Y-%m-%d")
+    if hasattr(val, "strftime"):
+        try:
+            return val.strftime("%Y-%m-%d")
+        except Exception:
+            pass
+    s = str(val).strip()
+    if not s or s.lower() in ("nan", "none", "nat"):
+        return ""
+    if len(s) >= 10 and s[4] == "-" and s[7] == "-":
+        return s[:10]
+    try:
+        parsed = pd.to_datetime(s, errors="coerce")
+        if pd.notna(parsed):
+            return parsed.strftime("%Y-%m-%d")
+    except Exception:
+        pass
+    return s
+
+
+def _normalize_excel_schedule_df(df_up: pd.DataFrame) -> pd.DataFrame:
+    """엑셀 시트 → 공정표 A~G열 DataFrame (헤더·빈행·날짜 형식 정리)"""
+    if df_up is None or df_up.empty:
+        return pd.DataFrame(columns=SCHEDULE_COLUMNS)
+
+    df = df_up.copy()
+    df.columns = [str(c).strip() for c in df.columns]
+    rename_map = {}
+    for i, col in enumerate(df.columns):
+        if col in SCHEDULE_COLUMNS:
+            rename_map[col] = col
+        elif i < len(SCHEDULE_COLUMNS):
+            rename_map[col] = SCHEDULE_COLUMNS[i]
+    df = df.rename(columns=rename_map)
+    for col in SCHEDULE_COLUMNS:
+        if col not in df.columns:
+            df[col] = ""
+    df = df[SCHEDULE_COLUMNS]
+    df = df.dropna(how="all")
+    df = df[~df.apply(lambda r: str(r.get("시작일", "")).strip() == "시작일", axis=1)]
+
+    for col in ("시작일", "종료일"):
+        df[col] = df[col].apply(_excel_cell_to_sheet_str)
+    for col in ("대분류", "구분", "진행상태", "비고"):
+        df[col] = df[col].apply(
+            lambda v: "" if pd.isna(v) else str(v).strip().replace("nan", "").replace("None", "")
+        )
+    df["진행률"] = pd.to_numeric(df["진행률"], errors="coerce").fillna(0)
+    return df.reset_index(drop=True)
+
+
+def _extract_pm_weekly_from_sheet_rows(existing_rows: list):
+    pm, this_w, next_w = "", "", ""
+    if len(existing_rows) > 1:
+        row = existing_rows[1]
+        if len(row) > 7:
+            pm = str(row[7]).strip()
+        if len(row) > 8:
+            this_w = str(row[8]).strip()
+        if len(row) > 9:
+            next_w = str(row[9]).strip()
+    return pm, this_w, next_w
+
+
+def _schedule_df_to_sheet_rows(df: pd.DataFrame, pm: str = "", this_w: str = "", next_w: str = "") -> list:
+    """공정표 DataFrame → 구글 시트 A1 형식 (헤더 + PM/금주/차주 열 포함)"""
+    header = SCHEDULE_COLUMNS + ["PM", "금주", "차주"]
+    rows = [header]
+    if df.empty:
+        rows.append([""] * 7 + [pm, this_w, next_w])
+        return rows
+    for i, (_, row) in enumerate(df.iterrows()):
+        r7 = [_excel_cell_to_sheet_str(row[c]) for c in SCHEDULE_COLUMNS]
+        r7[6] = str(int(row["진행률"])) if pd.notna(row["진행률"]) else "0"
+        if i == 0:
+            r7.extend([pm, this_w, next_w])
+        else:
+            r7.extend([pm, "", ""])
+        rows.append(r7)
+    return rows
+
+
+def sync_worksheet_from_excel_df(ws, df_up: pd.DataFrame) -> int:
+    """엑셀 DataFrame을 프로젝트 시트 형식에 맞게 업로드 (PM·금주·차주 유지)"""
+    existing = safe_api_call(ws.get_all_values)
+    pm, this_w, next_w = _extract_pm_weekly_from_sheet_rows(existing)
+    df_norm = _normalize_excel_schedule_df(df_up)
+    full_data = _schedule_df_to_sheet_rows(df_norm, pm, this_w, next_w)
+    safe_api_call(ws.clear)
+    safe_api_call(ws.update, "A1", full_data)
+    return len(df_norm)
+
+
+def _gantt_month_labels(min_d: pd.Timestamp, max_d: pd.Timestamp) -> list:
+    """간트 상단 월 눈금 라벨 (26.4 형식)"""
+    start = pd.Timestamp(year=min_d.year, month=min_d.month, day=1)
+    end = pd.Timestamp(year=max_d.year, month=max_d.month, day=1)
+    months = pd.date_range(start, end, freq="MS")
+    if len(months) == 0:
+        return [f"{min_d.year % 100}.{min_d.month}"]
+    return [f"{d.year % 100}.{d.month}" for d in months]
+
+
+def _render_gantt_month_ruler(min_d: pd.Timestamp, max_d: pd.Timestamp) -> None:
+    """차트 본문 스크롤 시에도 남는 상단 월(년.월) 눈금 — 엑셀 틀 고정 상단 행과 유사"""
+    labels = _gantt_month_labels(min_d, max_d)
+    cells = "".join(f'<span class="gantt-month-cell">{lbl}</span>' for lbl in labels)
+    st.markdown(
+        f"""
+        <div class="gantt-freeze-panel">
+            <div class="gantt-month-ruler-wrap">
+                <div class="gantt-month-ruler-spacer" title="공정명 영역"></div>
+                <div class="gantt-month-ruler-track">{cells}</div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 
 def render_print_button():
     """자바스크립트를 이용해 브라우저 인쇄(PDF 저장) 창을 띄우는 버튼"""
@@ -601,7 +1137,7 @@ def build_project_status_report_df(pjt_list):
     """
     구글 시트 프로젝트 탭과 동일 규칙으로 집계 (통합 대시보드와 동일 데이터 소스).
     - PM/금주/차주: 2행 H,I,J
-    - 진행률: 공정표 '진행률' 열 평균, 계획: 시작~종료일 기준 calc_planned_progress 평균
+    - 진행률: 공정표 '진행률' 열 기간(일정) 가중 평균, 계획: 시작~종료일 기준 calc_planned_progress 기간 가중 평균
     """
     def _extract_capacity_mw(project_name: str):
         """
@@ -642,14 +1178,8 @@ def build_project_status_report_df(pjt_list):
             else:
                 df = pd.DataFrame()
             if not df.empty and "진행률" in df.columns:
-                avg_act = round(pd.to_numeric(df["진행률"], errors="coerce").fillna(0).mean(), 1)
-                avg_plan = round(
-                    df.apply(
-                        lambda r: calc_planned_progress(r.get("시작일"), r.get("종료일")),
-                        axis=1,
-                    ).mean(),
-                    1,
-                )
+                avg_act = calc_weighted_actual_progress(df)
+                avg_plan = calc_weighted_planned_progress(df)
             else:
                 avg_act = 0.0
                 avg_plan = 0.0
@@ -878,13 +1408,8 @@ def view_dashboard(sh, pjt_list):
                     df = pd.DataFrame()
 
                 if not df.empty and '진행률' in df.columns:
-                    avg_act = round(pd.to_numeric(df['진행률'], errors='coerce').fillna(0).mean(), 1)
-                    avg_plan = round(
-                        df.apply(
-                            lambda r: calc_planned_progress(r.get('시작일'), r.get('종료일')),
-                            axis=1
-                        ).mean(), 1
-                    )
+                    avg_act = calc_weighted_actual_progress(df)
+                    avg_plan = calc_weighted_planned_progress(df)
                 else:
                     avg_act = 0.0; avg_plan = 0.0
                 
@@ -979,32 +1504,34 @@ def view_dashboard(sh, pjt_list):
     elif display_cnt == 0:
         st.info("선택한 담당자·상태 조건에 맞는 프로젝트가 없습니다. 완료 건은 상태 필터에 '🔵 완료'를 추가하세요.")
     else:
-        cols = st.columns(2)
-        for idx, d in enumerate(filtered_data):
-            with cols[idx % 2]:
-                with st.container(border=True):
-                    h_col1, h_col2 = st.columns([7.5, 2.5], gap="small")
-                    
-                    with h_col1:
-                        st.markdown(f"""
-                            <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 2px;">
-                                <h4 style="font-weight:700; margin:0; font-size:clamp(13.5px, 3.5vw, 16px); word-break:keep-all; line-height:1.2;">
-                                    🏗️ {d['p_name']}
-                                </h4>
-                                <span class="pm-tag" style="margin:0;">PM: {d['pm_name']}</span>
-                                <span class="status-badge {d['b_style']}" style="margin:0;">{d['status_ui']}</span>
-                            </div>
-                        """, unsafe_allow_html=True)
-                        
-                    with h_col2:
-                        st.button("🔍 상세", key=f"btn_go_{d['p_name']}", on_click=navigate_to_project, args=(d['p_name'],), use_container_width=True)
-                    
-                    this_w_html = str(d['this_w']).replace('\n', '<br>')
-                    next_w_html = str(d['next_w']).replace('\n', '<br>')
-                    fs = st.session_state.get("dashboard_report_font_size", 12)
+        daily_df = load_daily_report_df(sh)
+        for d in filtered_data:
+            with st.container(border=True):
+                h_col1, h_col2 = st.columns([7.5, 2.5], gap="small")
 
+                with h_col1:
+                    st.markdown(f"""
+                        <div style="display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 2px;">
+                            <h4 style="font-weight:700; margin:0; font-size:clamp(13.5px, 3.5vw, 16px); word-break:keep-all; line-height:1.2;">
+                                🏗️ {d['p_name']}
+                            </h4>
+                            <span class="pm-tag" style="margin:0;">PM: {d['pm_name']}</span>
+                            <span class="status-badge {d['b_style']}" style="margin:0;">{d['status_ui']}</span>
+                        </div>
+                    """, unsafe_allow_html=True)
+
+                with h_col2:
+                    st.button("🔍 상세", key=f"btn_go_{d['p_name']}", on_click=navigate_to_project, args=(d['p_name'],), use_container_width=True)
+
+                weekly_col, daily_col = st.columns([1, 1.05], gap="medium")
+                fs = st.session_state.get("dashboard_report_font_size", 12)
+                this_w_html = html_module.escape(str(d['this_w'])).replace('\n', '<br>')
+                next_w_html = html_module.escape(str(d['next_w'])).replace('\n', '<br>')
+
+                with weekly_col:
+                    st.markdown('<p class="dashboard-report-split-title">📋 주간보고</p>', unsafe_allow_html=True)
                     st.markdown(f'''
-                        <div style="margin-bottom:4px; margin-top:2px;">
+                        <div style="margin-bottom:4px;">
                             <p style="font-size:{fs}px; opacity: 0.7; margin-top:0; margin-bottom:4px;">계획: {d['avg_plan']}% | 실적: {d['avg_act']}%</p>
                             <div class="weekly-box" style="margin-top:0; font-size:{fs}px;">
                                 <div style="margin-bottom: 8px;"><b>[금주]</b><br>{this_w_html}</div>
@@ -1012,8 +1539,27 @@ def view_dashboard(sh, pjt_list):
                             </div>
                         </div>
                     ''', unsafe_allow_html=True)
-                    
                     st.progress(min(1.0, max(0.0, d['avg_act']/100)))
+
+                with daily_col:
+                    st.markdown('<p class="dashboard-report-split-title">📋 일일보고</p>', unsafe_allow_html=True)
+                    dr_date, dr_rows = _get_latest_daily_report_for_project(daily_df, d['p_name'])
+                    if dr_rows:
+                        st.caption(f"최근 일자: {_daily_report_date_korean(dr_date)}")
+                        _render_daily_report_section_table(
+                            dr_rows,
+                            dr_date,
+                            project_name=None,
+                            compact=True,
+                        )
+                    else:
+                        st.markdown(
+                            '<div class="weekly-box" style="font-size:12px; opacity:0.85;">'
+                            "저장된 일일보고가 없습니다.<br>"
+                            "<span style='font-size:11px;'>일일보고 메뉴에서 작성·업로드하세요.</span>"
+                            "</div>",
+                            unsafe_allow_html=True,
+                        )
 
 
 def view_weekly_final_report(sh, pjt_list):
@@ -1024,7 +1570,8 @@ def view_weekly_final_report(sh, pjt_list):
     with col_btn:
         render_print_button()
     st.caption(
-        "데이터는 구글 시트 `pms_db`의 각 프로젝트 시트(공정 진행률 평균, 2행 H·I·J의 PM·금주·차주)와 동일합니다."
+        "데이터는 구글 시트 `pms_db`의 각 프로젝트 시트와 동일합니다. "
+        "**실적·계획%**는 공정별 진행률을 **일정 기간(종료일−시작일)으로 가중**한 평균입니다."
     )
 
     with st.spinner("프로젝트별 데이터를 불러오는 중…"):
@@ -1211,10 +1758,24 @@ def view_project_detail(sh, pjt_list):
             if col in df_edit.columns:
                 df_edit[col] = df_edit[col].astype(str).replace({"None": "", "nan": "", "NaN": ""})
 
-        # 편집 내용 유지: 프로젝트별로 에디터용 데이터프레임을 세션에 보관
-        if "process_edit_df" not in st.session_state or st.session_state.get("process_edit_pjt") != selected_pjt:
+        # 편집 내용 유지: 프로젝트별 세션 보관 (단, 시트 데이터가 바뀌면 자동 재로드)
+        data_sig = _sheet_data_signature(data)
+        sig_key = f"process_edit_sig_{selected_pjt}"
+        invalidated = set(st.session_state.get("process_edit_invalidated_pjts") or ())
+        sheet_changed = st.session_state.get(sig_key) != data_sig
+        need_reload = (
+            "process_edit_df" not in st.session_state
+            or st.session_state.get("process_edit_pjt") != selected_pjt
+            or selected_pjt in invalidated
+            or sheet_changed
+        )
+        if need_reload:
             st.session_state.process_edit_df = df_edit.copy()
             st.session_state.process_edit_pjt = selected_pjt
+            st.session_state[sig_key] = data_sig
+            if selected_pjt in invalidated:
+                invalidated.discard(selected_pjt)
+                st.session_state.process_edit_invalidated_pjts = invalidated
         process_df = st.session_state.process_edit_df
 
         ws = safe_api_call(sh.worksheet, selected_pjt)
@@ -1279,11 +1840,13 @@ def view_project_detail(sh, pjt_list):
                     period_start = f"{min_d.year % 100}.{min_d.month}"
                     period_end = f"{max_d.year % 100}.{max_d.month}"
                     
-                    # 상단 고정: 프로젝트 기간 표시 (스크롤해도 보이도록)
+                    # 상단 고정: 프로젝트 기간 + 월 눈금(스크롤해도 유지)
                     st.markdown(
                         f'<div class="gantt-sticky-header">📅 프로젝트 기간: <strong>{period_start}</strong> ~ <strong>{period_end}</strong></div>',
                         unsafe_allow_html=True
                     )
+                    _render_gantt_month_ruler(min_d, max_d)
+                    st.caption("↕ 공정이 많으면 아래 차트 영역만 스크롤됩니다. 상단 기간·월 눈금은 고정됩니다.")
                     
                     # 진행률별 색상 대비 강화 (0=빨강, 30=주황, 60=노랑·연두, 100=초록)
                     progress_colorscale = [
@@ -1327,7 +1890,7 @@ def view_project_detail(sh, pjt_list):
                         line_dash="dash",
                         line_color="rgb(120, 60, 180)",
                         annotation_text=" 오늘 ",
-                        annotation_position="top",
+                        annotation_position="bottom",
                         annotation_font=dict(color="rgb(120, 60, 180)", size=12, weight="bold"),
                         annotation_bgcolor="rgba(240,230,255,0.9)",
                         annotation_borderpad=4,
@@ -1335,10 +1898,12 @@ def view_project_detail(sh, pjt_list):
                     
                     fig.update_xaxes(
                         type="date",
+                        side="top",
                         dtick="M1",
                         tickformat="%y.%-m",
                         tickangle=0,
                         tickfont=dict(size=11),
+                        showticklabels=False,
                         showgrid=True,
                         gridwidth=1,
                         gridcolor='rgba(200, 200, 200, 0.7)',
@@ -1367,18 +1932,25 @@ def view_project_detail(sh, pjt_list):
                     )
                     
                     # 좌측 여백 축소 → 차트 영역 확대 (모바일에서 그래프가 크게 보이도록)
+                    chart_h = max(500, len(cdf) * 40)
                     fig.update_layout(
-                        height=max(500, len(cdf) * 40),
+                        height=chart_h,
                         bargap=0.25,
                         bargroupgap=0.08,
                         plot_bgcolor='rgb(252,252,252)',
                         paper_bgcolor='white',
-                        margin=dict(l=78, r=88, t=36, b=45),
+                        margin=dict(l=78, r=88, t=28, b=28),
                         font=dict(family="Pretendard, sans-serif", size=10),
                         showlegend=False,
                     )
                     
-                    st.plotly_chart(fig, use_container_width=True)
+                    gantt_panel_h = min(720, max(380, min(chart_h, len(cdf) * 36 + 90)))
+                    with st.container(height=gantt_panel_h, border=True):
+                        st.plotly_chart(
+                            fig,
+                            use_container_width=True,
+                            key=f"gantt_chart_{selected_pjt}_{data_sig[:10]}",
+                        )
                 else:
                     st.info("차트를 그릴 수 있는 유효한 날짜 데이터가 부족합니다. 편집기에서 날짜를 확인해 주세요.")
             except Exception as e:
@@ -1393,8 +1965,17 @@ def view_project_detail(sh, pjt_list):
                 if not sdf.empty:
                     min_d, max_d = sdf['시작일'].min(), sdf['종료일'].max()
                     d_range = pd.date_range(min_d, max_d, freq='W-MON').date.tolist()
-                    p_trend = [sdf.apply(lambda r: calc_planned_progress(r['시작일'], r['종료일'], d), axis=1).mean() for d in d_range]
-                    a_prog = pd.to_numeric(sdf['진행률'], errors='coerce').fillna(0).mean()
+                    p_trend = [
+                        calc_weighted_progress_mean(
+                            sdf,
+                            sdf.apply(
+                                lambda r: calc_planned_progress(r['시작일'], r['종료일'], d),
+                                axis=1,
+                            ),
+                        )
+                        for d in d_range
+                    ]
+                    a_prog = calc_weighted_actual_progress(sdf)
                     fig_s = go.Figure()
                     fig_s.add_trace(go.Scatter(x=[d.strftime("%Y-%m-%d") for d in d_range], y=p_trend, mode='lines+markers', name='계획'))
                     fig_s.add_trace(go.Scatter(x=[datetime.date.today().strftime("%Y-%m-%d")], y=[a_prog], mode='markers', name='현재 실적', marker=dict(size=12, color='red', symbol='star')))
@@ -1479,8 +2060,16 @@ def view_project_detail(sh, pjt_list):
                     st.success("성공적으로 업데이트 및 저장되었습니다!"); time.sleep(1); st.rerun()
 
         st.write("---")
-        st.subheader("📝 상세 공정표 편집 (A~G열 전용)")
-        st.info("✏️ **날짜·내용을 모두 입력한 뒤**, 맨 아래 **💾 변경사항 전체 저장** 버튼 **한 번만** 누르면 시트에 반영됩니다. (중간에 화면이 갱신되지 않도록 달력 적용은 폼으로 묶어 두었습니다.)")
+        h_edit1, h_edit2 = st.columns([5, 1])
+        with h_edit1:
+            st.subheader("📝 상세 공정표 편집 (A~G열 전용)")
+        with h_edit2:
+            st.write("")
+            if st.button("🔄 시트에서 새로고침", use_container_width=True, key=f"reload_sheet_{selected_pjt}"):
+                refresh_sheet_data_cache([selected_pjt])
+                st.session_state.pop(sig_key, None)
+                st.rerun()
+        st.info("✏️ **날짜·내용을 모두 입력한 뒤**, 맨 아래 **💾 변경사항 전체 저장** 버튼 **한 번만** 누르면 시트에 반영됩니다. (마스터 설정 엑셀 업로드 후에는 자동 반영되며, 안 보이면 **시트에서 새로고침**을 누르세요.)")
 
         # ---------- 달력: 폼으로 묶어서 '이 행에 적용' 클릭 시에만 전송 → 리프레시 최소화 ----------
         with st.expander("📅 달력으로 날짜 선택 (행 선택 후 시작일/종료일 설정)", expanded=False):
@@ -1529,7 +2118,13 @@ def view_project_detail(sh, pjt_list):
                 help="셀 클릭 또는 위 달력에서 선택",
             ),
         }
-        edited = st.data_editor(process_df, column_config=column_config, use_container_width=True, num_rows="dynamic", key="process_schedule_editor")
+        edited = st.data_editor(
+            process_df,
+            column_config=column_config,
+            use_container_width=True,
+            num_rows="dynamic",
+            key=f"process_schedule_editor_{selected_pjt}_{data_sig[:12]}",
+        )
         st.session_state.process_edit_df = edited
         
         def _date_cell_to_str(val):
@@ -1576,6 +2171,8 @@ def view_project_detail(sh, pjt_list):
             cached_get_all_values.clear()
             cached_get_head.clear()
             clear_file_cache(selected_pjt)
+            invalidate_process_edit_cache([selected_pjt])
+            st.session_state.pop(f"process_edit_sig_{selected_pjt}", None)
             st.success("데이터가 완벽하게 저장되었습니다!"); time.sleep(1); st.rerun()
 
 # 3. 일 발전량 및 일조 분석
@@ -1818,6 +2415,929 @@ def view_solar(sh):
     except Exception as e:
         st.error(f"분석 데이터를 불러올 수 없습니다: {e}")
 
+def _parse_korean_report_date(text: str) -> Optional[str]:
+    m = re.match(r"(\d{4})년(\d{2})월(\d{2})일", str(text or "").strip())
+    if not m:
+        return None
+    return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+
+
+def _guess_project_from_filename(filename: str, pjt_list: list) -> str:
+    base = pathlib.Path(str(filename or "")).stem
+    for p in pjt_list:
+        if p in base:
+            return p
+    m = re.search(r"\d{6}\s*(.+?)\s*일일보고", base)
+    if m:
+        guess = m.group(1).strip()
+        for p in pjt_list:
+            if guess in p or p in guess:
+                return p
+        return guess
+    return ""
+
+
+def parse_daily_report_xlsx(uploaded_file) -> list:
+    """
+    합천댐 일일보고 엑셀 형식 파싱.
+    반환: [{"date": "2026-06-02", "rows": [{구분, 대분류, 세부항목, 업무내용, 공정율, 비고}, ...]}, ...]
+    """
+    df = pd.read_excel(uploaded_file, sheet_name=0, header=None)
+    reports = []
+    report_date = None
+    rows = []
+    major_cat = ""
+
+    def _cell(row, idx):
+        if idx >= len(row) or pd.isna(row.iloc[idx]):
+            return ""
+        return str(row.iloc[idx]).strip()
+
+    def _flush():
+        nonlocal rows
+        if report_date and rows:
+            reports.append({"date": report_date, "rows": rows.copy()})
+
+    for idx in range(len(df)):
+        row = df.iloc[idx]
+        c0, c1, c2, c3, c9, c11 = (
+            _cell(row, 0),
+            _cell(row, 1),
+            _cell(row, 2),
+            _cell(row, 3),
+            _cell(row, 9),
+            _cell(row, 11),
+        )
+        parsed_date = _parse_korean_report_date(c0)
+        if parsed_date:
+            _flush()
+            rows = []
+            report_date = parsed_date
+            major_cat = ""
+            continue
+        if c0 == "구 분" or not report_date:
+            continue
+        if c1 and re.match(r"^\d+\.", c1):
+            major_cat = c1
+        if re.match(r"^\d+-\d+$", c0):
+            rows.append(
+                {
+                    "구분": c0,
+                    "대분류": major_cat,
+                    "세부항목": c2,
+                    "업무내용": c3,
+                    "공정율": "" if c9 in ("", "-") else c9,
+                    "비고": "" if c11 in ("", "-") else c11,
+                }
+            )
+        elif rows and (c3 or (c9 and c9 != "-") or (c11 and c11 != "-")):
+            last = rows[-1]
+            if c3:
+                last["업무내용"] = f"{last['업무내용']}\n{c3}".strip() if last["업무내용"] else c3
+            if c9 and c9 != "-":
+                last["공정율"] = c9
+            if c11 and c11 != "-":
+                last["비고"] = f"{last['비고']}\n{c11}".strip() if last["비고"] else c11
+    _flush()
+    return reports
+
+
+def _get_daily_report_worksheet(sh):
+    try:
+        return safe_api_call(sh.worksheet, DAILY_REPORT_SHEET)
+    except WorksheetNotFound:
+        ws = safe_api_call(sh.add_worksheet, title=DAILY_REPORT_SHEET, rows="5000", cols=str(len(DAILY_REPORT_COLUMNS)))
+        safe_api_call(ws.append_row, DAILY_REPORT_COLUMNS)
+        return ws
+
+
+def load_daily_report_df(sh) -> pd.DataFrame:
+    try:
+        raw = cached_get_all_records("pms_db", DAILY_REPORT_SHEET)
+        if not raw:
+            return pd.DataFrame(columns=DAILY_REPORT_COLUMNS)
+        df = pd.DataFrame(raw)
+        for col in DAILY_REPORT_COLUMNS:
+            if col not in df.columns:
+                df[col] = ""
+        return df[DAILY_REPORT_COLUMNS]
+    except Exception:
+        return pd.DataFrame(columns=DAILY_REPORT_COLUMNS)
+
+
+def save_daily_reports_to_sheet(sh, project_name: str, sections: list, user_id: str, overwrite_dates: bool = True) -> int:
+    """파싱된 일일보고 섹션을 pms_db 일일보고 시트에 저장. 반환: 저장 행 수"""
+    if not sections:
+        return 0
+    ws = _get_daily_report_worksheet(sh)
+    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    upload_dates = {s["date"] for s in sections}
+
+    if overwrite_dates:
+        existing = safe_api_call(ws.get_all_values)
+        if existing:
+            header = existing[0]
+            kept = [header]
+            for row in existing[1:]:
+                if len(row) < 2:
+                    kept.append(row)
+                    continue
+                row_date = str(row[0]).strip()[:10]
+                row_pjt = str(row[1]).strip()
+                if row_pjt == project_name and row_date in upload_dates:
+                    continue
+                kept.append(row)
+            safe_api_call(ws.clear)
+            if kept:
+                safe_api_call(ws.update, "A1", kept)
+
+    new_rows = []
+    for section in sections:
+        for item in section.get("rows", []):
+            new_rows.append(
+                [
+                    section["date"],
+                    project_name,
+                    item.get("구분", ""),
+                    item.get("대분류", ""),
+                    item.get("세부항목", ""),
+                    item.get("업무내용", ""),
+                    item.get("공정율", ""),
+                    item.get("비고", ""),
+                    now_str,
+                    user_id or "",
+                ]
+            )
+    for row in new_rows:
+        safe_api_call(ws.append_row, row, value_input_option="USER_ENTERED")
+    cached_get_all_records.clear()
+    return len(new_rows)
+
+
+DEFAULT_DAILY_REPORT_LEGEND = [
+    ("RFQ", "Request For Quotation"),
+    ("TBE", "Technical Bid Evaluation"),
+    ("IFA", "Issue For Approved"),
+    ("IFC", "Issue For Construction"),
+]
+
+
+def _daily_report_date_korean(date_iso: str) -> str:
+    try:
+        d = pd.to_datetime(str(date_iso)[:10])
+        return f"{d.year}년 {d.month:02d}월 {d.day:02d}일"
+    except Exception:
+        return str(date_iso)
+
+
+def _daily_report_escape(text) -> str:
+    if text is None or (isinstance(text, float) and pd.isna(text)):
+        return ""
+    return html_module.escape(str(text).strip()).replace("\n", "<br>")
+
+
+def _daily_report_sort_key(row: dict):
+    g = str(row.get("구분", ""))
+    m = re.match(r"(\d+)-(\d+)", g)
+    if m:
+        return (int(m.group(1)), int(m.group(2)))
+    return (99, 99)
+
+
+def _normalize_daily_report_rows(section_rows: list) -> list:
+    """저장 시트·파싱 결과를 동일 키로 정규화"""
+    out = []
+    for row in section_rows or []:
+        if not isinstance(row, dict):
+            continue
+        out.append(
+            {
+                "구분": str(row.get("구분", "")).strip(),
+                "대분류": str(row.get("대분류", "")).strip(),
+                "세부항목": str(row.get("세부항목", "")).strip(),
+                "업무내용": str(row.get("업무내용", "")).strip(),
+                "공정율": str(row.get("공정율", row.get("공정율(%)", ""))).strip(),
+                "비고": str(row.get("비고", "")).strip(),
+            }
+        )
+    return sorted(out, key=_daily_report_sort_key)
+
+
+def _daily_report_major_rowspans(rows: list) -> dict:
+    """대분류 열 rowspan: {시작행인덱스: (rowspan, 텍스트)}"""
+    info = {}
+    i = 0
+    while i < len(rows):
+        cat = rows[i].get("대분류", "")
+        j = i + 1
+        while j < len(rows) and rows[j].get("대분류", "") == cat:
+            j += 1
+        info[i] = (j - i, cat)
+        i = j
+    return info
+
+
+def _get_latest_daily_report_for_project(daily_df: pd.DataFrame, project_name: str):
+    """프로젝트별 가장 최근 일일보고 (일자, 행 목록)"""
+    if daily_df is None or daily_df.empty or not project_name:
+        return None, []
+    sub = daily_df[daily_df["프로젝트명"].astype(str) == str(project_name)]
+    if sub.empty:
+        return None, []
+    dates = sorted(sub["날짜"].astype(str).str[:10].unique().tolist(), reverse=True)
+    latest = dates[0]
+    rows = []
+    day_mask = sub["날짜"].astype(str).str.startswith(latest)
+    for _, r in sub.loc[day_mask].iterrows():
+        rows.append(
+            {
+                "구분": r.get("구분", ""),
+                "대분류": r.get("대분류", ""),
+                "세부항목": r.get("세부항목", ""),
+                "업무내용": r.get("업무내용", ""),
+                "공정율": r.get("공정율(%)", ""),
+                "비고": r.get("비고", ""),
+            }
+        )
+    return latest, _normalize_daily_report_rows(rows)
+
+
+def _build_daily_report_html(
+    date_iso: str,
+    section_rows: list,
+    project_name: str = None,
+    legend_note: str = "(6월24일마감)",
+    *,
+    show_legend: bool = True,
+    show_project_tag: bool = True,
+) -> str:
+    rows = _normalize_daily_report_rows(section_rows)
+    if not rows:
+        return "<p>표시할 항목이 없습니다.</p>"
+
+    major_spans = _daily_report_major_rowspans(rows)
+    legend_cells = ""
+    for abbr, desc in DEFAULT_DAILY_REPORT_LEGEND:
+        legend_cells += (
+            f'<div class="daily-report-legend-cell"><b>{html_module.escape(abbr)}</b> '
+            f"{html_module.escape(desc)}</div>"
+        )
+
+    body_rows = ""
+    for i, row in enumerate(rows):
+        body_rows += "<tr>"
+        body_rows += f'<td class="dr-col-id">{_daily_report_escape(row.get("구분", ""))}</td>'
+        if i in major_spans:
+            span, cat = major_spans[i]
+            body_rows += (
+                f'<td class="dr-col-major" rowspan="{span}">{_daily_report_escape(cat)}</td>'
+            )
+        body_rows += f'<td class="dr-col-sub">{_daily_report_escape(row.get("세부항목", ""))}</td>'
+        body_rows += f'<td class="dr-col-work">{_daily_report_escape(row.get("업무내용", ""))}</td>'
+        pct = row.get("공정율", "")
+        body_rows += f'<td class="dr-col-pct">{_daily_report_escape(pct if pct not in ("-", "") else "")}</td>'
+        body_rows += f'<td class="dr-col-note">{_daily_report_escape(row.get("비고", ""))}</td>'
+        body_rows += "</tr>"
+
+    project_bar = ""
+    if project_name and show_project_tag:
+        project_bar = (
+            f'<div class="daily-report-project-tag">🏗️ {html_module.escape(project_name)}</div>'
+        )
+
+    if show_legend:
+        top_block = f"""
+        <div class="daily-report-top">
+            <div class="daily-report-date-box">{_daily_report_date_korean(date_iso)}</div>
+            <div style="flex:1;display:flex;flex-direction:column;">
+                <div class="daily-report-legend-note">{html_module.escape(legend_note)}</div>
+                <div class="daily-report-legend">{legend_cells}</div>
+            </div>
+        </div>"""
+    else:
+        top_block = f"""
+        <div class="daily-report-top daily-report-top--compact">
+            <div class="daily-report-date-box">{_daily_report_date_korean(date_iso)}</div>
+        </div>"""
+
+    return f"""
+    <div class="daily-report-sheet">
+        {project_bar}
+        {top_block}
+        <table class="daily-report-table">
+            <thead>
+                <tr>
+                    <th class="dr-col-id">구분</th>
+                    <th class="dr-col-major">대분류</th>
+                    <th class="dr-col-sub">세부</th>
+                    <th class="dr-col-work">업무 내용</th>
+                    <th class="dr-col-pct">공정율<br>(%)</th>
+                    <th class="dr-col-note">비고</th>
+                </tr>
+            </thead>
+            <tbody>{body_rows}</tbody>
+        </table>
+    </div>
+    """
+
+
+# st.markdown은 <table> 등 블록 HTML을 렌더하지 못함 → st.html / components.html 사용
+_DAILY_REPORT_EMBED_CSS = """
+@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+body { margin: 0; padding: 0; font-family: 'Pretendard', 'Malgun Gothic', sans-serif; background: #fff; }
+.daily-report-viewport {
+    overflow-x: auto;
+    margin: 8px 0 16px 0;
+    border: 1px solid #b4b4b4;
+    border-radius: 4px;
+    background: #fff;
+}
+.daily-report-sheet {
+    min-width: 920px;
+    font-size: 12px;
+    color: #111;
+}
+.daily-report-top {
+    display: flex;
+    align-items: stretch;
+    border-bottom: 1px solid #b4b4b4;
+}
+.daily-report-date-box {
+    flex: 0 0 200px;
+    background: #4f81bd;
+    color: #fff;
+    font-size: 22px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 18px 12px;
+    border-right: 1px solid #b4b4b4;
+    text-align: center;
+    line-height: 1.35;
+}
+.daily-report-legend {
+    flex: 1 1 auto;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+}
+.daily-report-legend-cell {
+    border: 1px solid #b4b4b4;
+    border-top: none;
+    padding: 5px 8px;
+    font-size: 11px;
+    background: #fff;
+}
+.daily-report-legend-cell b { font-size: 12px; }
+.daily-report-legend-note {
+    grid-column: 1 / -1;
+    text-align: right;
+    font-size: 10px;
+    color: #444;
+    padding: 2px 8px 4px;
+    background: #fafafa;
+    border-bottom: 1px solid #b4b4b4;
+}
+.daily-report-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+}
+.daily-report-table th {
+    background: #d9d9d9;
+    border: 1px solid #808080;
+    padding: 6px 4px;
+    font-weight: 700;
+    text-align: center;
+    font-size: 12px;
+}
+.daily-report-table td {
+    border: 1px solid #808080;
+    padding: 5px 6px;
+    vertical-align: middle;
+    line-height: 1.45;
+    word-break: keep-all;
+    overflow-wrap: break-word;
+}
+.daily-report-table .dr-col-id { width: 52px; text-align: center; }
+.daily-report-table .dr-col-major { width: 88px; text-align: center; font-weight: 600; background: #fafafa; }
+.daily-report-table .dr-col-sub { width: 108px; text-align: center; }
+.daily-report-table .dr-col-work { text-align: left; }
+.daily-report-table .dr-col-pct { width: 72px; text-align: center; }
+.daily-report-table .dr-col-note { width: 140px; text-align: left; font-size: 11px; }
+.daily-report-project-tag {
+    padding: 4px 10px;
+    background: #eef4fb;
+    border-bottom: 1px solid #c5d3e3;
+    font-size: 12px;
+    font-weight: 600;
+    color: #1565c0;
+}
+.daily-report-viewport--dashboard {
+    max-height: 420px;
+    overflow: auto;
+    margin: 4px 0 0 0;
+}
+.daily-report-viewport--dashboard .daily-report-sheet {
+    min-width: 520px;
+    font-size: 11px;
+}
+.daily-report-viewport--dashboard .daily-report-date-box {
+    flex: 0 0 130px;
+    font-size: 15px;
+    padding: 10px 8px;
+}
+.daily-report-top--compact { border-bottom: 1px solid #b4b4b4; }
+"""
+
+
+def _estimate_daily_report_embed_height(row_count: int, compact: bool) -> int:
+    n = max(row_count, 1)
+    if compact:
+        return min(450, max(180, 72 + n * 28))
+    return min(1200, max(300, 140 + n * 32))
+
+
+def _render_daily_report_html_viewport(viewport_cls: str, sheet_html: str, *, row_count: int = 0, compact: bool = False):
+    """일일보고 HTML을 실제 표로 렌더 (markdown은 table 미지원)"""
+    payload = f'<div class="{viewport_cls}">{sheet_html}</div>'
+    if hasattr(st, "html"):
+        st.html(payload)
+        return
+    height = _estimate_daily_report_embed_height(row_count, compact)
+    doc = (
+        f"<!DOCTYPE html><html><head><meta charset='utf-8'>"
+        f"<style>{_DAILY_REPORT_EMBED_CSS}</style></head>"
+        f"<body>{payload}</body></html>"
+    )
+    components.html(doc, height=height, scrolling=True)
+
+
+def _render_daily_report_section_table(
+    section_rows: list,
+    date_iso: str,
+    project_name: str = None,
+    *,
+    compact: bool = False,
+):
+    if not section_rows:
+        st.info("표시할 항목이 없습니다.")
+        return
+    sheet_html = _build_daily_report_html(
+        date_iso,
+        section_rows,
+        project_name=project_name,
+        show_legend=not compact,
+        show_project_tag=not compact,
+    )
+    viewport_cls = "daily-report-viewport daily-report-viewport--dashboard" if compact else "daily-report-viewport"
+    _render_daily_report_html_viewport(
+        viewport_cls,
+        sheet_html,
+        row_count=len(section_rows),
+        compact=compact,
+    )
+
+
+def load_daily_report_rows(sh, project_name: str, date_iso: str) -> list:
+    """구글 시트에서 특정 프로젝트·일자 일일보고 행 목록"""
+    df = load_daily_report_df(sh)
+    if df.empty or not project_name:
+        return []
+    d = str(date_iso)[:10]
+    mask = (df["프로젝트명"].astype(str) == str(project_name)) & (
+        df["날짜"].astype(str).str.startswith(d)
+    )
+    rows = []
+    for _, r in df.loc[mask].iterrows():
+        rows.append(
+            {
+                "구분": r.get("구분", ""),
+                "대분류": r.get("대분류", ""),
+                "세부항목": r.get("세부항목", ""),
+                "업무내용": r.get("업무내용", ""),
+                "공정율": r.get("공정율(%)", ""),
+                "비고": r.get("비고", ""),
+            }
+        )
+    return _normalize_daily_report_rows(rows)
+
+
+def _copy_daily_report_rows(rows: list) -> list:
+    return copy.deepcopy(_normalize_daily_report_rows(rows))
+
+
+def _editor_df_from_rows(rows: list) -> pd.DataFrame:
+    cols = ["구분", "대분류", "세부항목", "업무내용", "공정율", "비고"]
+    norm = _normalize_daily_report_rows(rows)
+    if not norm:
+        return pd.DataFrame(columns=cols)
+    df = pd.DataFrame(norm)
+    for c in cols:
+        if c not in df.columns:
+            df[c] = ""
+    return df[cols]
+
+
+def _rows_from_editor_df(df: pd.DataFrame) -> list:
+    if df is None or df.empty:
+        return []
+    rows = []
+    for _, r in df.iterrows():
+        item = {
+            "구분": "" if pd.isna(r.get("구분")) else str(r.get("구분", "")).strip(),
+            "대분류": "" if pd.isna(r.get("대분류")) else str(r.get("대분류", "")).strip(),
+            "세부항목": "" if pd.isna(r.get("세부항목")) else str(r.get("세부항목", "")).strip(),
+            "업무내용": "" if pd.isna(r.get("업무내용")) else str(r.get("업무내용", "")).strip(),
+            "공정율": "" if pd.isna(r.get("공정율")) else str(r.get("공정율", "")).strip(),
+            "비고": "" if pd.isna(r.get("비고")) else str(r.get("비고", "")).strip(),
+        }
+        if not any(item[c] for c in ("구분", "세부항목", "업무내용", "대분류")):
+            continue
+        rows.append(item)
+    return _normalize_daily_report_rows(rows)
+
+
+def _daily_report_source_dates(sh, project_name: str, exclude_date: str = None) -> list:
+    df = load_daily_report_df(sh)
+    if df.empty or not project_name:
+        return []
+    mask = df["프로젝트명"].astype(str) == str(project_name)
+    dates = sorted(df.loc[mask, "날짜"].astype(str).str[:10].unique().tolist(), reverse=True)
+    if exclude_date:
+        dates = [d for d in dates if d != str(exclude_date)[:10]]
+    return dates
+
+
+def _render_daily_report_edit_and_save(
+    sh,
+    project_name: str,
+    date_iso: str,
+    initial_rows: list,
+    key_prefix: str,
+    show_html_preview: bool = True,
+):
+    """일일보고 편집기 + 미리보기 + 구글 시트 저장 + 일자 복사"""
+    if not project_name:
+        st.warning("프로젝트를 선택하세요.")
+        return
+
+    date_iso = str(date_iso)[:10]
+    draft_key = f"dr_draft_{key_prefix}_{project_name}_{date_iso}"
+    src_dates = _daily_report_source_dates(sh, project_name, exclude_date=date_iso)
+
+    st.markdown("##### 📋 일자 복사 (다음날 작성용)")
+    cp1, cp2, cp3, cp4 = st.columns([1.3, 1, 1, 1.2])
+    with cp1:
+        copy_from = st.selectbox(
+            "복사 원본 일자",
+            ["선택"] + src_dates,
+            key=f"dr_copy_from_{key_prefix}_{project_name}_{date_iso}",
+        )
+    with cp2:
+        if st.button("📋 원본 복사", key=f"dr_copy_btn_{key_prefix}", use_container_width=True):
+            if copy_from == "선택":
+                st.warning("복사할 원본 일자를 선택하세요.")
+            else:
+                st.session_state[draft_key] = _copy_daily_report_rows(
+                    load_daily_report_rows(sh, project_name, copy_from)
+                )
+                st.success(f"{copy_from} 내용을 불러왔습니다. 수정 후 저장하세요.")
+                st.rerun()
+    with cp3:
+        if st.button("📋 최근 보고 복사", key=f"dr_copy_latest_{key_prefix}", use_container_width=True):
+            all_dates = _daily_report_source_dates(sh, project_name)
+            if not all_dates:
+                st.warning("복사할 저장된 일일보고가 없습니다.")
+            else:
+                src = all_dates[0]
+                if src == date_iso and len(all_dates) > 1:
+                    src = all_dates[1]
+                elif src == date_iso:
+                    st.warning("다른 일자의 저장 데이터가 없습니다.")
+                    src = None
+                if src:
+                    st.session_state[draft_key] = _copy_daily_report_rows(
+                        load_daily_report_rows(sh, project_name, src)
+                    )
+                    st.success(f"{src} 보고를 복사했습니다.")
+                    st.rerun()
+    with cp4:
+        try:
+            default_new = pd.to_datetime(date_iso).date() + datetime.timedelta(days=1)
+        except Exception:
+            default_new = datetime.date.today() + datetime.timedelta(days=1)
+        new_date = st.date_input(
+            "새 일자",
+            value=default_new,
+            key=f"dr_new_date_{key_prefix}_{project_name}_{date_iso}",
+        )
+
+    cp5, cp6 = st.columns([1, 3])
+    with cp5:
+        if st.button("📅 새 일자로 복사 작성", key=f"dr_newday_{key_prefix}", use_container_width=True):
+            src = copy_from if copy_from != "선택" else (
+                _daily_report_source_dates(sh, project_name)[0]
+                if _daily_report_source_dates(sh, project_name)
+                else None
+            )
+            if not src:
+                st.warning("복사 원본 일자를 선택하거나, 저장된 보고가 있어야 합니다.")
+            else:
+                new_iso = new_date.strftime("%Y-%m-%d")
+                new_draft_key = f"dr_draft_{key_prefix}_{project_name}_{new_iso}"
+                st.session_state[new_draft_key] = _copy_daily_report_rows(
+                    load_daily_report_rows(sh, project_name, src)
+                )
+                st.session_state["dr_jump_project"] = project_name
+                st.session_state["dr_jump_date"] = new_iso
+                st.success(f"{src} → {new_iso} 복사 완료. 작성·수정 탭에서 이어서 편집하세요.")
+                st.rerun()
+    with cp6:
+        st.caption(
+            "다음날 보고는 **원본 일자 선택 → 새 일자 지정 → 새 일자로 복사 작성** 순서로 사용하세요. "
+            "복사 후 업무 내용만 수정해 저장하면 됩니다."
+        )
+
+    if draft_key not in st.session_state:
+        st.session_state[draft_key] = _copy_daily_report_rows(initial_rows)
+
+    st.markdown(f"##### ✏️ 편집 — {_daily_report_date_korean(date_iso)} · {project_name}")
+    edit_df = _editor_df_from_rows(st.session_state[draft_key])
+    edited = st.data_editor(
+        edit_df,
+        num_rows="dynamic",
+        use_container_width=True,
+        height=min(520, 120 + max(len(edit_df), 8) * 36),
+        key=f"dr_editor_{key_prefix}_{project_name}_{date_iso}",
+        column_config={
+            "구분": st.column_config.TextColumn("구분", width="small"),
+            "대분류": st.column_config.TextColumn("대분류", width="small"),
+            "세부항목": st.column_config.TextColumn("세부", width="small"),
+            "업무내용": st.column_config.TextColumn("업무 내용", width="large"),
+            "공정율": st.column_config.TextColumn("공정율(%)", width="small"),
+            "비고": st.column_config.TextColumn("비고", width="medium"),
+        },
+    )
+    st.session_state[draft_key] = _rows_from_editor_df(edited)
+
+    btn1, btn2, btn3 = st.columns([1, 1, 2])
+    with btn1:
+        if st.button("💾 구글 시트에 저장", type="primary", key=f"dr_save_{key_prefix}", use_container_width=True):
+            rows = st.session_state.get(draft_key, [])
+            if not rows:
+                st.error("저장할 항목이 없습니다.")
+            else:
+                with st.spinner("저장 중…"):
+                    cnt = save_daily_reports_to_sheet(
+                        sh,
+                        project_name,
+                        [{"date": date_iso, "rows": rows}],
+                        st.session_state.get("user_id", ""),
+                        overwrite_dates=True,
+                    )
+                st.session_state.pop(draft_key, None)
+                st.success(f"`{DAILY_REPORT_SHEET}`에 {cnt}건 저장되었습니다.")
+                st.rerun()
+    with btn2:
+        if st.button("↩️ 편집 초기화", key=f"dr_reset_{key_prefix}", use_container_width=True):
+            st.session_state[draft_key] = _copy_daily_report_rows(initial_rows)
+            st.rerun()
+
+    if show_html_preview:
+        st.markdown("##### 👁️ 양식 미리보기")
+        _render_daily_report_section_table(
+            st.session_state[draft_key],
+            date_iso,
+            project_name,
+        )
+
+
+def view_daily_report(sh, pjt_list):
+    col_title, col_btn = st.columns([8, 2])
+    with col_title:
+        st.title("📋 일일보고")
+    with col_btn:
+        render_print_button()
+
+    st.caption(
+        "일일보고를 화면에서 **편집·저장**하거나, 엑셀을 업로드할 수 있습니다. "
+        f"데이터는 구글 시트 `{DAILY_REPORT_SHEET}` 탭에 저장됩니다."
+    )
+
+    tab_edit, tab_upload, tab_saved = st.tabs(["✏️ 작성·수정", "📤 엑셀 업로드", "📂 저장된 일일보고"])
+
+    with tab_edit:
+        jump_pjt = st.session_state.pop("dr_jump_project", None)
+        jump_date = st.session_state.pop("dr_jump_date", None)
+        if jump_pjt and jump_pjt in pjt_list:
+            st.session_state["dr_edit_pjt"] = jump_pjt
+        if jump_date:
+            try:
+                st.session_state["dr_edit_date"] = pd.to_datetime(str(jump_date)[:10]).date()
+            except Exception:
+                pass
+        e1, e2 = st.columns(2)
+        with e1:
+            edit_pjt = st.selectbox(
+                "프로젝트",
+                ["선택"] + pjt_list,
+                key="dr_edit_pjt",
+            )
+        with e2:
+            if "dr_edit_date" not in st.session_state:
+                st.session_state["dr_edit_date"] = datetime.date.today()
+            edit_date = st.date_input("보고 일자", key="dr_edit_date")
+
+        if edit_pjt == "선택":
+            st.info("프로젝트를 선택하면 일일보고를 작성·수정할 수 있습니다.")
+        else:
+            edit_iso = edit_date.strftime("%Y-%m-%d")
+            existing_rows = load_daily_report_rows(sh, edit_pjt, edit_iso)
+            if existing_rows:
+                st.caption(f"저장된 데이터 **{len(existing_rows)}건** 불러옴 — 수정 후 저장하면 덮어씁니다.")
+            else:
+                st.info("이 일자는 아직 저장된 보고가 없습니다. 아래 **복사**로 양식을 가져온 뒤 작성하세요.")
+            _render_daily_report_edit_and_save(
+                sh,
+                edit_pjt,
+                edit_iso,
+                existing_rows,
+                "edit",
+                show_html_preview=True,
+            )
+
+    with tab_upload:
+        up_col1, up_col2 = st.columns([1, 1])
+        with up_col1:
+            pjt_sel = st.selectbox(
+                "프로젝트",
+                ["선택"] + pjt_list,
+                key="daily_report_pjt",
+            )
+        with up_col2:
+            overwrite = st.checkbox(
+                "같은 날짜·프로젝트 기존 데이터 덮어쓰기",
+                value=True,
+                help="체크 시 업로드 파일에 포함된 날짜의 기존 기록을 삭제 후 새로 저장합니다.",
+            )
+
+        uploaded = st.file_uploader(
+            "일일보고 엑셀 파일 (.xlsx)",
+            type=["xlsx"],
+            key="daily_report_uploader",
+        )
+        if uploaded:
+            guess_default = _guess_project_from_filename(uploaded.name, pjt_list)
+            if guess_default and pjt_sel == "선택":
+                st.info(f"파일명 기준 추천 프로젝트: **{guess_default}** (목록에 있으면 저장 시 자동 사용)")
+            try:
+                sections = parse_daily_report_xlsx(uploaded)
+            except Exception as e:
+                st.error(f"엑셀 파싱 오류: {e}")
+                sections = []
+
+            if not sections:
+                st.warning("일일보고 형식의 데이터를 찾지 못했습니다. 날짜 행(예: 2026년06월02일)이 있는지 확인하세요.")
+            else:
+                dates = [s["date"] for s in sections]
+                st.success(f"**{len(sections)}개** 일자, 총 **{sum(len(s['rows']) for s in sections)}건** 항목을 읽었습니다.")
+                preview_date = st.selectbox("미리보기 일자", dates, key="daily_report_preview_date")
+                preview_section = next(s for s in sections if s["date"] == preview_date)
+                preview_pjt = pjt_sel if pjt_sel != "선택" else guess_default
+                upload_draft_key = f"dr_upload_sections_{uploaded.name}"
+                if upload_draft_key not in st.session_state:
+                    st.session_state[upload_draft_key] = sections
+
+                st.markdown("##### 👁️ 업로드 미리보기")
+                _render_daily_report_section_table(
+                    preview_section["rows"],
+                    preview_date,
+                    project_name=preview_pjt or None,
+                )
+
+                save_pjt = pjt_sel if pjt_sel != "선택" else guess_default
+                if save_pjt:
+                    st.markdown("##### ✏️ 업로드 내용 편집·저장")
+                    sec_for_edit = next(
+                        s for s in st.session_state[upload_draft_key] if s["date"] == preview_date
+                    )
+                    _render_daily_report_edit_and_save(
+                        sh,
+                        save_pjt,
+                        preview_date,
+                        sec_for_edit["rows"],
+                        "upload",
+                        show_html_preview=False,
+                    )
+
+                    if st.button("💾 파일 전체 일자 한번에 저장", key="daily_report_save_all_btn"):
+                        all_sections = []
+                        for s in st.session_state[upload_draft_key]:
+                            draft_k = f"dr_draft_upload_{save_pjt}_{s['date']}"
+                            rows = st.session_state.get(draft_k, s["rows"])
+                            all_sections.append({"date": s["date"], "rows": rows})
+                        with st.spinner("전체 일자 저장 중…"):
+                            cnt = save_daily_reports_to_sheet(
+                                sh,
+                                save_pjt,
+                                all_sections,
+                                st.session_state.get("user_id", ""),
+                                overwrite_dates=overwrite,
+                            )
+                        st.success(f"총 {cnt}건 저장되었습니다.")
+                        st.rerun()
+                else:
+                    st.warning("저장·편집하려면 프로젝트를 선택하세요.")
+
+                buf = io.BytesIO()
+                export_rows = []
+                for section in sections:
+                    for item in section["rows"]:
+                        export_rows.append({"날짜": section["date"], **item})
+                pd.DataFrame(export_rows).to_excel(buf, index=False, sheet_name="일일보고")
+                st.download_button(
+                    "📥 파싱 결과 엑셀 다운로드",
+                    data=buf.getvalue(),
+                    file_name=f"일일보고_파싱_{datetime.date.today()}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                )
+
+    with tab_saved:
+        saved_df = load_daily_report_df(sh)
+        if saved_df.empty:
+            st.info(f"아직 `{DAILY_REPORT_SHEET}` 시트에 저장된 일일보고가 없습니다. 업로드 탭에서 엑셀을 저장하세요.")
+            return
+
+        f1, f2, f3 = st.columns([1, 1, 1])
+        with f1:
+            pjt_opts = ["전체"] + sorted(saved_df["프로젝트명"].dropna().astype(str).unique().tolist())
+            filt_pjt = st.selectbox("프로젝트 필터", pjt_opts, key="daily_saved_pjt")
+        with f2:
+            dates_avail = sorted(saved_df["날짜"].dropna().astype(str).unique().tolist(), reverse=True)
+            filt_date = st.selectbox("일자 필터", ["전체"] + dates_avail, key="daily_saved_date")
+        view_df = saved_df.copy()
+        if filt_pjt != "전체":
+            view_df = view_df[view_df["프로젝트명"].astype(str) == filt_pjt]
+        if filt_date != "전체":
+            view_df = view_df[view_df["날짜"].astype(str).str.startswith(filt_date[:10])]
+
+        st.metric("조회 건수", f"{len(view_df)}건")
+        if view_df.empty:
+            st.warning("선택한 조건에 맞는 데이터가 없습니다.")
+            return
+
+        display_cols = ["날짜", "프로젝트명", "구분", "대분류", "세부항목", "업무내용", "공정율(%)", "비고"]
+        show_saved = view_df[display_cols].reset_index(drop=True)
+
+        sheet_dates = sorted(show_saved["날짜"].astype(str).str[:10].unique().tolist(), reverse=True)
+        if filt_date == "전체" and len(sheet_dates) > 1:
+            view_date = st.selectbox("양식 미리보기 일자", sheet_dates, key="daily_saved_sheet_date")
+        elif filt_date != "전체":
+            view_date = filt_date[:10]
+        else:
+            view_date = sheet_dates[0]
+
+        day_df = show_saved[show_saved["날짜"].astype(str).str.startswith(view_date)]
+        sheet_pjt = ""
+        if filt_pjt != "전체":
+            sheet_pjt = filt_pjt
+        elif not day_df.empty:
+            sheet_pjt = str(day_df.iloc[0]["프로젝트명"])
+
+        sheet_rows = load_daily_report_rows(sh, sheet_pjt, view_date) if sheet_pjt else []
+        _render_daily_report_section_table(sheet_rows, view_date, project_name=sheet_pjt or None)
+
+        if sheet_pjt:
+            with st.expander("✏️ 이 일자 수정·저장", expanded=False):
+                _render_daily_report_edit_and_save(
+                    sh,
+                    sheet_pjt,
+                    view_date,
+                    sheet_rows,
+                    "saved",
+                    show_html_preview=False,
+                )
+
+        with st.expander("📊 표 형태로 보기 / 엑셀 다운로드"):
+            st.dataframe(
+                show_saved,
+                use_container_width=True,
+                height=min(400, 100 + len(show_saved) * 36),
+            )
+
+        out = io.BytesIO()
+        show_saved.to_excel(out, index=False, sheet_name="일일보고")
+        st.download_button(
+            "📥 조회 결과 엑셀 다운로드",
+            data=out.getvalue(),
+            file_name=f"일일보고_조회_{datetime.date.today()}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+
+
 # 4. 경영지표 KPI
 def view_kpi(sh):
     col_title, col_btn = st.columns([8, 2])
@@ -1835,16 +3355,45 @@ def view_kpi(sh):
     except: 
         st.warning("KPI 시트를 찾을 수 없습니다.")
 
+def view_admin_menu_visibility(sh):
+    """admin 전용: 일반 사용자 PMO 메뉴 표시/숨김 설정"""
+    st.subheader("👁️ PMO 메뉴 표시 설정")
+    st.caption("체크한 메뉴는 **일반 사용자** 화면(사이드바·상단 메뉴)에서 숨겨집니다.")
+    st.info(
+        f"**{ADMIN_MENU}**은 `{ADMIN_USER_ID}` 계정 전용이며, 일반 사용자에게는 항상 표시되지 않습니다. "
+        f"설정은 구글 시트 `{MENU_CONFIG_SHEET}`에도 저장되어 배포 환경에서도 유지됩니다."
+    )
+
+    configurable = [m for m in ALL_PMO_MENUS if m != ADMIN_MENU]
+    current_hidden = set(load_user_hidden_menus(sh))
+
+    with st.form("menu_visibility_form"):
+        hide_states = {
+            m: st.checkbox(f"{m} — 일반 사용자에게 숨김", value=m in current_hidden)
+            for m in configurable
+        }
+        if st.form_submit_button("💾 메뉴 표시 설정 저장", use_container_width=True):
+            hidden = [m for m, hide in hide_states.items() if hide]
+            save_user_hidden_menus(sh, hidden)
+            st.success("메뉴 표시 설정이 저장되었습니다. (로컬 + 구글 시트)")
+            st.rerun()
+
+
 # 5. 마스터 관리
 def view_project_admin(sh, pjt_list):
+    if not is_admin_user():
+        st.error("마스터 설정은 admin 계정만 이용할 수 있습니다.")
+        return
+
     col_title, col_btn = st.columns([8, 2])
     with col_title:
         st.title("⚙️ 마스터 관리")
     with col_btn:
         st.write("")
         render_print_button()
-        
-    t1, t2, t3, t4, t5 = st.tabs(["➕ 등록", "✏️ 수정", "🗑️ 삭제", "🔄 업로드", "📥 다운로드"])
+
+    tab_labels = ["➕ 등록", "✏️ 수정", "🗑️ 삭제", "🔄 업로드", "📥 다운로드", "👁️ 메뉴 표시"]
+    t1, t2, t3, t4, t5, t6 = st.tabs(tab_labels)
     
     with t1:
         new_n = st.text_input("신규 프로젝트명")
@@ -1889,26 +3438,27 @@ def view_project_admin(sh, pjt_list):
                 updated_count = 0
                 skipped_sheets = []
                 
+                updated_projects = []
                 with st.spinner("데이터를 매칭하여 일괄 업데이트 중입니다..."):
                     for sheet_name, df_up in all_sheets.items():
                         s_name = sheet_name.strip()
                         
                         if s_name in pjt_list:
                             ws = safe_api_call(sh.worksheet, s_name)
-                            df_up = df_up.fillna("").astype(str)
-                            
-                            safe_api_call(ws.clear)
-                            safe_api_call(ws.update, [df_up.columns.values.tolist()] + df_up.values.tolist())
+                            sync_worksheet_from_excel_df(ws, df_up)
                             updated_count += 1
+                            updated_projects.append(s_name)
                         else:
                             skipped_sheets.append(s_name)
                 
                 cached_get_all_values.clear()
                 cached_get_head.clear()
                 clear_file_cache()  # 일괄 업로드 후 전체 갱신
+                invalidate_process_edit_cache(updated_projects)
 
                 if updated_count > 0:
                     st.success(f"🎉 총 {updated_count}개의 프로젝트가 성공적으로 일괄 업데이트되었습니다!")
+                    st.rerun()
                 else:
                     st.warning("⚠️ 일치하는 시트 이름이 없어 업데이트된 항목이 없습니다.")
                     
@@ -1932,6 +3482,9 @@ def view_project_admin(sh, pjt_list):
                         pass
             st.download_button("📥 통합 파일 받기", output.getvalue(), f"Backup_{datetime.date.today()}.xlsx")
 
+    with t6:
+        view_admin_menu_visibility(sh)
+
 # ---------------------------------------------------------
 # [SECTION 3] 메인 컨트롤러
 # ---------------------------------------------------------
@@ -1941,42 +3494,35 @@ if check_login():
     if client:
         try:
             sh = safe_api_call(client.open, 'pms_db')
-            sys_names = ['weekly_history', 'Solar_DB', 'KPI', 'Sheet1', 'Control_Center', 'Dashboard_Control', '통합 대시보드', 'Solar_Forecast']
+            sys_names = [
+                'weekly_history', 'Solar_DB', 'KPI', 'Sheet1', 'Control_Center',
+                'Dashboard_Control', '통합 대시보드', 'Solar_Forecast', DAILY_REPORT_SHEET,
+            ]
             pjt_list = _load_file_cache(WORKSHEET_LIST_CACHE, FILE_CACHE_TTL)
             if pjt_list is None:
                 pjt_list = [ws.title for ws in sh.worksheets() if ws.title not in sys_names]
                 _save_file_cache(WORKSHEET_LIST_CACHE, pjt_list)
             
+            visible_menus = get_pmo_menus_for_current_user(sh)
             if "selected_menu" not in st.session_state:
-                st.session_state.selected_menu = "통합 대시보드"
+                st.session_state.selected_menu = visible_menus[0]
+            elif st.session_state.selected_menu not in visible_menus:
+                st.session_state.selected_menu = visible_menus[0]
             if "selected_pjt" not in st.session_state:
                 st.session_state.selected_pjt = "선택"
             
             st.sidebar.title("📁 PMO 메뉴")
+            if not is_admin_user():
+                st.sidebar.caption("일부 메뉴는 관리자 설정에 따라 숨겨져 있을 수 있습니다.")
             menu = st.sidebar.radio(
                 "메뉴 선택",
-                [
-                    "통합 대시보드",
-                    "주간 최종 보고(표)",
-                    "프로젝트 상세",
-                    "일 발전량 분석",
-                    "경영지표(KPI)",
-                    "마스터 설정",
-                ],
+                visible_menus,
                 key="selected_menu",
             )
             
             # 상단 가로 메뉴 (사이드바와 동기화, 테두리 없음)
-            menu_options = [
-                "통합 대시보드",
-                "주간 최종 보고(표)",
-                "프로젝트 상세",
-                "일 발전량 분석",
-                "경영지표(KPI)",
-                "마스터 설정",
-            ]
-            top_cols = st.columns(6)
-            for idx, opt in enumerate(menu_options):
+            top_cols = st.columns(max(1, len(visible_menus)))
+            for idx, opt in enumerate(visible_menus):
                 with top_cols[idx]:
                     if opt == menu:
                         st.button(f"● {opt}", key=f"topmenu_{idx}", disabled=True, use_container_width=True, type="primary")
@@ -1987,6 +3533,8 @@ if check_login():
                 view_dashboard(sh, pjt_list)
             elif menu == "주간 최종 보고(표)":
                 view_weekly_final_report(sh, pjt_list)
+            elif menu == "일일보고":
+                view_daily_report(sh, pjt_list)
             elif menu == "프로젝트 상세": 
                 view_project_detail(sh, pjt_list)
             elif menu == "일 발전량 분석": 
@@ -1996,6 +3544,8 @@ if check_login():
             elif menu == "마스터 설정": 
                 view_project_admin(sh, pjt_list)
             
+            render_sidebar_cache_controls()
+
             if st.sidebar.button("로그아웃"):
                 st.session_state.logged_in = False
                 _clear_login_url_token()
