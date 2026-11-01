@@ -6,6 +6,7 @@ import json
 
 import streamlit as st
 
+from solar_design.auto_layout import handle_map_click, render_auto_layout_panel
 from solar_design.land_info import merge_site_land_info, render_land_info_panel
 from solar_design.site_search import render_site_search_panel
 from solar_design.utils import (
@@ -80,9 +81,42 @@ def _render_map(site: dict | None, map_style: str) -> None:
         except Exception as e:
             st.warning(f"경계 GeoJSON 표시 실패: {e}")
     else:
-        st.caption("필지 경계: 「토지정보·필지경계 갱신」 후 표시")
+        st.caption("필지 경계: 「토지정보·필지경계 갱신」 후 표시 · **필지 안 클릭** → 자동 배치")
 
-    st_folium(m, width=None, height=480, returned_objects=[])
+    layout = site.get("layout") or {}
+    lgj = layout.get("layout_geojson")
+    if layout.get("ok") and lgj:
+        folium.GeoJson(
+            lgj,
+            name="모듈(참고)",
+            style_function=lambda _: {
+                "fillColor": "#1565c0",
+                "color": "#0d47a1",
+                "weight": 1,
+                "fillOpacity": 0.45,
+            },
+        ).add_to(m)
+
+    map_state = st_folium(
+        m,
+        width=None,
+        height=480,
+        returned_objects=["last_clicked"],
+        key="sd_folium_map",
+    )
+    if map_state and map_state.get("last_clicked"):
+        clk = map_state["last_clicked"]
+        if clk.get("lat") is not None and clk.get("lng") is not None:
+            last = st.session_state.get("sd_last_map_click")
+            cur = (round(clk["lat"], 6), round(clk["lng"], 6))
+            if last != cur:
+                st.session_state["sd_last_map_click"] = cur
+                handle_map_click(float(clk["lng"]), float(clk["lat"]))
+                st.rerun()
+
+    msg = st.session_state.pop("sd_map_click_msg", None)
+    if msg:
+        st.success(msg)
 
 
 def _render_parcel_list() -> None:
@@ -123,13 +157,19 @@ def _render_design_summary(site: dict | None) -> None:
         )
         area = (site.get("land_info") or {}).get("필지_면적_m2")
         st.metric("필지 면적(㎡)", area if area else "—")
+        layout = site.get("layout") or {}
+        if layout.get("ok"):
+            st.markdown("---")
+            st.markdown("**예상 설비 (자동 배치·참고)**")
+            st.metric("모듈", f"{layout.get('module_count', 0):,} 장")
+            st.metric("DC 용량", f"{layout.get('capacity_kW', 0):,.1f} kW")
+            st.caption(f"{layout.get('capacity_MWp', 0):.3f} MWp · {layout.get('module_model', '')}")
+        else:
+            st.caption("필지 클릭 또는 왼쪽 「배치 계산」 후 표시")
     else:
         st.info("활성 부지 없음")
     st.markdown("---")
-    st.markdown("**향후 연동**")
-    st.markdown("- 필지 경계·면적 (VWorld WFS 등)")
-    st.markdown("- 장애물·진입도로·직접 그리기")
-    st.markdown("- 모듈 자동 배치 → 용량 산출")
+    st.markdown("**향후** 그림자·일조 · AC/인버터 · 발전량")
 
 
 def view_solar_design() -> None:
@@ -167,11 +207,9 @@ def view_solar_design() -> None:
             """
         )
 
-    render_step_wizard(current=1)
-
     phase = st.radio(
         "1차 화면",
-        ["부지 검색·선정", "부지 정보 확인", "기자재 미리보기"],
+        ["부지 검색·선정", "부지 정보 확인", "자동 배치·용량", "기자재 미리보기"],
         horizontal=True,
         key="sd_phase",
     )
@@ -184,7 +222,7 @@ def view_solar_design() -> None:
             lat=add_payload["lat"],
             lon=add_payload["lon"],
         )
-        merge_site_land_info(site)
+        merge_site_land_info(site)[0]
         sites = get_sites()
         sites.append(site)
         set_sites(sites)
@@ -194,11 +232,17 @@ def view_solar_design() -> None:
 
     _render_parcel_list()
     active = get_active_site()
+    step = 3 if active and (active.get("layout") or {}).get("ok") else 1
+    if phase == "부지 정보 확인":
+        step = max(step, 2)
+    render_step_wizard(current=step)
 
     left, center, right = st.columns([1, 1.6, 1])
 
     with left:
-        if phase == "부지 정보 확인":
+        if phase == "자동 배치·용량":
+            render_auto_layout_panel(active)
+        elif phase == "부지 정보 확인":
             render_land_info_panel(active)
         elif phase == "기자재 미리보기":
             from solar_design.equipment import render_equipment_preview
