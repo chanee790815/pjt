@@ -232,28 +232,55 @@ def find_site_at_click(sites: list[dict], lon: float, lat: float) -> dict | None
 
 
 def handle_map_click(lon: float, lat: float) -> None:
+    """지도 클릭 → VWorld 필지 조회·목록 추가(또는 기존 PNU)·자동 배치."""
     from solar_design.land_info import merge_site_land_info
-    from solar_design.utils import SESSION_ACTIVE_SITE_ID, get_sites, set_sites
+    from solar_design.site_search import geocode_kakao_reverse
+    from solar_design.utils import SESSION_ACTIVE_SITE_ID, default_site, get_sites, set_sites
+    from solar_design.vworld_client import get_parcel_at_point, reverse_parcel_address
 
     sites = get_sites()
     target = find_site_at_click(sites, lon, lat)
+
     if target is None:
-        st.session_state["sd_map_click_msg"] = (
-            "클릭한 위치가 등록된 필지 경계 밖입니다. 경계 갱신 후 필지 안을 클릭하세요."
-        )
-        return
+        road, jibun = geocode_kakao_reverse(lat, lon)
+        if not jibun and not road:
+            rev, _ = reverse_parcel_address(lon, lat)
+            jibun = rev or ""
+        target = default_site(road=road, jibun=jibun, lat=lat, lon=lon)
+        merge_site_land_info(target)
+        pnu = (target.get("pnu") or "").strip()
+        if pnu:
+            existing = next((s for s in sites if (s.get("pnu") or "").strip() == pnu), None)
+            if existing:
+                existing["lat"] = lat
+                existing["lon"] = lon
+                merge_site_land_info(existing)
+                target = existing
+            else:
+                sites.append(target)
+        else:
+            sites.append(target)
+    else:
+        target["lat"] = lat
+        target["lon"] = lon
+        merge_site_land_info(target)
 
     st.session_state[SESSION_ACTIVE_SITE_ID] = target["id"]
-    if not target.get("boundary_geojson"):
-        merge_site_land_info(target)
     setback = float(st.session_state.get("sd_layout_setback", 2.0))
     apply_layout_to_site(target, setback_m=setback)
     set_sites(sites)
+
     lay = target.get("layout") or {}
-    st.session_state["sd_map_click_msg"] = (
-        f"「{target.get('address_jibun') or target.get('address_road') or '필지'}」 "
-        f"모듈 {lay.get('module_count', 0):,}장 · {lay.get('capacity_kW', 0):,.1f} kW"
-    )
+    label = target.get("address_jibun") or target.get("address_road") or "필지"
+    if lay.get("ok"):
+        st.session_state["sd_map_click_msg"] = (
+            f"추가·갱신: {label} — 모듈 {lay.get('module_count', 0):,}장 · "
+            f"{lay.get('capacity_kW', 0):,.1f} kW ({lay.get('capacity_MWp', 0):.3f} MWp)"
+        )
+    else:
+        st.session_state["sd_map_click_msg"] = (
+            f"{label} — {lay.get('message', '배치 실패')} (VWorld 경계·VWORLD_DOMAIN 확인)"
+        )
 
 
 def render_auto_layout_panel(site: dict | None) -> None:
@@ -265,7 +292,7 @@ def render_auto_layout_panel(site: dict | None) -> None:
     if st.button("활성 필지 배치 계산", type="primary", key="sd_calc_layout"):
         apply_layout_to_site(site, setback_m=setback)
         st.rerun()
-    st.caption("지도에서 **필지(녹색 경계) 안**을 클릭해도 계산됩니다.")
+    st.caption("지도 **클릭** → 해당 위치 필지 조회·목록 추가·자동 배치 (VWorld + Kakao)")
 
     layout = site.get("layout") or {}
     if not layout.get("ok"):

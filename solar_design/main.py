@@ -81,7 +81,7 @@ def _render_map(site: dict | None, map_style: str) -> None:
         except Exception as e:
             st.warning(f"경계 GeoJSON 표시 실패: {e}")
     else:
-        st.caption("필지 경계: 「토지정보·필지경계 갱신」 후 표시 · **필지 안 클릭** → 자동 배치")
+        st.caption("필지 경계: 갱신 또는 **지도 클릭**으로 조회 · 클릭 시 부지 추가+배치")
 
     layout = site.get("layout") or {}
     lgj = layout.get("layout_geojson")

@@ -152,6 +152,29 @@ def _dedupe_results(items: list[dict]) -> list[dict]:
     return out
 
 
+def geocode_kakao_reverse(lat: float, lon: float) -> tuple[str, str]:
+    """좌표 → (도로명, 지번) Kakao."""
+    key = get_secret("KAKAO_REST_API_KEY")
+    if not key:
+        return "", ""
+    url = "https://dapi.kakao.com/v2/local/geo/coord2address.json"
+    headers = {"Authorization": f"KakaoAK {key}"}
+    try:
+        r = requests.get(
+            url, headers=headers, params={"x": lon, "y": lat}, timeout=15
+        )
+        r.raise_for_status()
+        docs = (r.json().get("documents") or [])
+        if not docs:
+            return "", ""
+        d0 = docs[0]
+        road = (d0.get("road_address") or {}).get("address_name") or ""
+        jibun = (d0.get("address") or {}).get("address_name") or ""
+        return road, jibun
+    except Exception:
+        return "", ""
+
+
 def resolve_coordinates(item: dict) -> tuple[float | None, float | None, str | None]:
     if item.get("lat") is not None and item.get("lon") is not None:
         return item["lat"], item["lon"], None
