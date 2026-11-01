@@ -12,7 +12,9 @@ from solar_design.utils import (
     SESSION_ACTIVE_SITE_ID,
     api_status_line,
     default_site,
+    diagnose_secrets_for_solar,
     get_active_site,
+    get_secret,
     get_sites,
     render_solar_design_css,
     render_step_wizard,
@@ -37,21 +39,19 @@ def _render_map(site: dict | None, map_style: str) -> None:
         st.code(f"위치: {lat}, {lon}")
         return
 
-    m = folium.Map(location=[lat, lon], zoom_start=17, tiles=None)
     if map_style == "위성":
-        folium.TileLayer(
-            tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-            attr="Esri",
-            name="위성",
-        ).add_to(m)
-        folium.TileLayer("OpenStreetMap", name="일반").add_to(m)
+        tile_url = (
+            "https://server.arcgisonline.com/ArcGIS/rest/services/"
+            "World_Imagery/MapServer/tile/{z}/{y}/{x}"
+        )
+        m = folium.Map(
+            location=[lat, lon],
+            zoom_start=17,
+            tiles=tile_url,
+            attr="Esri World Imagery",
+        )
     else:
-        folium.TileLayer("OpenStreetMap", name="일반").add_to(m)
-        folium.TileLayer(
-            tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-            attr="Esri",
-            name="위성",
-        ).add_to(m)
+        m = folium.Map(location=[lat, lon], zoom_start=17, tiles="OpenStreetMap")
 
     folium.Marker(
         [lat, lon],
@@ -62,13 +62,26 @@ def _render_map(site: dict | None, map_style: str) -> None:
     if boundary:
         try:
             gj = boundary if isinstance(boundary, dict) else json.loads(boundary)
-            folium.GeoJson(gj, name="필지 경계").add_to(m)
+            gj_layer = folium.GeoJson(
+                gj,
+                name="필지 경계",
+                style_function=lambda _: {
+                    "fillColor": "#66bb6a",
+                    "color": "#2e7d32",
+                    "weight": 2,
+                    "fillOpacity": 0.25,
+                },
+            )
+            gj_layer.add_to(m)
+            try:
+                m.fit_bounds(gj_layer.get_bounds())
+            except Exception:
+                pass
         except Exception as e:
             st.warning(f"경계 GeoJSON 표시 실패: {e}")
     else:
-        st.caption("필지 경계: 미연동 (마커만 표시)")
+        st.caption("필지 경계: 「토지정보·필지경계 갱신」 후 표시")
 
-    folium.LayerControl().add_to(m)
     st_folium(m, width=None, height=480, returned_objects=[])
 
 
@@ -125,7 +138,17 @@ def view_solar_design() -> None:
     st.title("☀ 태양광 설계 지원")
     st.caption(api_status_line())
 
-    with st.expander("API 키 설정 안내", expanded=False):
+    juso_ok = bool(get_secret("JUSO_API_KEY") or get_secret("JUSO_CONFIRM_KEY"))
+
+    with st.expander("API 키 설정 안내", expanded=not juso_ok):
+        if not get_secret("KAKAO_REST_API_KEY"):
+            st.warning(
+                "**Kakao REST 키 미설정** — Juso 검색만 되고 **좌표·지도 위치가 부정확**할 수 있습니다. "
+                "VWorld 필지 경계는 **정확한 lat/lon** 이 있어야 합니다."
+            )
+        for line in diagnose_secrets_for_solar():
+            st.markdown(line)
+        st.markdown("---")
         st.markdown(
             """
             **`.streamlit/secrets.toml`** 또는 환경변수:

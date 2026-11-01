@@ -1,24 +1,58 @@
-"""STEP 2: 부지 정보 — API 연동 전 구조·표시 (자동 인허가 판정 없음)."""
+"""STEP 2: 부지 정보 — VWorld 연속지적도·역지오코딩."""
 
 from __future__ import annotations
 
-from typing import Any
-
 import streamlit as st
 
-from solar_design.utils import empty_land_info, get_secret
+from solar_design.utils import empty_land_info
+from solar_design.vworld_client import get_parcel_at_point, reverse_parcel_address
 
 
-def fetch_vworld_land_attr(lat: float, lon: float) -> tuple[dict | None, str]:
+def fetch_vworld_land_attr(lat: float, lon: float) -> tuple[dict | None, str, dict | None]:
     """
-    VWorld 토지특성/필지 API 연동 예정.
-    1차: 키 없으면 None. 경계·PNU는 별도 WFS 연동 필요.
+    Returns: (land_info_updates, message, extra_site_fields)
+    extra_site_fields: boundary_geojson, pnu 등 site에 병합할 값
     """
-    key = get_secret("VWORLD_API_KEY")
-    if not key:
-        return None, "VWorld API 키 미설정 — 토지정보 자동 취합은 2차에서 연동"
-    # 실제 엔드포인트는 VWorld 문서 기준으로 2차 구현
-    return None, "VWorld 토지정보 API는 2차 개발에서 연결합니다."
+    parcel, err = get_parcel_at_point(lon, lat)
+    extra: dict = {}
+    if not parcel:
+        rev, _ = reverse_parcel_address(lon, lat)
+        msg = err or "VWorld 필지 조회 실패"
+        if rev:
+            return {"소재지": rev, "지번": rev}, msg, extra
+        return None, msg, extra
+
+    props = parcel.get("properties") or {}
+    jibun = parcel.get("jibun") or props.get("addr") or ""
+    addr = parcel.get("addr") or jibun
+    area = parcel.get("area_m2")
+    jiga = props.get("jiga")
+    gosi = ""
+    if props.get("gosi_year") and props.get("gosi_month"):
+        gosi = f"{props['gosi_year']}-{props['gosi_month']}"
+    jiga_txt = "정보 없음"
+    if jiga not in (None, ""):
+        try:
+            jiga_txt = f"{int(float(jiga)):,}원/㎡ ({gosi})" if gosi else f"{int(float(jiga)):,}원/㎡"
+        except (TypeError, ValueError):
+            jiga_txt = str(jiga)
+
+    updates = {
+        "소재지": addr or "정보 없음",
+        "지번": jibun or "추가 확인 필요",
+        "지목": "정보 없음",
+        "필지_면적_m2": round(area, 1) if area else None,
+        "용도지역": "정보 없음",
+        "용도지구": "정보 없음",
+        "국토계획법_지역지구": "정보 없음",
+        "기타법령_지역지구": "정보 없음",
+        "공시지가": jiga_txt,
+        "데이터_출처": "VWorld LP_PA_CBND_BUBUN",
+    }
+    extra["boundary_geojson"] = parcel.get("geojson")
+    extra["boundary_source"] = "VWorld LP_PA_CBND_BUBUN"
+    extra["pnu"] = parcel.get("pnu") or ""
+    return updates, "OK", extra
 
 
 def merge_site_land_info(site: dict) -> dict:
@@ -29,14 +63,19 @@ def merge_site_land_info(site: dict) -> dict:
     info["지번"] = jibun or "추가 확인 필요"
     lat, lon = site.get("lat"), site.get("lon")
     if lat is not None and lon is not None:
-        fetched, msg = fetch_vworld_land_attr(lat, lon)
+        fetched, msg, extra = fetch_vworld_land_attr(float(lat), float(lon))
         if fetched:
             info.update(fetched)
+        if extra.get("boundary_geojson"):
+            site["boundary_geojson"] = extra["boundary_geojson"]
+            site["boundary_source"] = extra.get("boundary_source", "")
+            site["pnu"] = extra.get("pnu", "")
+        if msg != "OK":
+            info["데이터_출처"] = msg if not fetched else info.get("데이터_출처", "")
+        elif not info.get("데이터_출처"):
             info["데이터_출처"] = "VWorld"
-        else:
-            info["데이터_출처"] = msg
     else:
-        info["데이터_출처"] = "좌표 없음"
+        info["데이터_출처"] = "좌표 없음 — Kakao REST 키로 주소→좌표 후 갱신"
     site["land_info"] = info
     return site
 
@@ -47,13 +86,15 @@ def render_land_info_panel(site: dict | None) -> None:
         st.info("부지를 검색해 목록에 추가하세요.")
         return
 
-    if st.button("토지정보 갱신(가능 범위)", key="sd_refresh_land"):
+    if st.button("토지정보·필지경계 갱신", key="sd_refresh_land"):
         merge_site_land_info(site)
+        st.rerun()
 
     info = site.get("land_info") or empty_land_info()
     rows = [
         ("소재지", info.get("소재지")),
         ("지번", info.get("지번")),
+        ("PNU", site.get("pnu") or "—"),
         ("지목", info.get("지목")),
         ("필지 면적(㎡)", info.get("필지_면적_m2") or "정보 없음"),
         ("용도지역", info.get("용도지역")),
@@ -79,10 +120,10 @@ def render_land_info_panel(site: dict | None) -> None:
         st.caption(f"출처: {info['데이터_출처']}")
 
     if site.get("boundary_geojson"):
-        st.success("필지 경계: 공인 데이터 로드됨")
+        st.success("필지 경계: VWorld 지적 데이터 로드됨 (지도에 표시)")
     else:
         st.markdown(
-            '<p class="sd-warn">⚠ 필지 경계 미표시 — 지적 WFS/API 연동 전까지 '
-            "임의 경계를 그리지 않습니다.</p>",
+            '<p class="sd-warn">⚠ 필지 경계 없음 — 정확한 좌표(Kakao) 후 '
+            "「토지정보·필지경계 갱신」을 누르세요.</p>",
             unsafe_allow_html=True,
         )

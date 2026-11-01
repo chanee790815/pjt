@@ -18,27 +18,102 @@ SESSION_ACTIVE_SITE_ID = "sd_active_site_id"
 SESSION_MAP_STYLE = "sd_map_style"
 
 
+def _secret_str(v: Any) -> str:
+    if v is None:
+        return ""
+    s = str(v).strip()
+    return s
+
+
 def get_secret(key: str, default: str = "") -> str:
-    """Streamlit Secrets → 환경변수 순."""
+    """Streamlit Secrets → 환경변수 순 (Juso/Kakao 등 키 이름 여러 형태 허용)."""
     env = os.environ.get(key, "").strip()
     if env:
         return env
+
+    aliases: list[str] = [key]
+    if key == "JUSO_API_KEY":
+        aliases.extend(["JUSO_CONFIRM_KEY", "JUSO_confmKey", "confmKey"])
+
     try:
-        if key in st.secrets:
-            v = st.secrets[key]
-            if v is not None and str(v).strip():
-                return str(v).strip()
+        for name in aliases:
+            if name in st.secrets:
+                s = _secret_str(st.secrets[name])
+                if s:
+                    return s
+            v = st.secrets.get(name)
+            if v is not None and not isinstance(v, dict):
+                s = _secret_str(v)
+                if s:
+                    return s
     except Exception:
         pass
-    try:
-        nested = st.secrets.get("solar_design") or {}
-        if isinstance(nested, dict) and key in nested:
-            v = nested.get(key)
-            if v is not None and str(v).strip():
-                return str(v).strip()
-    except Exception:
-        pass
+
+    for section, field in (
+        ("solar_design", key),
+        ("juso", "JUSO_API_KEY"),
+        ("juso", "api_key"),
+        ("juso", "confmKey"),
+    ):
+        try:
+            nested = st.secrets.get(section) or {}
+            if isinstance(nested, dict):
+                if section == "juso" and key == "JUSO_API_KEY":
+                    for fname in ("JUSO_API_KEY", "api_key", "confmKey", "confirmKey"):
+                        s = _secret_str(nested.get(fname))
+                        if s:
+                            return s
+                else:
+                    s = _secret_str(nested.get(field))
+                    if s:
+                        return s
+        except Exception:
+            pass
+
+    # 실수로 [passwords] 블록 안에 넣은 경우
+    if key in ("JUSO_API_KEY", "JUSO_CONFIRM_KEY", "KAKAO_REST_API_KEY"):
+        try:
+            pw = st.secrets.get("passwords")
+            if isinstance(pw, dict):
+                for name in aliases:
+                    if name in pw:
+                        s = _secret_str(pw.get(name))
+                        if s:
+                            return s
+        except Exception:
+            pass
     return default
+
+
+def diagnose_secrets_for_solar() -> list[str]:
+    """키 값은 노출하지 않고 Secrets 배치만 안내."""
+    lines: list[str] = []
+    if get_secret("JUSO_API_KEY") or get_secret("JUSO_CONFIRM_KEY"):
+        lines.append("Juso 승인키: 앱에서 인식됨")
+    else:
+        lines.append("Juso 승인키: 인식되지 않음")
+        try:
+            if "JUSO_API_KEY" in st.secrets:
+                lines.append("→ `JUSO_API_KEY` 항목은 있으나 값이 비었거나 읽기 실패")
+            pw = st.secrets.get("passwords")
+            if isinstance(pw, dict) and (
+                "JUSO_API_KEY" in pw or "JUSO_CONFIRM_KEY" in pw
+            ):
+                lines.append(
+                    "→ `JUSO_API_KEY`가 **[passwords] 안**에 있습니다. "
+                    "**[passwords] 위(맨 위)** 로 옮긴 뒤 Save · Reboot 하세요."
+                )
+            juso = st.secrets.get("juso")
+            if isinstance(juso, dict):
+                lines.append("→ `[juso]` 섹션이 있습니다. confmKey 또는 api_key 확인")
+        except Exception as e:
+            lines.append(f"→ Secrets 진단 중 오류: {e}")
+        if len(lines) == 1:
+            lines.append(
+                "→ Cloud **Settings → Secrets**에 "
+                "`JUSO_API_KEY = \"승인키\"` 가 **[passwords] 밖**에 있는지 확인"
+            )
+    return lines
 
 
 def new_site_id() -> str:
