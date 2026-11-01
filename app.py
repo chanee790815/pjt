@@ -345,6 +345,7 @@ ALL_PMO_MENUS = [
     "일일보고",
     "프로젝트 상세",
     "일 발전량 분석",
+    "태양광 설계 지원",
     "경영지표(KPI)",
     "마스터 설정",
 ]
@@ -4448,6 +4449,15 @@ if check_login():
                 view_project_detail(sh, pjt_list)
             elif menu == "일 발전량 분석": 
                 view_solar(sh)
+            elif menu == "태양광 설계 지원":
+                try:
+                    from solar_design.main import view_solar_design
+
+                    view_solar_design()
+                except Exception as _sd_err:
+                    st.error("태양광 설계 지원 모듈을 불러오지 못했습니다. PM 기능은 영향 없습니다.")
+                    with st.expander("오류 상세"):
+                        st.exception(_sd_err)
             elif menu == "경영지표(KPI)": 
                 view_kpi(sh)
             elif menu == "마스터 설정": 
