@@ -24,6 +24,132 @@ def _vworld_domain() -> str:
     return "pmteampjt26.streamlit.app"
 
 
+def _domain_candidates() -> list[str]:
+    primary = _vworld_domain()
+    cands = [primary, "pmteampjt26.streamlit.app", "localhost"]
+    out: list[str] = []
+    for c in cands:
+        if c and c not in out:
+            out.append(c)
+    return out
+
+
+LAST_VWORLD_ERROR: str = ""
+
+
+def _parse_vworld_error(body: dict) -> str:
+    resp = body.get("response") or {}
+    err = resp.get("error") or {}
+    return (
+        err.get("text")
+        or err.get("message")
+        or resp.get("status")
+        or "UNKNOWN"
+    )
+
+
+def _get_data_feature(params: dict) -> tuple[dict | None, str | None]:
+    """domain 후보를 순서대로 시도."""
+    global LAST_VWORLD_ERROR
+    key = _vworld_key()
+    if not key:
+        LAST_VWORLD_ERROR = "VWORLD_API_KEY 미설정"
+        return None, LAST_VWORLD_ERROR
+
+    last_err = ""
+    for domain in _domain_candidates():
+        p = {**params, "key": key, "domain": domain}
+        try:
+            r = requests.get(VWORLD_DATA_URL, params=p, timeout=25)
+            r.raise_for_status()
+            body = r.json()
+        except Exception as e:
+            last_err = str(e)
+            continue
+        resp = body.get("response") or {}
+        st_code = resp.get("status", "")
+        if st_code == "OK":
+            LAST_VWORLD_ERROR = ""
+            return body, None
+        if st_code == "NOT_FOUND":
+            last_err = "NOT_FOUND"
+            continue
+        last_err = _parse_vworld_error(body)
+    LAST_VWORLD_ERROR = last_err or "VWorld data API 실패"
+    if "domain" in LAST_VWORLD_ERROR.lower() or "인증" in LAST_VWORLD_ERROR:
+        LAST_VWORLD_ERROR += " → Secrets: VWORLD_DOMAIN = pmteampjt26.streamlit.app"
+    return None, LAST_VWORLD_ERROR
+
+
+def get_pnu_at_point(lon: float, lat: float) -> tuple[str | None, str | None]:
+    key = _vworld_key()
+    if not key:
+        return None, "VWORLD_API_KEY 미설정"
+    for domain in _domain_candidates():
+        params = {
+            "service": "address",
+            "request": "getPnu",
+            "version": "2.0",
+            "point": f"{lon},{lat}",
+            "crs": "epsg:4326",
+            "format": "json",
+            "key": key,
+            "domain": domain,
+        }
+        try:
+            r = requests.get(VWORLD_ADDR_URL, params=params, timeout=15)
+            r.raise_for_status()
+            body = r.json()
+        except Exception:
+            continue
+        resp = body.get("response") or {}
+        if resp.get("status") != "OK":
+            continue
+        result = resp.get("result") or {}
+        if isinstance(result, list) and result:
+            result = result[0]
+        pnu = (result.get("pnu") or result.get("id") or "").strip()
+        if pnu:
+            return pnu, None
+    return None, None
+
+
+def get_parcel_by_pnu(pnu: str) -> tuple[dict | None, str | None]:
+    body, err = _get_data_feature(
+        {
+            "service": "data",
+            "request": "GetFeature",
+            "data": "LP_PA_CBND_BUBUN",
+            "format": "json",
+            "geometry": "true",
+            "size": "1",
+            "attrFilter": f"pnu:=:{pnu}",
+        }
+    )
+    if not body:
+        return None, err
+    fc = (body.get("response", {}).get("result") or {}).get("featureCollection")
+    feats = (fc or {}).get("features") or []
+    if not feats:
+        return None, "PNU 필지 없음"
+    return _feature_to_parcel(feats[0], fc), None
+
+
+def _feature_to_parcel(f0: dict, fc: dict) -> dict:
+    props = f0.get("properties") or {}
+    geom = f0.get("geometry")
+    area = _polygon_area_m2(geom) if geom else None
+    return {
+        "pnu": props.get("pnu") or "",
+        "jibun": props.get("jibun") or props.get("addr") or "",
+        "addr": props.get("addr") or "",
+        "jiga": props.get("jiga"),
+        "geojson": fc,
+        "area_m2": area,
+        "properties": props,
+    }
+
+
 def _ring_area_m2_approx(ring: list) -> float | None:
     """WGS84 경위도 링 면적 근사(㎡). 소필지용."""
     if len(ring) < 3:
@@ -60,34 +186,21 @@ def _polygon_area_m2(geom: dict) -> float | None:
 def _get_features_at_point(
     layer: str, lon: float, lat: float, *, size: int = 1
 ) -> tuple[list[dict], str | None]:
-    key = _vworld_key()
-    if not key:
-        return [], "VWORLD_API_KEY 미설정"
-    params = {
-        "service": "data",
-        "request": "GetFeature",
-        "data": layer,
-        "key": key,
-        "domain": _vworld_domain(),
-        "format": "json",
-        "geometry": "false",
-        "size": str(size),
-        "crs": "EPSG:4326",
-        "geomFilter": f"POINT({lon} {lat})",
-    }
-    try:
-        r = requests.get(VWORLD_DATA_URL, params=params, timeout=20)
-        r.raise_for_status()
-        body = r.json()
-    except Exception as e:
-        return [], str(e)
-    resp = body.get("response") or {}
-    if resp.get("status") not in ("OK",):
-        if resp.get("status") == "NOT_FOUND":
-            return [], None
-        err = resp.get("error") or {}
-        return [], err.get("text") or resp.get("status")
-    fc = (resp.get("result") or {}).get("featureCollection") or {}
+    body, err = _get_data_feature(
+        {
+            "service": "data",
+            "request": "GetFeature",
+            "data": layer,
+            "format": "json",
+            "geometry": "false",
+            "size": str(size),
+            "crs": "EPSG:4326",
+            "geomFilter": f"POINT({lon} {lat})",
+        }
+    )
+    if not body:
+        return [], err
+    fc = (body.get("response", {}).get("result") or {}).get("featureCollection") or {}
     return fc.get("features") or [], None
 
 
@@ -132,63 +245,59 @@ def get_land_use_at_point(lon: float, lat: float) -> tuple[dict | None, str | No
 
 def get_parcel_at_point(lon: float, lat: float) -> tuple[dict | None, str | None]:
     """
-    연속지적도 LP_PA_CBND_BUBUN — 좌표 교차 필지 1건.
-    반환 dict: pnu, jibun, addr, geojson(FeatureCollection), area_m2, properties
+    연속지적도 LP_PA_CBND_BUBUN — 좌표 → PNU → 경계.
     """
-    key = _vworld_key()
-    if not key:
+    if not _vworld_key():
         return None, "VWORLD_API_KEY 미설정"
 
-    params = {
-        "service": "data",
-        "request": "GetFeature",
-        "data": "LP_PA_CBND_BUBUN",
-        "key": key,
-        "domain": _vworld_domain(),
-        "format": "json",
-        "geometry": "true",
-        "size": "1",
-        "crs": "EPSG:4326",
-        "geomFilter": f"POINT({lon} {lat})",
-    }
-    try:
-        r = requests.get(VWORLD_DATA_URL, params=params, timeout=20)
-        r.raise_for_status()
-        body = r.json()
-    except Exception as e:
-        return None, f"VWorld 연속지적도 요청 실패: {e}"
+    body, err = _get_data_feature(
+        {
+            "service": "data",
+            "request": "GetFeature",
+            "data": "LP_PA_CBND_BUBUN",
+            "format": "json",
+            "geometry": "true",
+            "size": "1",
+            "crs": "EPSG:4326",
+            "geomFilter": f"POINT({lon} {lat})",
+        }
+    )
+    if body:
+        fc = (body.get("response", {}).get("result") or {}).get("featureCollection")
+        feats = (fc or {}).get("features") or []
+        if feats:
+            return _feature_to_parcel(feats[0], fc), None
 
-    resp = body.get("response") or {}
-    status = resp.get("status", "")
-    if status == "NOT_FOUND":
-        return None, "해당 좌표에 필지가 없습니다. 좌표를 확인하거나 VWORLD_DOMAIN Secrets 확인."
-    if status != "OK":
-        err = resp.get("error") or {}
-        msg = err.get("text") or err.get("message") or status
-        if "domain" in str(msg).lower() or "인증" in str(msg):
-            msg += " — Secrets에 VWORLD_DOMAIN = pmteampjt26.streamlit.app 추가"
-        return None, f"VWorld 오류: {msg}"
+    pnu, _ = get_pnu_at_point(lon, lat)
+    if pnu:
+        parcel, err2 = get_parcel_by_pnu(pnu)
+        if parcel:
+            return parcel, None
+        if err2:
+            return None, f"PNU {pnu}: {err2}"
 
-    fc = (resp.get("result") or {}).get("featureCollection")
-    feats = (fc or {}).get("features") or []
-    if not feats:
-        return None, "필지 feature 없음"
+    # 클릭이 경계선 근처일 때 미세 오프셋 재시도
+    dlon, dlat = 0.00002, 0.00002
+    for ox, oy in ((0, 0), (dlon, 0), (-dlon, 0), (0, dlat), (0, -dlat)):
+        body2, _ = _get_data_feature(
+            {
+                "service": "data",
+                "request": "GetFeature",
+                "data": "LP_PA_CBND_BUBUN",
+                "format": "json",
+                "geometry": "true",
+                "size": "1",
+                "crs": "EPSG:4326",
+                "geomFilter": f"POINT({lon + ox} {lat + oy})",
+            }
+        )
+        if body2:
+            fc = (body2.get("response", {}).get("result") or {}).get("featureCollection")
+            feats = (fc or {}).get("features") or []
+            if feats:
+                return _feature_to_parcel(feats[0], fc), None
 
-    f0 = feats[0]
-    props = f0.get("properties") or {}
-    geom = f0.get("geometry")
-    area = _polygon_area_m2(geom) if geom else None
-
-    parcel = {
-        "pnu": props.get("pnu") or "",
-        "jibun": props.get("jibun") or props.get("addr") or "",
-        "addr": props.get("addr") or "",
-        "jiga": props.get("jiga"),
-        "geojson": fc,
-        "area_m2": area,
-        "properties": props,
-    }
-    return parcel, None
+    return None, err or LAST_VWORLD_ERROR or "필지 경계 조회 실패 (VWORLD_DOMAIN·2D데이터 API 확인)"
 
 
 def reverse_parcel_address(lon: float, lat: float) -> tuple[str | None, str | None]:

@@ -247,14 +247,14 @@ def handle_map_click(lon: float, lat: float) -> None:
             rev, _ = reverse_parcel_address(lon, lat)
             jibun = rev or ""
         target = default_site(road=road, jibun=jibun, lat=lat, lon=lon)
-        merge_site_land_info(target)
+        site_err = merge_site_land_info(target)[1]
         pnu = (target.get("pnu") or "").strip()
         if pnu:
             existing = next((s for s in sites if (s.get("pnu") or "").strip() == pnu), None)
             if existing:
                 existing["lat"] = lat
                 existing["lon"] = lon
-                merge_site_land_info(existing)
+                site_err = merge_site_land_info(existing)[1]
                 target = existing
             else:
                 sites.append(target)
@@ -263,7 +263,7 @@ def handle_map_click(lon: float, lat: float) -> None:
     else:
         target["lat"] = lat
         target["lon"] = lon
-        merge_site_land_info(target)
+        site_err = merge_site_land_info(target)[1]
 
     st.session_state[SESSION_ACTIVE_SITE_ID] = target["id"]
     setback = float(st.session_state.get("sd_layout_setback", 2.0))
@@ -277,10 +277,11 @@ def handle_map_click(lon: float, lat: float) -> None:
             f"추가·갱신: {label} — 모듈 {lay.get('module_count', 0):,}장 · "
             f"{lay.get('capacity_kW', 0):,.1f} kW ({lay.get('capacity_MWp', 0):.3f} MWp)"
         )
+        st.session_state["sd_map_click_level"] = "success"
     else:
-        st.session_state["sd_map_click_msg"] = (
-            f"{label} — {lay.get('message', '배치 실패')} (VWorld 경계·VWORLD_DOMAIN 확인)"
-        )
+        detail = site_err or lay.get("message", "배치 실패")
+        st.session_state["sd_map_click_msg"] = f"{label} — {detail}"
+        st.session_state["sd_map_click_level"] = "warning"
 
 
 def render_auto_layout_panel(site: dict | None) -> None:

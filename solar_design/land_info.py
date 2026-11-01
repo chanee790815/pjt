@@ -127,8 +127,10 @@ def render_land_info_panel(site: dict | None) -> None:
         _, err = merge_site_land_info(site)
         if err and err != "OK":
             st.warning(err)
+        elif site.get("boundary_geojson"):
+            st.success("갱신 완료 — 필지 경계·토지정보 반영")
         else:
-            st.success("갱신 완료 (인허가는 참고용, 확정 아님)")
+            st.warning("주소만 반영됨. VWorld 경계 실패 — 아래 출처·Secrets 확인")
         st.rerun()
 
     info = site.get("land_info") or empty_land_info()

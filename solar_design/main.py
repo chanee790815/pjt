@@ -30,7 +30,7 @@ def _render_map(site: dict | None, map_style: str) -> None:
         return
 
     lat, lon = float(site["lat"]), float(site["lon"])
-    boundary = site.get("boundary_geojson")
+    all_sites = get_sites()
 
     try:
         import folium
@@ -54,33 +54,34 @@ def _render_map(site: dict | None, map_style: str) -> None:
     else:
         m = folium.Map(location=[lat, lon], zoom_start=17, tiles="OpenStreetMap")
 
+    for s in all_sites:
+        gj = s.get("boundary_geojson")
+        if not gj:
+            continue
+        try:
+            gj_obj = gj if isinstance(gj, dict) else json.loads(gj)
+            is_active = site and s.get("id") == site.get("id")
+            folium.GeoJson(
+                gj_obj,
+                name=s.get("address_jibun") or s.get("id"),
+                style_function=lambda _, active=is_active: {
+                    "fillColor": "#66bb6a" if active else "#a5d6a7",
+                    "color": "#2e7d32" if active else "#81c784",
+                    "weight": 3 if active else 1,
+                    "fillOpacity": 0.35 if active else 0.15,
+                },
+            ).add_to(m)
+        except Exception:
+            pass
+
     folium.Marker(
         [lat, lon],
         popup=site.get("address_road") or site.get("address_jibun") or "선택 부지",
         icon=folium.Icon(color="green", icon="info-sign"),
     ).add_to(m)
 
-    if boundary:
-        try:
-            gj = boundary if isinstance(boundary, dict) else json.loads(boundary)
-            gj_layer = folium.GeoJson(
-                gj,
-                name="필지 경계",
-                style_function=lambda _: {
-                    "fillColor": "#66bb6a",
-                    "color": "#2e7d32",
-                    "weight": 2,
-                    "fillOpacity": 0.25,
-                },
-            )
-            gj_layer.add_to(m)
-            try:
-                m.fit_bounds(gj_layer.get_bounds())
-            except Exception:
-                pass
-        except Exception as e:
-            st.warning(f"경계 GeoJSON 표시 실패: {e}")
-    else:
+    boundary = site.get("boundary_geojson")
+    if not boundary:
         st.caption("필지 경계: 갱신 또는 **지도 클릭**으로 조회 · 클릭 시 부지 추가+배치")
 
     layout = site.get("layout") or {}
@@ -97,12 +98,13 @@ def _render_map(site: dict | None, map_style: str) -> None:
             },
         ).add_to(m)
 
+    map_key = f"sd_map_{site.get('id')}_{site.get('pnu')}_{layout.get('module_count', 0)}"
     map_state = st_folium(
         m,
         width=None,
         height=480,
         returned_objects=["last_clicked"],
-        key="sd_folium_map",
+        key=map_key,
     )
     if map_state and map_state.get("last_clicked"):
         clk = map_state["last_clicked"]
@@ -115,8 +117,12 @@ def _render_map(site: dict | None, map_style: str) -> None:
                 st.rerun()
 
     msg = st.session_state.pop("sd_map_click_msg", None)
+    level = st.session_state.pop("sd_map_click_level", "success")
     if msg:
-        st.success(msg)
+        if level == "warning":
+            st.warning(msg)
+        else:
+            st.success(msg)
 
 
 def _render_parcel_list() -> None:
