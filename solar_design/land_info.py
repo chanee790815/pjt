@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import streamlit as st
 
 from solar_design.permit_review import enrich_permit_review
@@ -115,6 +117,44 @@ def merge_site_land_info(site: dict) -> tuple[dict, str | None]:
         enrich_permit_review(info)
     site["land_info"] = info
     return site, err_out
+
+
+def refresh_listed_sites_boundaries(
+    sites: list,
+    *,
+    only_selected: bool = True,
+    run_layout: bool = True,
+) -> dict:
+    """목록에 있는 부지 좌표로 VWorld 경계·토지정보 일괄 조회."""
+    from solar_design.auto_layout import apply_layout_to_site
+
+    targets = [s for s in sites if s.get("lat") is not None and s.get("lon") is not None]
+    if only_selected:
+        targets = [s for s in targets if s.get("selected", True)]
+
+    ok = 0
+    fail = 0
+    errors: list[str] = []
+    seen_pnu: set[str] = set()
+
+    for s in targets:
+        label = (s.get("address_jibun") or s.get("address_road") or s.get("id") or "")[:40]
+        _, err = merge_site_land_info(s)
+        pnu = (s.get("pnu") or "").strip()
+        if pnu and pnu in seen_pnu:
+            continue
+        if pnu:
+            seen_pnu.add(pnu)
+        if s.get("boundary_geojson"):
+            ok += 1
+            if run_layout:
+                apply_layout_to_site(s, setback_m=2.0)
+        else:
+            fail += 1
+            errors.append(f"{label}: {(err or '경계 없음')[:120]}")
+        time.sleep(0.55)
+
+    return {"ok": ok, "fail": fail, "errors": errors, "total": len(targets)}
 
 
 def render_land_info_panel(site: dict | None) -> None:

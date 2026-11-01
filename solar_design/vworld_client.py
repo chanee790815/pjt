@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import time
 from typing import Any
 
 import requests
@@ -37,6 +38,29 @@ def _domain_candidates() -> list[str]:
 LAST_VWORLD_ERROR: str = ""
 
 
+def _http_get_json(url: str, params: dict, *, timeout: int = 25) -> tuple[dict | None, str | None]:
+    """502/503 시 짧은 재시도 (Streamlit Cloud → VWorld 간헐 오류)."""
+    last_err = ""
+    for attempt in range(4):
+        try:
+            r = requests.get(url, params=params, timeout=timeout)
+            if r.status_code in (502, 503, 504):
+                last_err = f"{r.status_code} Server Error (VWorld 일시 오류)"
+                time.sleep(0.8 + attempt * 0.7)
+                continue
+            r.raise_for_status()
+            return r.json(), None
+        except requests.exceptions.HTTPError as e:
+            last_err = str(e)
+            if attempt < 3 and "502" in last_err:
+                time.sleep(0.8 + attempt * 0.7)
+                continue
+            return None, last_err
+        except Exception as e:
+            return None, str(e)
+    return None, last_err or "VWorld 요청 실패"
+
+
 def _parse_vworld_error(body: dict) -> str:
     resp = body.get("response") or {}
     err = resp.get("error") or {}
@@ -59,12 +83,9 @@ def _get_data_feature(params: dict) -> tuple[dict | None, str | None]:
     last_err = ""
     for domain in _domain_candidates():
         p = {**params, "key": key, "domain": domain}
-        try:
-            r = requests.get(VWORLD_DATA_URL, params=p, timeout=25)
-            r.raise_for_status()
-            body = r.json()
-        except Exception as e:
-            last_err = str(e)
+        body, req_err = _http_get_json(VWORLD_DATA_URL, p)
+        if not body:
+            last_err = req_err or "요청 실패"
             continue
         resp = body.get("response") or {}
         st_code = resp.get("status", "")

@@ -55,30 +55,66 @@ def _render_map(site: dict | None, map_style: str) -> None:
         m = folium.Map(location=[lat, lon], zoom_start=17, tiles="OpenStreetMap")
 
     for s in all_sites:
+        slat, slon = s.get("lat"), s.get("lon")
+        if slat is None or slon is None:
+            continue
+        is_active = site and s.get("id") == site.get("id")
+        folium.CircleMarker(
+            location=[float(slat), float(slon)],
+            radius=8 if is_active else 5,
+            color="#2e7d32" if is_active else "#757575",
+            fill=True,
+            fill_opacity=0.8,
+            popup=(s.get("address_jibun") or s.get("address_road") or s.get("id")),
+        ).add_to(m)
+
+    bounds_layer = None
+    bboxes: list[list[float]] = []
+    for s in all_sites:
         gj = s.get("boundary_geojson")
         if not gj:
             continue
         try:
             gj_obj = gj if isinstance(gj, dict) else json.loads(gj)
+            if isinstance(gj_obj.get("bbox"), list) and len(gj_obj["bbox"]) >= 4:
+                bboxes.append(gj_obj["bbox"])
             is_active = site and s.get("id") == site.get("id")
-            folium.GeoJson(
+            layer = folium.GeoJson(
                 gj_obj,
                 name=s.get("address_jibun") or s.get("id"),
-                style_function=lambda _, active=is_active: {
+                style_function=(lambda active: (lambda _: {
                     "fillColor": "#66bb6a" if active else "#a5d6a7",
                     "color": "#2e7d32" if active else "#81c784",
                     "weight": 3 if active else 1,
                     "fillOpacity": 0.35 if active else 0.15,
-                },
-            ).add_to(m)
+                }))(is_active),
+            )
+            layer.add_to(m)
+            if is_active:
+                bounds_layer = layer
         except Exception:
             pass
 
-    folium.Marker(
-        [lat, lon],
-        popup=site.get("address_road") or site.get("address_jibun") or "선택 부지",
-        icon=folium.Icon(color="green", icon="info-sign"),
-    ).add_to(m)
+    if bboxes:
+        min_lon = min(b[0] for b in bboxes)
+        min_lat = min(b[1] for b in bboxes)
+        max_lon = max(b[2] for b in bboxes)
+        max_lat = max(b[3] for b in bboxes)
+        try:
+            m.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]])
+        except Exception:
+            pass
+    elif bounds_layer:
+        try:
+            m.fit_bounds(bounds_layer.get_bounds())
+        except Exception:
+            pass
+    elif site:
+        folium.Marker(
+            [lat, lon],
+            popup=site.get("address_road") or site.get("address_jibun") or "선택 부지",
+            icon=folium.Icon(color="green", icon="info-sign"),
+        ).add_to(m)
 
     boundary = site.get("boundary_geojson")
     if not boundary:
@@ -98,7 +134,7 @@ def _render_map(site: dict | None, map_style: str) -> None:
             },
         ).add_to(m)
 
-    map_key = f"sd_map_{site.get('id')}_{site.get('pnu')}_{layout.get('module_count', 0)}"
+    map_key = f"sd_map_{len(all_sites)}_{sum(1 for s in all_sites if s.get('boundary_geojson'))}"
     map_state = st_folium(
         m,
         width=None,
@@ -130,6 +166,35 @@ def _render_parcel_list() -> None:
     if not sites:
         return
     st.markdown("**선택 필지 목록** (복수 선택 구조)")
+
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        bulk = st.button(
+            "📍 목록 필지 경계·배치 일괄 조회",
+            type="primary",
+            use_container_width=True,
+            key="sd_bulk_boundary",
+        )
+    with c2:
+        st.caption("체크된 필지만 · VWorld")
+
+    if bulk:
+        from solar_design.land_info import refresh_listed_sites_boundaries
+
+        with st.spinner("VWorld 필지 경계 조회 중… (필지당 약 1초)"):
+            result = refresh_listed_sites_boundaries(sites, only_selected=True, run_layout=True)
+        set_sites(sites)
+        if result["ok"]:
+            st.success(
+                f"경계 표시 {result['ok']}건 / 대상 {result['total']}건 "
+                f"(실패 {result['fail']}건)"
+            )
+        else:
+            st.warning(f"경계 0건 — VWorld 502·DOMAIN 확인 (대상 {result['total']}건)")
+        for line in result.get("errors") or []:
+            st.caption(f"· {line}")
+        st.rerun()
+
     for i, s in enumerate(sites):
         c1, c2, c3 = st.columns([3, 1, 1])
         label = (s.get("address_road") or s.get("address_jibun") or s.get("id"))[:40]
@@ -228,12 +293,19 @@ def view_solar_design() -> None:
             lat=add_payload["lat"],
             lon=add_payload["lon"],
         )
-        merge_site_land_info(site)[0]
+        site, v_err = merge_site_land_info(site)
+        from solar_design.auto_layout import apply_layout_to_site
+
+        if site.get("boundary_geojson"):
+            apply_layout_to_site(site, setback_m=2.0)
         sites = get_sites()
         sites.append(site)
         set_sites(sites)
         st.session_state[SESSION_ACTIVE_SITE_ID] = site["id"]
-        st.success("부지가 목록에 추가되었습니다.")
+        if v_err and v_err != "OK":
+            st.warning(f"부지 추가됨. VWorld: {v_err[:200]}")
+        else:
+            st.success("부지가 목록에 추가되었습니다.")
         st.rerun()
 
     _render_parcel_list()
