@@ -349,6 +349,7 @@ ALL_PMO_MENUS = [
     "경영지표(KPI)",
     "마스터 설정",
 ]
+DEFAULT_LANDING_MENU = "태양광 설계 지원"
 ADMIN_MENU = "마스터 설정"
 ADMIN_USER_ID = "admin"
 MENU_CONFIG_SHEET = "Control_Center"
@@ -448,6 +449,15 @@ def get_pmo_menus_for_current_user(sh=None) -> list:
     hidden = set(load_user_hidden_menus(sh))
     hidden.add(ADMIN_MENU)
     return [m for m in ALL_PMO_MENUS if m not in hidden]
+
+
+def default_pmo_menu(visible_menus: list) -> str:
+    """로그인 후 첫 화면(메인) 메뉴."""
+    if not visible_menus:
+        return DEFAULT_LANDING_MENU
+    if DEFAULT_LANDING_MENU in visible_menus:
+        return DEFAULT_LANDING_MENU
+    return visible_menus[0]
 
 
 def _sheet_name_to_filename(name: str) -> str:
@@ -664,6 +674,7 @@ def _try_restore_login_from_query() -> None:
             return
         st.session_state["logged_in"] = True
         st.session_state["user_id"] = uid
+        st.session_state["selected_menu"] = DEFAULT_LANDING_MENU
     except Exception:
         pass
 
@@ -690,6 +701,7 @@ def check_login():
             if u_id in st.secrets["passwords"] and u_pw == st.secrets["passwords"][u_id]:
                 st.session_state["logged_in"] = True
                 st.session_state["user_id"] = u_id
+                st.session_state["selected_menu"] = DEFAULT_LANDING_MENU
                 _persist_login_to_url(u_id)
                 st.rerun()
             else:
@@ -4414,10 +4426,11 @@ if check_login():
                 _save_file_cache(WORKSHEET_LIST_CACHE, pjt_list)
             
             visible_menus = get_pmo_menus_for_current_user(sh)
+            _landing = default_pmo_menu(visible_menus)
             if "selected_menu" not in st.session_state:
-                st.session_state.selected_menu = visible_menus[0]
+                st.session_state.selected_menu = _landing
             elif st.session_state.selected_menu not in visible_menus:
-                st.session_state.selected_menu = visible_menus[0]
+                st.session_state.selected_menu = _landing
             if "selected_pjt" not in st.session_state:
                 st.session_state.selected_pjt = "선택"
             
