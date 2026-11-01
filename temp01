@@ -155,7 +155,7 @@ st.markdown("""
         overflow: hidden;
         white-space: nowrap;
     }
-    .gantt-month-cell {
+    .gantt-month-cell { 
         flex: 1 1 0;
         text-align: center;
         min-width: 0;
