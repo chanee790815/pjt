@@ -11,9 +11,11 @@ from solar_design.utils import (
     store_vworld_parcel_cache,
 )
 from solar_design.vworld_client import (
+    diagnose_vworld_one_parcel,
     get_land_attrs_at_point,
     get_land_use_at_point,
     get_parcel_at_point,
+    get_parcel_minimal,
     reverse_parcel_address,
 )
 
@@ -88,7 +90,9 @@ def fetch_vworld_land_attr(
     parcel = hydrate_parcel_from_site_or_cache(site or {}, lat, lon)
     err = None
     if not parcel:
-        parcel, err = get_parcel_at_point(lon, lat)
+        parcel, err = get_parcel_minimal(lon, lat)
+        if not parcel:
+            parcel, err = get_parcel_at_point(lon, lat)
         if parcel:
             store_vworld_parcel_cache(lat, lon, parcel)
 
@@ -111,9 +115,10 @@ def fetch_vworld_land_attr(
 
     jimok = (parcel.get("jimok") or "").strip()
     if not jimok or jimok == "정보 없음":
-        lnd, _ = get_land_attrs_at_point(lon, lat)
-        if lnd and lnd.get("지목"):
-            parcel["jimok"] = lnd["지목"]
+        if fetch_zoning:
+            lnd, _ = get_land_attrs_at_point(lon, lat)
+            if lnd and lnd.get("지목"):
+                parcel["jimok"] = lnd["지목"]
 
     updates, extra = _land_info_from_parcel(parcel, fetch_zoning=fetch_zoning)
     return updates, "OK", extra
@@ -217,6 +222,23 @@ def refresh_listed_sites_boundaries(
     }
 
 
+def apply_parcel_to_site(site: dict, parcel: dict, lat: float, lon: float) -> None:
+    store_vworld_parcel_cache(lat, lon, parcel)
+    props = parcel.setdefault("properties", {})
+    props["_query_lon"] = lon
+    props["_query_lat"] = lat
+    updates, extra = _land_info_from_parcel(parcel, fetch_zoning=False)
+    info = site.get("land_info") or empty_land_info()
+    info.update(updates)
+    site["land_info"] = info
+    site["boundary_geojson"] = extra.get("boundary_geojson")
+    site["boundary_source"] = extra.get("boundary_source", "")
+    site["pnu"] = extra.get("pnu", "")
+    from solar_design.auto_layout import apply_layout_to_site
+
+    apply_layout_to_site(site, setback_m=2.0)
+
+
 def render_land_info_panel(site: dict | None) -> None:
     st.markdown('<p class="sd-panel-title">📋 부지·필지 정보</p>', unsafe_allow_html=True)
     if not site:
@@ -225,14 +247,35 @@ def render_land_info_panel(site: dict | None) -> None:
 
     if st.button("토지정보·필지경계·인허가 참고 갱신", key="sd_refresh_land"):
         with st.spinner("VWorld 조회 중…"):
-            _, err = merge_site_land_info(site, fetch_zoning=True, force=True)
+            _, err = merge_site_land_info(site, fetch_zoning=False, force=True)
         if err and err != "OK":
             st.warning(err)
         elif site.get("boundary_geojson"):
             st.success("갱신 완료 — 필지 경계·토지정보 반영")
         else:
-            st.warning("주소만 반영됨. VWorld 경계 실패 — 아래 출처·Secrets 확인")
+            st.warning("주소만 반영됨. VWorld 경계 실패 — 아래 「1필지 테스트」 확인")
         st.rerun()
+
+    if st.button(
+        "🧪 활성 필지 VWorld 2단계 테스트 (경계만)",
+        key="sd_vworld_one_test",
+        help="getPnu → GetFeature 2회만. 502면 1~2분 후 재시도",
+    ):
+        if site.get("lat") is None or site.get("lon") is None:
+            st.error("좌표가 없습니다.")
+        else:
+            with st.spinner("VWorld 1필지 테스트…"):
+                lines, parcel = diagnose_vworld_one_parcel(
+                    float(site["lon"]), float(site["lat"])
+                )
+            for line in lines:
+                st.markdown(line)
+            if parcel:
+                apply_parcel_to_site(
+                    site, parcel, float(site["lat"]), float(site["lon"])
+                )
+                st.success("필지 경계 반영됨 — 지도에서 녹색 경계 확인")
+                st.rerun()
 
     info = site.get("land_info") or empty_land_info()
     rows = [

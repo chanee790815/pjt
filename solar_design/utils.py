@@ -290,6 +290,8 @@ def api_status_line() -> str:
         parts.append("Kakao REST — 키 미설정")
     if get_secret("VWORLD_API_KEY"):
         parts.append("VWorld ✓")
+        dom = get_secret("VWORLD_DOMAIN") or "pmteampjt26.streamlit.app(기본)"
+        parts.append(f"domain={dom}")
     else:
         parts.append("VWorld — 키 미설정(필지경계는 미연동)")
     return " | ".join(parts)

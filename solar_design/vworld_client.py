@@ -63,11 +63,18 @@ def _friendly_request_error(exc: BaseException) -> str:
     return raw[:200]
 
 
-def _http_get_json(url: str, params: dict, *, timeout: int | None = None) -> tuple[dict | None, str | None]:
+def _http_get_json(
+    url: str,
+    params: dict,
+    *,
+    timeout: int | None = None,
+    max_attempts: int | None = None,
+) -> tuple[dict | None, str | None]:
     """502·연결 끊김 시 짧게 재시도."""
     read_timeout = timeout if timeout is not None else _READ_TIMEOUT
+    attempts = max_attempts if max_attempts is not None else _HTTP_ATTEMPTS
     last_err = ""
-    for attempt in range(_HTTP_ATTEMPTS):
+    for attempt in range(attempts):
         try:
             r = requests.get(
                 url,
@@ -109,7 +116,12 @@ def _parse_vworld_error(body: dict) -> str:
     )
 
 
-def _get_data_feature(params: dict) -> tuple[dict | None, str | None]:
+def _get_data_feature(
+    params: dict,
+    *,
+    primary_domain_only: bool = False,
+    max_http_attempts: int | None = None,
+) -> tuple[dict | None, str | None]:
     """domain 후보를 순서대로 시도."""
     global LAST_VWORLD_ERROR
     key = _vworld_key()
@@ -117,10 +129,17 @@ def _get_data_feature(params: dict) -> tuple[dict | None, str | None]:
         LAST_VWORLD_ERROR = "VWORLD_API_KEY 미설정"
         return None, LAST_VWORLD_ERROR
 
+    domains = (
+        _domain_candidates(allow_fallback=False)
+        if primary_domain_only
+        else _domain_candidates()
+    )
     last_err = ""
-    for domain in _domain_candidates():
+    for domain in domains:
         p = {**params, "key": key, "domain": domain}
-        body, req_err = _http_get_json(VWORLD_DATA_URL, p)
+        body, req_err = _http_get_json(
+            VWORLD_DATA_URL, p, max_attempts=max_http_attempts
+        )
         if not body:
             last_err = req_err or "요청 실패"
             continue
@@ -154,20 +173,25 @@ def get_pnu_at_point(lon: float, lat: float) -> tuple[str | None, str | None]:
         "key": key,
         "domain": domain,
     }
-    body, _ = _http_get_json(VWORLD_ADDR_URL, params, timeout=15)
+    body, req_err = _http_get_json(VWORLD_ADDR_URL, params, timeout=15, max_attempts=2)
     if not body:
-        return None, None
+        return None, req_err or "주소 API HTTP 실패"
     resp = body.get("response") or {}
     if resp.get("status") != "OK":
-        return None, None
+        return None, _parse_vworld_error(body) if body else str(resp.get("status"))
     result = resp.get("result") or {}
     if isinstance(result, list) and result:
         result = result[0]
     pnu = (result.get("pnu") or result.get("id") or "").strip()
-    return (pnu, None) if pnu else (None, None)
+    return (pnu, None) if pnu else (None, "PNU 결과 없음 (좌표가 필지 밖일 수 있음)")
 
 
-def get_parcel_by_pnu(pnu: str) -> tuple[dict | None, str | None]:
+def get_parcel_by_pnu(
+    pnu: str,
+    *,
+    primary_domain_only: bool = False,
+    max_http_attempts: int | None = None,
+) -> tuple[dict | None, str | None]:
     body, err = _get_data_feature(
         {
             "service": "data",
@@ -177,7 +201,9 @@ def get_parcel_by_pnu(pnu: str) -> tuple[dict | None, str | None]:
             "geometry": "true",
             "size": "1",
             "attrFilter": f"pnu:=:{pnu}",
-        }
+        },
+        primary_domain_only=primary_domain_only,
+        max_http_attempts=max_http_attempts,
     )
     if not body:
         return None, err
@@ -319,6 +345,63 @@ def get_land_use_at_point(lon: float, lat: float) -> tuple[dict | None, str | No
     return None, None
 
 
+def get_parcel_minimal(lon: float, lat: float) -> tuple[dict | None, str | None]:
+    """
+    1필지 성공 확인용 — API 2회만 (getPnu + PNU로 경계), 도메인 1개·재시도 최소.
+    """
+    if not _vworld_key():
+        return None, "VWORLD_API_KEY 미설정"
+    pnu, err = get_pnu_at_point(lon, lat)
+    if not pnu:
+        return None, err or "PNU 조회 실패"
+    parcel, err2 = get_parcel_by_pnu(
+        pnu,
+        primary_domain_only=True,
+        max_http_attempts=2,
+    )
+    if parcel:
+        return parcel, None
+    return None, err2 or "필지 경계(GetFeature) 실패"
+
+
+def diagnose_vworld_one_parcel(lon: float, lat: float) -> tuple[list[str], dict | None]:
+    """단계별 메시지 + 성공 시 parcel dict."""
+    lines: list[str] = []
+    key = _vworld_key()
+    if not key:
+        lines.append("❌ VWORLD_API_KEY 없음 (Secrets 확인)")
+        return lines, None
+    lines.append(f"✓ API 키 인식 · domain={_vworld_domain()}")
+    lines.append(f"좌표: lon={lon}, lat={lat}")
+
+    pnu, err = get_pnu_at_point(lon, lat)
+    if not pnu:
+        lines.append(f"❌ 1단계 getPnu 실패: {err or '알 수 없음'}")
+        lines.append(
+            "→ vworld.kr 개발키: **주소 API** + **domain** 등록 "
+            "(pmteampjt26.streamlit.app) 확인"
+        )
+        return lines, None
+    lines.append(f"✓ 1단계 PNU: {pnu}")
+
+    parcel, err2 = get_parcel_by_pnu(
+        pnu,
+        primary_domain_only=True,
+        max_http_attempts=2,
+    )
+    if not parcel:
+        lines.append(f"❌ 2단계 GetFeature(LP_PA_CBND) 실패: {err2 or LAST_VWORLD_ERROR}")
+        lines.append(
+            "→ 개발키 **2D데이터 API**·레이어 **LP_PA_CBND_BUBUN** 사용 허용 확인. "
+            "502면 1~2분 후 같은 버튼만 다시."
+        )
+        return lines, None
+
+    area = parcel.get("area_m2")
+    lines.append(f"✓ 2단계 필지 경계 OK · 면적≈{area}㎡" if area else "✓ 2단계 필지 경계 OK")
+    return lines, parcel
+
+
 def get_parcel_at_point(lon: float, lat: float) -> tuple[dict | None, str | None]:
     """
     연속지적도 LP_PA_CBND_BUBUN — 좌표 → PNU → 경계.
@@ -327,15 +410,12 @@ def get_parcel_at_point(lon: float, lat: float) -> tuple[dict | None, str | None
     if not _vworld_key():
         return None, "VWORLD_API_KEY 미설정"
 
-    last_err: str | None = None
-    pnu, _ = get_pnu_at_point(lon, lat)
-    if pnu:
-        parcel, err2 = get_parcel_by_pnu(pnu)
-        if parcel:
-            return parcel, None
-        last_err = err2
+    parcel, err = get_parcel_minimal(lon, lat)
+    if parcel:
+        return parcel, None
+    last_err = err
 
-    body, err = _get_data_feature(
+    body, err2 = _get_data_feature(
         {
             "service": "data",
             "request": "GetFeature",
@@ -345,35 +425,17 @@ def get_parcel_at_point(lon: float, lat: float) -> tuple[dict | None, str | None
             "size": "1",
             "crs": "EPSG:4326",
             "geomFilter": f"POINT({lon} {lat})",
-        }
+        },
+        primary_domain_only=True,
+        max_http_attempts=2,
     )
     if body:
         fc = (body.get("response", {}).get("result") or {}).get("featureCollection")
         feats = (fc or {}).get("features") or []
         if feats:
             return _feature_to_parcel(feats[0], fc), None
-    if err:
-        last_err = err
-
-    dlon, dlat = 0.00002, 0.00002
-    for ox, oy in ((dlon, 0), (-dlon, 0), (0, dlat)):
-        body2, _ = _get_data_feature(
-            {
-                "service": "data",
-                "request": "GetFeature",
-                "data": "LP_PA_CBND_BUBUN",
-                "format": "json",
-                "geometry": "true",
-                "size": "1",
-                "crs": "EPSG:4326",
-                "geomFilter": f"POINT({lon + ox} {lat + oy})",
-            }
-        )
-        if body2:
-            fc = (body2.get("response", {}).get("result") or {}).get("featureCollection")
-            feats = (fc or {}).get("features") or []
-            if feats:
-                return _feature_to_parcel(feats[0], fc), None
+    if err2:
+        last_err = err2
 
     return None, _friendly_request_error(
         Exception(last_err or LAST_VWORLD_ERROR or "필지 경계 조회 실패 (VWORLD_DOMAIN·2D데이터 API 확인)")
