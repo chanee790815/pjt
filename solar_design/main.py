@@ -293,7 +293,7 @@ def view_solar_design() -> None:
             lat=add_payload["lat"],
             lon=add_payload["lon"],
         )
-        site, v_err = merge_site_land_info(site)
+        site, v_err = merge_site_land_info(site, fetch_zoning=False)
         from solar_design.auto_layout import apply_layout_to_site
 
         if site.get("boundary_geojson"):

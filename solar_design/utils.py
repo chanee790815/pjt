@@ -16,6 +16,8 @@ DATA_DIR = PACKAGE_DIR.parent / "data"
 SESSION_SITES = "sd_parcel_sites"
 SESSION_ACTIVE_SITE_ID = "sd_active_site_id"
 SESSION_MAP_STYLE = "sd_map_style"
+SESSION_VWORLD_CACHE = "sd_vworld_parcel_cache"
+SESSION_MODULE_MODEL = "sd_selected_module_model"
 
 
 def _secret_str(v: Any) -> str:
@@ -169,6 +171,41 @@ def get_sites() -> list:
 
 def set_sites(sites: list) -> None:
     st.session_state[SESSION_SITES] = sites
+
+
+def _vworld_cache() -> dict:
+    if SESSION_VWORLD_CACHE not in st.session_state:
+        st.session_state[SESSION_VWORLD_CACHE] = {}
+    return st.session_state[SESSION_VWORLD_CACHE]
+
+
+def vworld_cache_key(lat: float, lon: float) -> str:
+    return f"{round(lat, 5):.5f},{round(lon, 5):.5f}"
+
+
+def get_cached_vworld_parcel(lat: float, lon: float) -> dict | None:
+    """세션 내 성공한 필지 조회 결과 (VWorld 재호출 방지)."""
+    hit = _vworld_cache().get(vworld_cache_key(lat, lon))
+    return hit if isinstance(hit, dict) else None
+
+
+def get_cached_vworld_parcel_by_pnu(pnu: str) -> dict | None:
+    pnu = (pnu or "").strip()
+    if not pnu:
+        return None
+    for parcel in _vworld_cache().values():
+        if isinstance(parcel, dict) and (parcel.get("pnu") or "").strip() == pnu:
+            return parcel
+    return None
+
+
+def store_vworld_parcel_cache(lat: float, lon: float, parcel: dict) -> None:
+    if not parcel:
+        return
+    _vworld_cache()[vworld_cache_key(lat, lon)] = parcel
+    pnu = (parcel.get("pnu") or "").strip()
+    if pnu:
+        _vworld_cache()[f"pnu:{pnu}"] = parcel
 
 
 def get_active_site() -> Optional[dict]:

@@ -37,27 +37,58 @@ def _domain_candidates() -> list[str]:
 
 LAST_VWORLD_ERROR: str = ""
 
+_VWORLD_HEADERS = {
+    "User-Agent": "PM-SolarDesign/1.0 (Streamlit)",
+    "Accept": "application/json",
+    "Connection": "close",
+}
 
-def _http_get_json(url: str, params: dict, *, timeout: int = 25) -> tuple[dict | None, str | None]:
-    """502/503 시 짧은 재시도 (Streamlit Cloud → VWorld 간헐 오류)."""
+
+def _friendly_request_error(exc: BaseException) -> str:
+    raw = str(exc)
+    if "RemoteDisconnected" in raw or "Connection aborted" in raw:
+        return (
+            "VWorld 서버가 연결을 끊었습니다 (일시적). "
+            "30초~1분 후 「일괄 조회」를 다시 시도하세요."
+        )
+    if "502" in raw or "503" in raw or "504" in raw:
+        return "VWorld 게이트웨이 일시 오류 — 잠시 후 재시도"
+    if "timed out" in raw.lower() or "timeout" in raw.lower():
+        return "VWorld 응답 시간 초과 — 재시도"
+    return raw[:200]
+
+
+def _http_get_json(url: str, params: dict, *, timeout: int = 45) -> tuple[dict | None, str | None]:
+    """502·연결 끊김 시 재시도. 요청마다 새 연결(Cloud에서 keep-alive 끊김 완화)."""
     last_err = ""
-    for attempt in range(4):
+    for attempt in range(6):
         try:
-            r = requests.get(url, params=params, timeout=timeout)
+            r = requests.get(
+                url,
+                params=params,
+                timeout=(12, timeout),
+                headers=_VWORLD_HEADERS,
+            )
             if r.status_code in (502, 503, 504):
                 last_err = f"{r.status_code} Server Error (VWorld 일시 오류)"
-                time.sleep(0.8 + attempt * 0.7)
+                time.sleep(1.5 + attempt * 1.0)
                 continue
             r.raise_for_status()
             return r.json(), None
         except requests.exceptions.HTTPError as e:
-            last_err = str(e)
-            if attempt < 3 and "502" in last_err:
-                time.sleep(0.8 + attempt * 0.7)
-                continue
-            return None, last_err
+            last_err = _friendly_request_error(e)
+            time.sleep(1.5 + attempt * 1.0)
+            continue
+        except (
+            requests.exceptions.ConnectionError,
+            requests.exceptions.ChunkedEncodingError,
+            requests.exceptions.Timeout,
+        ) as e:
+            last_err = _friendly_request_error(e)
+            time.sleep(2.0 + attempt * 1.2)
+            continue
         except Exception as e:
-            return None, str(e)
+            return None, _friendly_request_error(e)
     return None, last_err or "VWorld 요청 실패"
 
 
@@ -117,11 +148,8 @@ def get_pnu_at_point(lon: float, lat: float) -> tuple[str | None, str | None]:
             "key": key,
             "domain": domain,
         }
-        try:
-            r = requests.get(VWORLD_ADDR_URL, params=params, timeout=15)
-            r.raise_for_status()
-            body = r.json()
-        except Exception:
+        body, _ = _http_get_json(VWORLD_ADDR_URL, params)
+        if not body:
             continue
         resp = body.get("response") or {}
         if resp.get("status") != "OK":
@@ -156,15 +184,35 @@ def get_parcel_by_pnu(pnu: str) -> tuple[dict | None, str | None]:
     return _feature_to_parcel(feats[0], fc), None
 
 
+def _jimok_from_props(props: dict) -> str:
+    for key in (
+        "lndcgrCodeNm",
+        "lndcgr_nm",
+        "jimok",
+        "land_gb",
+        "lndpcl_ar",
+    ):
+        val = props.get(key)
+        if val and key != "lndpcl_ar":
+            return str(val).strip()
+    return ""
+
+
 def _feature_to_parcel(f0: dict, fc: dict) -> dict:
     props = f0.get("properties") or {}
     geom = f0.get("geometry")
     area = _polygon_area_m2(geom) if geom else None
+    if area is None and props.get("lndpcl_ar"):
+        try:
+            area = float(props["lndpcl_ar"])
+        except (TypeError, ValueError):
+            pass
     return {
         "pnu": props.get("pnu") or "",
         "jibun": props.get("jibun") or props.get("addr") or "",
         "addr": props.get("addr") or "",
         "jiga": props.get("jiga"),
+        "jimok": _jimok_from_props(props),
         "geojson": fc,
         "area_m2": area,
         "properties": props,
@@ -267,9 +315,18 @@ def get_land_use_at_point(lon: float, lat: float) -> tuple[dict | None, str | No
 def get_parcel_at_point(lon: float, lat: float) -> tuple[dict | None, str | None]:
     """
     연속지적도 LP_PA_CBND_BUBUN — 좌표 → PNU → 경계.
+    주소 getPnu를 먼저 시도해 GetFeature 호출 수를 줄임 (Cloud 연결 안정).
     """
     if not _vworld_key():
         return None, "VWORLD_API_KEY 미설정"
+
+    last_err: str | None = None
+    pnu, _ = get_pnu_at_point(lon, lat)
+    if pnu:
+        parcel, err2 = get_parcel_by_pnu(pnu)
+        if parcel:
+            return parcel, None
+        last_err = err2
 
     body, err = _get_data_feature(
         {
@@ -288,14 +345,8 @@ def get_parcel_at_point(lon: float, lat: float) -> tuple[dict | None, str | None
         feats = (fc or {}).get("features") or []
         if feats:
             return _feature_to_parcel(feats[0], fc), None
-
-    pnu, _ = get_pnu_at_point(lon, lat)
-    if pnu:
-        parcel, err2 = get_parcel_by_pnu(pnu)
-        if parcel:
-            return parcel, None
-        if err2:
-            return None, f"PNU {pnu}: {err2}"
+    if err:
+        last_err = err
 
     # 클릭이 경계선 근처일 때 미세 오프셋 재시도
     dlon, dlat = 0.00002, 0.00002
@@ -318,7 +369,9 @@ def get_parcel_at_point(lon: float, lat: float) -> tuple[dict | None, str | None
             if feats:
                 return _feature_to_parcel(feats[0], fc), None
 
-    return None, err or LAST_VWORLD_ERROR or "필지 경계 조회 실패 (VWORLD_DOMAIN·2D데이터 API 확인)"
+    return None, _friendly_request_error(
+        Exception(last_err or LAST_VWORLD_ERROR or "필지 경계 조회 실패 (VWORLD_DOMAIN·2D데이터 API 확인)")
+    )
 
 
 def reverse_parcel_address(lon: float, lat: float) -> tuple[str | None, str | None]:
@@ -326,29 +379,28 @@ def reverse_parcel_address(lon: float, lat: float) -> tuple[str | None, str | No
     key = _vworld_key()
     if not key:
         return None, None
-    params = {
-        "service": "address",
-        "request": "getAddress",
-        "version": "2.0",
-        "crs": "epsg:4326",
-        "point": f"{lon},{lat}",
-        "type": "PARCEL",
-        "format": "json",
-        "key": key,
-        "domain": _vworld_domain(),
-    }
-    try:
-        r = requests.get(VWORLD_ADDR_URL, params=params, timeout=15)
-        r.raise_for_status()
-        body = r.json()
+    for domain in _domain_candidates():
+        params = {
+            "service": "address",
+            "request": "getAddress",
+            "version": "2.0",
+            "crs": "epsg:4326",
+            "point": f"{lon},{lat}",
+            "type": "PARCEL",
+            "format": "json",
+            "key": key,
+            "domain": domain,
+        }
+        body, _ = _http_get_json(VWORLD_ADDR_URL, params)
+        if not body:
+            continue
         resp = body.get("response") or {}
         if resp.get("status") != "OK":
-            return None, None
+            continue
         result = resp.get("result") or []
         if not result:
-            return None, None
+            continue
         item = result[0]
         text = item.get("text") or item.get("structure", {}).get("level4L") or ""
         return text.strip() or None, None
-    except Exception:
-        return None, None
+    return None, None

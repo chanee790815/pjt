@@ -7,26 +7,52 @@ import time
 import streamlit as st
 
 from solar_design.permit_review import enrich_permit_review
-from solar_design.utils import empty_land_info
+from solar_design.utils import (
+    empty_land_info,
+    get_cached_vworld_parcel,
+    get_cached_vworld_parcel_by_pnu,
+    store_vworld_parcel_cache,
+)
 from solar_design.vworld_client import (
     get_land_attrs_at_point,
     get_land_use_at_point,
     get_parcel_at_point,
+    get_pnu_at_point,
     reverse_parcel_address,
 )
 
 
-def fetch_vworld_land_attr(lat: float, lon: float) -> tuple[dict | None, str, dict | None]:
+def fetch_vworld_land_attr(
+    lat: float,
+    lon: float,
+    *,
+    fetch_zoning: bool = True,
+) -> tuple[dict | None, str, dict | None]:
     """
     Returns: (land_info_updates, message, extra_site_fields)
     """
     notes: list[str] = []
-    parcel, err = get_parcel_at_point(lon, lat)
+    parcel = get_cached_vworld_parcel(lat, lon)
+    err = None
+    if parcel:
+        notes.append("세션 캐시")
+    else:
+        parcel, err = get_parcel_at_point(lon, lat)
+        if parcel:
+            store_vworld_parcel_cache(lat, lon, parcel)
     extra: dict = {}
 
     if not parcel:
         rev, _ = reverse_parcel_address(lon, lat)
         msg = err or "VWorld 필지 조회 실패"
+        if isinstance(msg, str) and ("RemoteDisconnected" in msg or "Connection aborted" in msg):
+            msg = (
+                "VWorld 서버가 연결을 끊었습니다 (일시적). "
+                "30초~1분 후 「토지정보·필지경계 갱신」 또는 일괄 조회를 다시 시도하세요."
+            )
+        pnu_only, _ = get_pnu_at_point(lon, lat)
+        if pnu_only:
+            extra["pnu"] = pnu_only
         base = {"소재지": rev or "정보 없음", "지번": rev or "추가 확인 필요"} if rev else None
         if base:
             base = enrich_permit_review({**empty_land_info(), **base})
@@ -47,22 +73,30 @@ def fetch_vworld_land_attr(lat: float, lon: float) -> tuple[dict | None, str, di
         except (TypeError, ValueError):
             jiga_txt = str(jiga)
 
-    jimok = "정보 없음"
-    lnd, _ = get_land_attrs_at_point(lon, lat)
-    if lnd and lnd.get("지목"):
-        jimok = lnd["지목"]
-        notes.append("LT_C_LNDPARCEL")
+    jimok = (parcel.get("jimok") or "").strip() or "정보 없음"
+    if jimok == "정보 없음":
+        time.sleep(0.6)
+        lnd, _ = get_land_attrs_at_point(lon, lat)
+        if lnd and lnd.get("지목"):
+            jimok = lnd["지목"]
+            notes.append("LT_C_LNDPARCEL")
+        else:
+            notes.append("지목: LT_C_LNDPARCEL 미조회")
     else:
-        notes.append("지목: LT_C_LNDPARCEL 미조회")
+        notes.append("지목: LP_PA_CBND")
 
     yongdo, yongdo_gu = "정보 없음", "정보 없음"
-    lu, _ = get_land_use_at_point(lon, lat)
-    if lu:
-        yongdo = lu.get("용도지역") or yongdo
-        yongdo_gu = lu.get("용도지구") or yongdo_gu
-        notes.append("용도지역 레이어")
+    if fetch_zoning:
+        time.sleep(0.6)
+        lu, _ = get_land_use_at_point(lon, lat)
+        if lu:
+            yongdo = lu.get("용도지역") or yongdo
+            yongdo_gu = lu.get("용도지구") or yongdo_gu
+            notes.append("용도지역 레이어")
+        else:
+            notes.append("용도지역: 추가 레이어 연동 예정")
     else:
-        notes.append("용도지역: 추가 레이어 연동 예정")
+        notes.append("용도지역: 갱신 시 상세 조회")
 
     updates = {
         "소재지": addr or "정보 없음",
@@ -84,7 +118,7 @@ def fetch_vworld_land_attr(lat: float, lon: float) -> tuple[dict | None, str, di
     return updates, "OK", extra
 
 
-def merge_site_land_info(site: dict) -> tuple[dict, str | None]:
+def merge_site_land_info(site: dict, *, fetch_zoning: bool = True) -> tuple[dict, str | None]:
     """site 갱신 후 (site, 오류메시지)"""
     info = empty_land_info()
     road = site.get("address_road") or ""
@@ -94,9 +128,13 @@ def merge_site_land_info(site: dict) -> tuple[dict, str | None]:
     err_out = None
     lat, lon = site.get("lat"), site.get("lon")
     if lat is not None and lon is not None:
-        fetched, msg, extra = fetch_vworld_land_attr(float(lat), float(lon))
+        fetched, msg, extra = fetch_vworld_land_attr(
+            float(lat), float(lon), fetch_zoning=fetch_zoning
+        )
         if fetched:
             info.update(fetched)
+        if extra.get("pnu"):
+            site["pnu"] = extra["pnu"]
         if extra.get("boundary_geojson"):
             site["boundary_geojson"] = extra["boundary_geojson"]
             site["boundary_source"] = extra.get("boundary_source", "")
@@ -139,10 +177,15 @@ def refresh_listed_sites_boundaries(
 
     for s in targets:
         label = (s.get("address_jibun") or s.get("address_road") or s.get("id") or "")[:40]
-        _, err = merge_site_land_info(s)
+        pnu_before = (s.get("pnu") or "").strip()
+        if pnu_before and pnu_before in seen_pnu and not s.get("boundary_geojson"):
+            cached = get_cached_vworld_parcel_by_pnu(pnu_before)
+            if cached and cached.get("geojson"):
+                s["boundary_geojson"] = cached["geojson"]
+                s["boundary_source"] = "VWorld LP_PA_CBND_BUBUN (캐시)"
+                s["pnu"] = cached.get("pnu") or pnu_before
+        _, err = merge_site_land_info(s, fetch_zoning=False)
         pnu = (s.get("pnu") or "").strip()
-        if pnu and pnu in seen_pnu:
-            continue
         if pnu:
             seen_pnu.add(pnu)
         if s.get("boundary_geojson"):
@@ -152,7 +195,7 @@ def refresh_listed_sites_boundaries(
         else:
             fail += 1
             errors.append(f"{label}: {(err or '경계 없음')[:120]}")
-        time.sleep(0.55)
+        time.sleep(1.8)
 
     return {"ok": ok, "fail": fail, "errors": errors, "total": len(targets)}
 

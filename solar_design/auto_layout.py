@@ -8,11 +8,16 @@ from typing import Any
 
 import streamlit as st
 
-from solar_design.utils import load_json_data
+from solar_design.utils import SESSION_MODULE_MODEL, load_json_data
 
 
 def default_module_spec() -> dict:
     modules = [m for m in load_json_data("modules.json") if m.get("사용_여부", True)]
+    chosen = st.session_state.get(SESSION_MODULE_MODEL)
+    if chosen and modules:
+        for m in modules:
+            if m.get("모델명") == chosen:
+                return m
     if not modules:
         return {
             "제조사": "예시",
@@ -214,7 +219,7 @@ def apply_layout_to_site(site: dict, *, setback_m: float = 2.0) -> dict:
         return site["layout"]
     if isinstance(gj, str):
         gj = json.loads(gj)
-    layout = compute_auto_layout(gj, setback_m=setback_m)
+    layout = compute_auto_layout(gj, setback_m=setback_m, module=default_module_spec())
     site["layout"] = layout
     return layout
 
@@ -290,6 +295,11 @@ def render_auto_layout_panel(site: dict | None) -> None:
         st.info("부지를 선택하세요.")
         return
     setback = st.slider("경계 이격(m)", 1.0, 5.0, 2.0, 0.5, key="sd_layout_setback")
+    mod = default_module_spec()
+    st.caption(
+        f"모듈: {mod.get('제조사', '')} {mod.get('모델명', '')} "
+        f"({mod.get('정격출력_Wp', '')} Wp) — 「기자재 미리보기」에서 변경"
+    )
     if st.button("활성 필지 배치 계산", type="primary", key="sd_calc_layout"):
         apply_layout_to_site(site, setback_m=setback)
         st.rerun()
