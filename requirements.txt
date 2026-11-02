@@ -1,10 +1,10 @@
 streamlit
 pandas
-numpy
 gspread
 google-auth
 requests
 plotly
 openpyxl
+numpy
 folium
 streamlit-folium
