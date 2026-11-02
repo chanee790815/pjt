@@ -173,7 +173,15 @@ def get_pnu_at_point(lon: float, lat: float) -> tuple[str | None, str | None]:
         "key": key,
         "domain": domain,
     }
-    body, req_err = _http_get_json(VWORLD_ADDR_URL, params, timeout=15, max_attempts=2)
+    body, req_err = _http_get_json(VWORLD_ADDR_URL, params, timeout=15, max_attempts=3)
+    if not body:
+        for domain in _domain_candidates()[1:]:
+            params["domain"] = domain
+            body, req_err = _http_get_json(
+                VWORLD_ADDR_URL, params, timeout=15, max_attempts=2
+            )
+            if body:
+                break
     if not body:
         return None, req_err or "주소 API HTTP 실패"
     resp = body.get("response") or {}
@@ -184,6 +192,36 @@ def get_pnu_at_point(lon: float, lat: float) -> tuple[str | None, str | None]:
         result = result[0]
     pnu = (result.get("pnu") or result.get("id") or "").strip()
     return (pnu, None) if pnu else (None, "PNU 결과 없음 (좌표가 필지 밖일 수 있음)")
+
+
+def get_parcel_by_point_direct(
+    lon: float,
+    lat: float,
+    *,
+    max_http_attempts: int = 3,
+) -> tuple[dict | None, str | None]:
+    """getPnu 없이 2D데이터 좌표→필지 (주소 API 502 우회)."""
+    body, err = _get_data_feature(
+        {
+            "service": "data",
+            "request": "GetFeature",
+            "data": "LP_PA_CBND_BUBUN",
+            "format": "json",
+            "geometry": "true",
+            "size": "1",
+            "crs": "EPSG:4326",
+            "geomFilter": f"POINT({lon} {lat})",
+        },
+        primary_domain_only=True,
+        max_http_attempts=max_http_attempts,
+    )
+    if not body:
+        return None, err
+    fc = (body.get("response", {}).get("result") or {}).get("featureCollection")
+    feats = (fc or {}).get("features") or []
+    if not feats:
+        return None, "좌표 위치에 필지 없음 (geomFilter)"
+    return _feature_to_parcel(feats[0], fc), None
 
 
 def get_parcel_by_pnu(
@@ -353,6 +391,11 @@ def get_parcel_minimal(lon: float, lat: float) -> tuple[dict | None, str | None]
         return None, "VWORLD_API_KEY 미설정"
     pnu, err = get_pnu_at_point(lon, lat)
     if not pnu:
+        if err and ("502" in str(err) or "503" in str(err) or "504" in str(err)):
+            parcel, err_b = get_parcel_by_point_direct(lon, lat, max_http_attempts=3)
+            if parcel:
+                return parcel, None
+            return None, f"getPnu: {err} / 좌표직접: {err_b or '실패'}"
         return None, err or "PNU 조회 실패"
     parcel, err2 = get_parcel_by_pnu(
         pnu,
@@ -365,40 +408,57 @@ def get_parcel_minimal(lon: float, lat: float) -> tuple[dict | None, str | None]
 
 
 def diagnose_vworld_one_parcel(lon: float, lat: float) -> tuple[list[str], dict | None]:
-    """단계별 메시지 + 성공 시 parcel dict."""
+    """단계별 메시지 + 성공 시 parcel dict. 2D Data 먼저(주소 API 502 우회)."""
     lines: list[str] = []
     key = _vworld_key()
     if not key:
         lines.append("❌ VWORLD_API_KEY 없음 (Secrets 확인)")
         return lines, None
-    lines.append(f"✓ API 키 인식 · domain={_vworld_domain()}")
+
+    from solar_design import __version__ as sd_ver
+
+    lines.append(f"모듈 버전 **{sd_ver}** (0.1.2 미만이면 GitHub 코드 재업로드)")
+    lines.append(f"✓ Secrets에 VWORLD 키 있음 · domain={_vworld_domain()}")
     lines.append(f"좌표: lon={lon}, lat={lat}")
 
+    lines.append("**① 2D Data** 좌표→필지경계 (getPnu 생략, LP_PA_CBND)…")
+    parcel, err_d = get_parcel_by_point_direct(lon, lat, max_http_attempts=4)
+    if parcel:
+        pnu_b = parcel.get("pnu") or "—"
+        area = parcel.get("area_m2")
+        lines.append(
+            f"✓ ① 성공 · PNU={pnu_b} · 면적≈{area}㎡"
+            if area
+            else f"✓ ① 성공 · PNU={pnu_b}"
+        )
+        return lines, parcel
+    lines.append(f"❌ ① 2D Data 실패: {err_d or LAST_VWORLD_ERROR}")
+    lines.append("→ 개발키 **2D Data API** 체크 · domain 일치 · 1~2분 후 재시도")
+
+    lines.append("**② 주소 API** getPnu (보조)…")
     pnu, err = get_pnu_at_point(lon, lat)
     if not pnu:
-        lines.append(f"❌ 1단계 getPnu 실패: {err or '알 수 없음'}")
-        lines.append(
-            "→ vworld.kr 개발키: **주소 API** + **domain** 등록 "
-            "(pmteampjt26.streamlit.app) 확인"
-        )
+        err_txt = err or "알 수 없음"
+        lines.append(f"❌ ② getPnu 실패: {err_txt}")
+        if "502" in str(err_txt) or "503" in str(err_txt):
+            lines.append(
+                "→ 502는 VWorld **주소 API 게이트웨이** 일시 오류. "
+                "① 2D Data만으로도 경계는 가능 — ① 실패 원인을 먼저 해결."
+            )
         return lines, None
-    lines.append(f"✓ 1단계 PNU: {pnu}")
+    lines.append(f"✓ ② PNU: {pnu}")
 
     parcel, err2 = get_parcel_by_pnu(
         pnu,
         primary_domain_only=True,
-        max_http_attempts=2,
+        max_http_attempts=3,
     )
     if not parcel:
-        lines.append(f"❌ 2단계 GetFeature(LP_PA_CBND) 실패: {err2 or LAST_VWORLD_ERROR}")
-        lines.append(
-            "→ 개발키 **2D데이터 API**·레이어 **LP_PA_CBND_BUBUN** 사용 허용 확인. "
-            "502면 1~2분 후 같은 버튼만 다시."
-        )
+        lines.append(f"❌ ③ PNU→경계 실패: {err2 or LAST_VWORLD_ERROR}")
         return lines, None
 
     area = parcel.get("area_m2")
-    lines.append(f"✓ 2단계 필지 경계 OK · 면적≈{area}㎡" if area else "✓ 2단계 필지 경계 OK")
+    lines.append(f"✓ ③ 필지 경계 OK · 면적≈{area}㎡" if area else "✓ ③ 필지 경계 OK")
     return lines, parcel
 
 
@@ -410,10 +470,16 @@ def get_parcel_at_point(lon: float, lat: float) -> tuple[dict | None, str | None
     if not _vworld_key():
         return None, "VWORLD_API_KEY 미설정"
 
-    parcel, err = get_parcel_minimal(lon, lat)
+    parcel, err = get_parcel_by_point_direct(lon, lat, max_http_attempts=3)
     if parcel:
         return parcel, None
     last_err = err
+
+    parcel, err = get_parcel_minimal(lon, lat)
+    if parcel:
+        return parcel, None
+    if err:
+        last_err = err
 
     body, err2 = _get_data_feature(
         {

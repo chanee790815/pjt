@@ -90,7 +90,9 @@ def fetch_vworld_land_attr(
     parcel = hydrate_parcel_from_site_or_cache(site or {}, lat, lon)
     err = None
     if not parcel:
-        parcel, err = get_parcel_minimal(lon, lat)
+        parcel, err = get_parcel_by_point_direct(lon, lat, max_http_attempts=3)
+        if not parcel:
+            parcel, err = get_parcel_minimal(lon, lat)
         if not parcel:
             parcel, err = get_parcel_at_point(lon, lat)
         if parcel:

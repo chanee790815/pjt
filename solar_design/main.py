@@ -249,6 +249,12 @@ def view_solar_design() -> None:
     render_solar_design_css()
     st.title("☀ 태양광 설계 지원")
     st.caption(api_status_line())
+    try:
+        from solar_design import __version__ as _sdv
+
+        st.caption(f"solar_design **{_sdv}** — 테스트에 `0.1.2` 표시되면 최신 코드 반영됨")
+    except Exception:
+        pass
 
     juso_ok = bool(get_secret("JUSO_API_KEY") or get_secret("JUSO_CONFIRM_KEY"))
 
