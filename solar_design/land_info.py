@@ -2,62 +2,25 @@
 
 from __future__ import annotations
 
-import time
-
 import streamlit as st
 
+from solar_design.parcel_store import hydrate_parcel_from_site_or_cache, site_has_vworld_data
 from solar_design.permit_review import enrich_permit_review
 from solar_design.utils import (
     empty_land_info,
-    get_cached_vworld_parcel,
-    get_cached_vworld_parcel_by_pnu,
     store_vworld_parcel_cache,
 )
 from solar_design.vworld_client import (
     get_land_attrs_at_point,
     get_land_use_at_point,
     get_parcel_at_point,
-    get_pnu_at_point,
     reverse_parcel_address,
 )
 
 
-def fetch_vworld_land_attr(
-    lat: float,
-    lon: float,
-    *,
-    fetch_zoning: bool = True,
-) -> tuple[dict | None, str, dict | None]:
-    """
-    Returns: (land_info_updates, message, extra_site_fields)
-    """
-    notes: list[str] = []
-    parcel = get_cached_vworld_parcel(lat, lon)
-    err = None
-    if parcel:
-        notes.append("세션 캐시")
-    else:
-        parcel, err = get_parcel_at_point(lon, lat)
-        if parcel:
-            store_vworld_parcel_cache(lat, lon, parcel)
-    extra: dict = {}
-
-    if not parcel:
-        rev, _ = reverse_parcel_address(lon, lat)
-        msg = err or "VWorld 필지 조회 실패"
-        if isinstance(msg, str) and ("RemoteDisconnected" in msg or "Connection aborted" in msg):
-            msg = (
-                "VWorld 서버가 연결을 끊었습니다 (일시적). "
-                "30초~1분 후 「토지정보·필지경계 갱신」 또는 일괄 조회를 다시 시도하세요."
-            )
-        pnu_only, _ = get_pnu_at_point(lon, lat)
-        if pnu_only:
-            extra["pnu"] = pnu_only
-        base = {"소재지": rev or "정보 없음", "지번": rev or "추가 확인 필요"} if rev else None
-        if base:
-            base = enrich_permit_review({**empty_land_info(), **base})
-        return base, msg, extra
-
+def _land_info_from_parcel(parcel: dict, *, fetch_zoning: bool) -> tuple[dict, dict]:
+    """parcel dict → (land_info updates, extra site fields)."""
+    notes: list[str] = ["세션/저장"]
     props = parcel.get("properties") or {}
     jibun = parcel.get("jibun") or props.get("addr") or ""
     addr = parcel.get("addr") or jibun
@@ -75,28 +38,20 @@ def fetch_vworld_land_attr(
 
     jimok = (parcel.get("jimok") or "").strip() or "정보 없음"
     if jimok == "정보 없음":
-        time.sleep(0.6)
-        lnd, _ = get_land_attrs_at_point(lon, lat)
-        if lnd and lnd.get("지목"):
-            jimok = lnd["지목"]
-            notes.append("LT_C_LNDPARCEL")
-        else:
-            notes.append("지목: LT_C_LNDPARCEL 미조회")
-    else:
-        notes.append("지목: LP_PA_CBND")
+        notes.append("지목 미포함")
 
     yongdo, yongdo_gu = "정보 없음", "정보 없음"
     if fetch_zoning:
-        time.sleep(0.6)
-        lu, _ = get_land_use_at_point(lon, lat)
-        if lu:
-            yongdo = lu.get("용도지역") or yongdo
-            yongdo_gu = lu.get("용도지구") or yongdo_gu
-            notes.append("용도지역 레이어")
-        else:
-            notes.append("용도지역: 추가 레이어 연동 예정")
+        lon = props.get("_query_lon")
+        lat = props.get("_query_lat")
+        if lon is not None and lat is not None:
+            lu, _ = get_land_use_at_point(float(lon), float(lat))
+            if lu:
+                yongdo = lu.get("용도지역") or yongdo
+                yongdo_gu = lu.get("용도지구") or yongdo_gu
+                notes.append("용도지역")
     else:
-        notes.append("용도지역: 갱신 시 상세 조회")
+        notes.append("용도지역: 수동 갱신 시 조회")
 
     updates = {
         "소재지": addr or "정보 없음",
@@ -111,14 +66,65 @@ def fetch_vworld_land_attr(
         "데이터_출처": "VWorld (" + ", ".join(notes) + ")",
     }
     enrich_permit_review(updates)
+    extra = {
+        "boundary_geojson": parcel.get("geojson"),
+        "boundary_source": "VWorld LP_PA_CBND_BUBUN",
+        "pnu": parcel.get("pnu") or "",
+    }
+    return updates, extra
 
-    extra["boundary_geojson"] = parcel.get("geojson")
-    extra["boundary_source"] = "VWorld LP_PA_CBND_BUBUN"
-    extra["pnu"] = parcel.get("pnu") or ""
+
+def fetch_vworld_land_attr(
+    lat: float,
+    lon: float,
+    *,
+    fetch_zoning: bool = True,
+    site: dict | None = None,
+) -> tuple[dict | None, str, dict | None]:
+    """
+    Returns: (land_info_updates, message, extra_site_fields)
+    """
+    extra: dict = {}
+    parcel = hydrate_parcel_from_site_or_cache(site or {}, lat, lon)
+    err = None
+    if not parcel:
+        parcel, err = get_parcel_at_point(lon, lat)
+        if parcel:
+            store_vworld_parcel_cache(lat, lon, parcel)
+
+    if not parcel:
+        rev, _ = reverse_parcel_address(lon, lat)
+        msg = err or "VWorld 필지 조회 실패"
+        if isinstance(msg, str) and ("RemoteDisconnected" in msg or "Connection aborted" in msg):
+            msg = (
+                "VWorld 서버가 연결을 끊었습니다 (일시적). "
+                "30초~1분 후 「토지정보·필지경계 갱신」을 다시 시도하세요."
+            )
+        base = {"소재지": rev or "정보 없음", "지번": rev or "추가 확인 필요"} if rev else None
+        if base:
+            base = enrich_permit_review({**empty_land_info(), **base})
+        return base, msg, extra
+
+    props = parcel.setdefault("properties", {})
+    props["_query_lon"] = lon
+    props["_query_lat"] = lat
+
+    jimok = (parcel.get("jimok") or "").strip()
+    if not jimok or jimok == "정보 없음":
+        lnd, _ = get_land_attrs_at_point(lon, lat)
+        if lnd and lnd.get("지목"):
+            parcel["jimok"] = lnd["지목"]
+
+    updates, extra = _land_info_from_parcel(parcel, fetch_zoning=fetch_zoning)
     return updates, "OK", extra
 
 
-def merge_site_land_info(site: dict, *, fetch_zoning: bool = True) -> tuple[dict, str | None]:
+def merge_site_land_info(
+    site: dict,
+    *,
+    fetch_zoning: bool = True,
+    force: bool = False,
+) -> tuple[dict, str | None]:
     """site 갱신 후 (site, 오류메시지)"""
     info = empty_land_info()
     road = site.get("address_road") or ""
@@ -127,9 +133,21 @@ def merge_site_land_info(site: dict, *, fetch_zoning: bool = True) -> tuple[dict
     info["지번"] = jibun or "추가 확인 필요"
     err_out = None
     lat, lon = site.get("lat"), site.get("lon")
+
+    if not force and site_has_vworld_data(site):
+        existing = site.get("land_info") or {}
+        if existing:
+            info.update(existing)
+        enrich_permit_review(info)
+        site["land_info"] = info
+        return site, None
+
     if lat is not None and lon is not None:
         fetched, msg, extra = fetch_vworld_land_attr(
-            float(lat), float(lon), fetch_zoning=fetch_zoning
+            float(lat),
+            float(lon),
+            fetch_zoning=fetch_zoning,
+            site=site,
         )
         if fetched:
             info.update(fetched)
@@ -141,15 +159,11 @@ def merge_site_land_info(site: dict, *, fetch_zoning: bool = True) -> tuple[dict
             site["pnu"] = extra.get("pnu", "")
         if msg != "OK":
             err_out = msg
-            if not fetched or info.get("데이터_출처", "").startswith("VWorld"):
-                pass
-            info["데이터_출처"] = msg if msg != "OK" else info.get("데이터_출처", "")
-        if msg != "OK" and fetched:
-            info["데이터_출처"] = (info.get("데이터_출처") or "") + f" / 참고: {msg}"
-        elif msg == "OK" and not info.get("데이터_출처"):
+            if not fetched:
+                info["데이터_출처"] = msg
+                enrich_permit_review(info)
+        elif not info.get("데이터_출처"):
             info["데이터_출처"] = "VWorld"
-        if not fetched and msg != "OK":
-            enrich_permit_review(info)
     else:
         info["데이터_출처"] = "좌표 없음"
         enrich_permit_review(info)
@@ -162,6 +176,7 @@ def refresh_listed_sites_boundaries(
     *,
     only_selected: bool = True,
     run_layout: bool = True,
+    force: bool = False,
 ) -> dict:
     """목록에 있는 부지 좌표로 VWorld 경계·토지정보 일괄 조회."""
     from solar_design.auto_layout import apply_layout_to_site
@@ -171,23 +186,20 @@ def refresh_listed_sites_boundaries(
         targets = [s for s in targets if s.get("selected", True)]
 
     ok = 0
+    skip = 0
     fail = 0
     errors: list[str] = []
-    seen_pnu: set[str] = set()
 
     for s in targets:
         label = (s.get("address_jibun") or s.get("address_road") or s.get("id") or "")[:40]
-        pnu_before = (s.get("pnu") or "").strip()
-        if pnu_before and pnu_before in seen_pnu and not s.get("boundary_geojson"):
-            cached = get_cached_vworld_parcel_by_pnu(pnu_before)
-            if cached and cached.get("geojson"):
-                s["boundary_geojson"] = cached["geojson"]
-                s["boundary_source"] = "VWorld LP_PA_CBND_BUBUN (캐시)"
-                s["pnu"] = cached.get("pnu") or pnu_before
-        _, err = merge_site_land_info(s, fetch_zoning=False)
-        pnu = (s.get("pnu") or "").strip()
-        if pnu:
-            seen_pnu.add(pnu)
+        if not force and s.get("boundary_geojson"):
+            ok += 1
+            skip += 1
+            if run_layout and not (s.get("layout") or {}).get("ok"):
+                apply_layout_to_site(s, setback_m=2.0)
+            continue
+
+        _, err = merge_site_land_info(s, fetch_zoning=False, force=True)
         if s.get("boundary_geojson"):
             ok += 1
             if run_layout:
@@ -195,9 +207,14 @@ def refresh_listed_sites_boundaries(
         else:
             fail += 1
             errors.append(f"{label}: {(err or '경계 없음')[:120]}")
-        time.sleep(1.8)
 
-    return {"ok": ok, "fail": fail, "errors": errors, "total": len(targets)}
+    return {
+        "ok": ok,
+        "fail": fail,
+        "skip": skip,
+        "errors": errors,
+        "total": len(targets),
+    }
 
 
 def render_land_info_panel(site: dict | None) -> None:
@@ -207,7 +224,8 @@ def render_land_info_panel(site: dict | None) -> None:
         return
 
     if st.button("토지정보·필지경계·인허가 참고 갱신", key="sd_refresh_land"):
-        _, err = merge_site_land_info(site)
+        with st.spinner("VWorld 조회 중…"):
+            _, err = merge_site_land_info(site, fetch_zoning=True, force=True)
         if err and err != "OK":
             st.warning(err)
         elif site.get("boundary_geojson"):
@@ -254,7 +272,7 @@ def render_land_info_panel(site: dict | None) -> None:
         st.success("필지 경계: VWorld 지적 데이터 (지도 표시)")
     else:
         st.markdown(
-            '<p class="sd-warn">⚠ 필지 경계 없음 — 「갱신」 후에도 없으면 '
-            "VWORLD_DOMAIN·좌표를 확인하세요.</p>",
+            '<p class="sd-warn">⚠ 필지 경계 없음 — 「갱신」으로 VWorld 조회 '
+            "(자동 호출은 최소화됨)</p>",
             unsafe_allow_html=True,
         )

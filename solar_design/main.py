@@ -7,7 +7,7 @@ import json
 import streamlit as st
 
 from solar_design.auto_layout import handle_map_click, render_auto_layout_panel
-from solar_design.land_info import merge_site_land_info, render_land_info_panel
+from solar_design.land_info import render_land_info_panel
 from solar_design.site_search import render_site_search_panel
 from solar_design.utils import (
     SESSION_ACTIVE_SITE_ID,
@@ -70,28 +70,23 @@ def _render_map(site: dict | None, map_style: str) -> None:
 
     bounds_layer = None
     bboxes: list[list[float]] = []
-    for s in all_sites:
-        gj = s.get("boundary_geojson")
-        if not gj:
-            continue
+    gj_active = site.get("boundary_geojson")
+    if gj_active:
         try:
-            gj_obj = gj if isinstance(gj, dict) else json.loads(gj)
+            gj_obj = gj_active if isinstance(gj_active, dict) else json.loads(gj_active)
             if isinstance(gj_obj.get("bbox"), list) and len(gj_obj["bbox"]) >= 4:
                 bboxes.append(gj_obj["bbox"])
-            is_active = site and s.get("id") == site.get("id")
-            layer = folium.GeoJson(
+            bounds_layer = folium.GeoJson(
                 gj_obj,
-                name=s.get("address_jibun") or s.get("id"),
-                style_function=(lambda active: (lambda _: {
-                    "fillColor": "#66bb6a" if active else "#a5d6a7",
-                    "color": "#2e7d32" if active else "#81c784",
-                    "weight": 3 if active else 1,
-                    "fillOpacity": 0.35 if active else 0.15,
-                }))(is_active),
+                name=site.get("address_jibun") or site.get("id"),
+                style_function=lambda _: {
+                    "fillColor": "#66bb6a",
+                    "color": "#2e7d32",
+                    "weight": 3,
+                    "fillOpacity": 0.35,
+                },
             )
-            layer.add_to(m)
-            if is_active:
-                bounds_layer = layer
+            bounds_layer.add_to(m)
         except Exception:
             pass
 
@@ -134,7 +129,7 @@ def _render_map(site: dict | None, map_style: str) -> None:
             },
         ).add_to(m)
 
-    map_key = f"sd_map_{len(all_sites)}_{sum(1 for s in all_sites if s.get('boundary_geojson'))}"
+    map_key = f"sd_map_{site.get('id', 'none')}"
     map_state = st_folium(
         m,
         width=None,
@@ -181,14 +176,20 @@ def _render_parcel_list() -> None:
     if bulk:
         from solar_design.land_info import refresh_listed_sites_boundaries
 
-        with st.spinner("VWorld 필지 경계 조회 중… (필지당 약 1초)"):
-            result = refresh_listed_sites_boundaries(sites, only_selected=True, run_layout=True)
+        with st.spinner("VWorld 필지 경계 조회 중…"):
+            result = refresh_listed_sites_boundaries(
+                sites, only_selected=True, run_layout=True, force=False
+            )
         set_sites(sites)
         if result["ok"]:
-            st.success(
+            msg = (
                 f"경계 표시 {result['ok']}건 / 대상 {result['total']}건 "
-                f"(실패 {result['fail']}건)"
+                f"(실패 {result['fail']}건"
             )
+            if result.get("skip"):
+                msg += f", 캐시·기존 {result['skip']}건"
+            msg += ")"
+            st.success(msg)
         else:
             st.warning(f"경계 0건 — VWorld 502·DOMAIN 확인 (대상 {result['total']}건)")
         for line in result.get("errors") or []:
@@ -293,19 +294,21 @@ def view_solar_design() -> None:
             lat=add_payload["lat"],
             lon=add_payload["lon"],
         )
-        site, v_err = merge_site_land_info(site, fetch_zoning=False)
-        from solar_design.auto_layout import apply_layout_to_site
+        from solar_design.permit_review import enrich_permit_review
 
-        if site.get("boundary_geojson"):
-            apply_layout_to_site(site, setback_m=2.0)
+        info = site["land_info"]
+        info["소재지"] = site["address_road"] or site["address_jibun"] or "정보 없음"
+        info["지번"] = site["address_jibun"] or "추가 확인 필요"
+        info["데이터_출처"] = "Juso/Kakao (VWorld는 「갱신」 또는 일괄 조회)"
+        enrich_permit_review(info)
         sites = get_sites()
         sites.append(site)
         set_sites(sites)
         st.session_state[SESSION_ACTIVE_SITE_ID] = site["id"]
-        if v_err and v_err != "OK":
-            st.warning(f"부지 추가됨. VWorld: {v_err[:200]}")
-        else:
-            st.success("부지가 목록에 추가되었습니다.")
+        st.success(
+            "부지가 목록에 추가되었습니다. "
+            "필지 경계·토지정보는 「갱신」 또는 「일괄 조회」를 눌러 주세요."
+        )
         st.rerun()
 
     _render_parcel_list()

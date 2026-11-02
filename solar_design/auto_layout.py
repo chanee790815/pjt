@@ -237,38 +237,30 @@ def find_site_at_click(sites: list[dict], lon: float, lat: float) -> dict | None
 
 
 def handle_map_click(lon: float, lat: float) -> None:
-    """지도 클릭 → VWorld 필지 조회·목록 추가(또는 기존 PNU)·자동 배치."""
+    """지도 클릭 → (필요 시) VWorld · 배치. 이미 경계 있으면 API 생략."""
     from solar_design.land_info import merge_site_land_info
     from solar_design.site_search import geocode_kakao_reverse
     from solar_design.utils import SESSION_ACTIVE_SITE_ID, default_site, get_sites, set_sites
-    from solar_design.vworld_client import get_parcel_at_point, reverse_parcel_address
 
     sites = get_sites()
     target = find_site_at_click(sites, lon, lat)
+    site_err = None
 
     if target is None:
         road, jibun = geocode_kakao_reverse(lat, lon)
-        if not jibun and not road:
-            rev, _ = reverse_parcel_address(lon, lat)
-            jibun = rev or ""
         target = default_site(road=road, jibun=jibun, lat=lat, lon=lon)
-        site_err = merge_site_land_info(target)[1]
-        pnu = (target.get("pnu") or "").strip()
-        if pnu:
-            existing = next((s for s in sites if (s.get("pnu") or "").strip() == pnu), None)
-            if existing:
-                existing["lat"] = lat
-                existing["lon"] = lon
-                site_err = merge_site_land_info(existing)[1]
-                target = existing
-            else:
-                sites.append(target)
-        else:
-            sites.append(target)
+        sites.append(target)
+        if not target.get("boundary_geojson"):
+            _, site_err = merge_site_land_info(
+                target, fetch_zoning=False, force=True
+            )
     else:
         target["lat"] = lat
         target["lon"] = lon
-        site_err = merge_site_land_info(target)[1]
+        if not target.get("boundary_geojson"):
+            _, site_err = merge_site_land_info(
+                target, fetch_zoning=False, force=True
+            )
 
     st.session_state[SESSION_ACTIVE_SITE_ID] = target["id"]
     setback = float(st.session_state.get("sd_layout_setback", 2.0))

@@ -25,9 +25,11 @@ def _vworld_domain() -> str:
     return "pmteampjt26.streamlit.app"
 
 
-def _domain_candidates() -> list[str]:
+def _domain_candidates(*, allow_fallback: bool = True) -> list[str]:
     primary = _vworld_domain()
-    cands = [primary, "pmteampjt26.streamlit.app", "localhost"]
+    if not allow_fallback:
+        return [primary] if primary else ["pmteampjt26.streamlit.app"]
+    cands = [primary, "pmteampjt26.streamlit.app"]
     out: list[str] = []
     for c in cands:
         if c and c not in out:
@@ -36,6 +38,9 @@ def _domain_candidates() -> list[str]:
 
 
 LAST_VWORLD_ERROR: str = ""
+
+_HTTP_ATTEMPTS = 3
+_READ_TIMEOUT = 25
 
 _VWORLD_HEADERS = {
     "User-Agent": "PM-SolarDesign/1.0 (Streamlit)",
@@ -58,26 +63,27 @@ def _friendly_request_error(exc: BaseException) -> str:
     return raw[:200]
 
 
-def _http_get_json(url: str, params: dict, *, timeout: int = 45) -> tuple[dict | None, str | None]:
-    """502·연결 끊김 시 재시도. 요청마다 새 연결(Cloud에서 keep-alive 끊김 완화)."""
+def _http_get_json(url: str, params: dict, *, timeout: int | None = None) -> tuple[dict | None, str | None]:
+    """502·연결 끊김 시 짧게 재시도."""
+    read_timeout = timeout if timeout is not None else _READ_TIMEOUT
     last_err = ""
-    for attempt in range(6):
+    for attempt in range(_HTTP_ATTEMPTS):
         try:
             r = requests.get(
                 url,
                 params=params,
-                timeout=(12, timeout),
+                timeout=(8, read_timeout),
                 headers=_VWORLD_HEADERS,
             )
             if r.status_code in (502, 503, 504):
                 last_err = f"{r.status_code} Server Error (VWorld 일시 오류)"
-                time.sleep(1.5 + attempt * 1.0)
+                time.sleep(0.8 + attempt * 0.5)
                 continue
             r.raise_for_status()
             return r.json(), None
         except requests.exceptions.HTTPError as e:
             last_err = _friendly_request_error(e)
-            time.sleep(1.5 + attempt * 1.0)
+            time.sleep(0.8 + attempt * 0.5)
             continue
         except (
             requests.exceptions.ConnectionError,
@@ -85,7 +91,7 @@ def _http_get_json(url: str, params: dict, *, timeout: int = 45) -> tuple[dict |
             requests.exceptions.Timeout,
         ) as e:
             last_err = _friendly_request_error(e)
-            time.sleep(2.0 + attempt * 1.2)
+            time.sleep(1.0 + attempt * 0.6)
             continue
         except Exception as e:
             return None, _friendly_request_error(e)
@@ -137,30 +143,28 @@ def get_pnu_at_point(lon: float, lat: float) -> tuple[str | None, str | None]:
     key = _vworld_key()
     if not key:
         return None, "VWORLD_API_KEY 미설정"
-    for domain in _domain_candidates():
-        params = {
-            "service": "address",
-            "request": "getPnu",
-            "version": "2.0",
-            "point": f"{lon},{lat}",
-            "crs": "epsg:4326",
-            "format": "json",
-            "key": key,
-            "domain": domain,
-        }
-        body, _ = _http_get_json(VWORLD_ADDR_URL, params)
-        if not body:
-            continue
-        resp = body.get("response") or {}
-        if resp.get("status") != "OK":
-            continue
-        result = resp.get("result") or {}
-        if isinstance(result, list) and result:
-            result = result[0]
-        pnu = (result.get("pnu") or result.get("id") or "").strip()
-        if pnu:
-            return pnu, None
-    return None, None
+    domain = _domain_candidates(allow_fallback=False)[0]
+    params = {
+        "service": "address",
+        "request": "getPnu",
+        "version": "2.0",
+        "point": f"{lon},{lat}",
+        "crs": "epsg:4326",
+        "format": "json",
+        "key": key,
+        "domain": domain,
+    }
+    body, _ = _http_get_json(VWORLD_ADDR_URL, params, timeout=15)
+    if not body:
+        return None, None
+    resp = body.get("response") or {}
+    if resp.get("status") != "OK":
+        return None, None
+    result = resp.get("result") or {}
+    if isinstance(result, list) and result:
+        result = result[0]
+    pnu = (result.get("pnu") or result.get("id") or "").strip()
+    return (pnu, None) if pnu else (None, None)
 
 
 def get_parcel_by_pnu(pnu: str) -> tuple[dict | None, str | None]:
@@ -293,22 +297,25 @@ def get_land_attrs_at_point(lon: float, lat: float) -> tuple[dict | None, str | 
 
 
 def get_land_use_at_point(lon: float, lat: float) -> tuple[dict | None, str | None]:
-    """용도지역 등(레이어 제공 시). 실패 시 None."""
-    for layer in ("LT_L_UQ111", "LT_L_UQ141", "LT_L_SPBD"):
-        feats, err = _get_features_at_point(layer, lon, lat)
-        if feats:
-            props = feats[0].get("properties") or {}
-            zone = (
-                props.get("uname")
-                or props.get("uqcgr_nm")
-                or props.get("zoneName")
-                or props.get("zone_nm")
-                or props.get("use_regn_nm")
-                or ""
-            )
-            district = props.get("district_nm") or props.get("uqcgr_nm2") or ""
-            if zone or district:
-                return {"용도지역": zone or "정보 없음", "용도지구": district or "정보 없음", "properties": props}, None
+    """용도지역 — 1개 레이어만 시도 (속도)."""
+    feats, _ = _get_features_at_point("LT_L_UQ111", lon, lat)
+    if feats:
+        props = feats[0].get("properties") or {}
+        zone = (
+            props.get("uname")
+            or props.get("uqcgr_nm")
+            or props.get("zoneName")
+            or props.get("zone_nm")
+            or props.get("use_regn_nm")
+            or ""
+        )
+        district = props.get("district_nm") or props.get("uqcgr_nm2") or ""
+        if zone or district:
+            return {
+                "용도지역": zone or "정보 없음",
+                "용도지구": district or "정보 없음",
+                "properties": props,
+            }, None
     return None, None
 
 
@@ -348,9 +355,8 @@ def get_parcel_at_point(lon: float, lat: float) -> tuple[dict | None, str | None
     if err:
         last_err = err
 
-    # 클릭이 경계선 근처일 때 미세 오프셋 재시도
     dlon, dlat = 0.00002, 0.00002
-    for ox, oy in ((0, 0), (dlon, 0), (-dlon, 0), (0, dlat), (0, -dlat)):
+    for ox, oy in ((dlon, 0), (-dlon, 0), (0, dlat)):
         body2, _ = _get_data_feature(
             {
                 "service": "data",
@@ -379,28 +385,27 @@ def reverse_parcel_address(lon: float, lat: float) -> tuple[str | None, str | No
     key = _vworld_key()
     if not key:
         return None, None
-    for domain in _domain_candidates():
-        params = {
-            "service": "address",
-            "request": "getAddress",
-            "version": "2.0",
-            "crs": "epsg:4326",
-            "point": f"{lon},{lat}",
-            "type": "PARCEL",
-            "format": "json",
-            "key": key,
-            "domain": domain,
-        }
-        body, _ = _http_get_json(VWORLD_ADDR_URL, params)
-        if not body:
-            continue
-        resp = body.get("response") or {}
-        if resp.get("status") != "OK":
-            continue
-        result = resp.get("result") or []
-        if not result:
-            continue
-        item = result[0]
-        text = item.get("text") or item.get("structure", {}).get("level4L") or ""
-        return text.strip() or None, None
-    return None, None
+    domain = _domain_candidates(allow_fallback=False)[0]
+    params = {
+        "service": "address",
+        "request": "getAddress",
+        "version": "2.0",
+        "crs": "epsg:4326",
+        "point": f"{lon},{lat}",
+        "type": "PARCEL",
+        "format": "json",
+        "key": key,
+        "domain": domain,
+    }
+    body, _ = _http_get_json(VWORLD_ADDR_URL, params, timeout=15)
+    if not body:
+        return None, None
+    resp = body.get("response") or {}
+    if resp.get("status") != "OK":
+        return None, None
+    result = resp.get("result") or []
+    if not result:
+        return None, None
+    item = result[0]
+    text = item.get("text") or item.get("structure", {}).get("level4L") or ""
+    return text.strip() or None, None
