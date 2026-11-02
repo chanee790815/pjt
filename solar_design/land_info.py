@@ -15,6 +15,7 @@ from solar_design.vworld_client import (
     get_land_attrs_at_point,
     get_land_use_at_point,
     get_parcel_at_point,
+    get_parcel_by_point_direct,
     get_parcel_minimal,
     reverse_parcel_address,
 )
