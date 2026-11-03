@@ -10,13 +10,11 @@ from solar_design.utils import (
     empty_land_info,
     store_vworld_parcel_cache,
 )
+from solar_design.vworld_cache import fetch_parcel_network, is_streamlit_cloud
 from solar_design.vworld_client import (
     diagnose_vworld_one_parcel,
     get_land_attrs_at_point,
     get_land_use_at_point,
-    get_parcel_at_point,
-    get_parcel_by_point_direct,
-    get_parcel_minimal,
     reverse_parcel_address,
 )
 
@@ -83,6 +81,7 @@ def fetch_vworld_land_attr(
     *,
     fetch_zoning: bool = True,
     site: dict | None = None,
+    force_network: bool = False,
 ) -> tuple[dict | None, str, dict | None]:
     """
     Returns: (land_info_updates, message, extra_site_fields)
@@ -91,11 +90,9 @@ def fetch_vworld_land_attr(
     parcel = hydrate_parcel_from_site_or_cache(site or {}, lat, lon)
     err = None
     if not parcel:
-        parcel, err = get_parcel_by_point_direct(lon, lat, max_http_attempts=3)
-        if not parcel:
-            parcel, err = get_parcel_minimal(lon, lat)
-        if not parcel:
-            parcel, err = get_parcel_at_point(lon, lat)
+        parcel, err = fetch_parcel_network(
+            lon, lat, use_disk_cache=not force_network
+        )
         if parcel:
             store_vworld_parcel_cache(lat, lon, parcel)
 
@@ -156,6 +153,7 @@ def merge_site_land_info(
             float(lon),
             fetch_zoning=fetch_zoning,
             site=site,
+            force_network=force,
         )
         if fetched:
             info.update(fetched)

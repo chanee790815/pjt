@@ -289,7 +289,7 @@ def api_status_line() -> str:
     else:
         parts.append("Kakao REST — 키 미설정")
     if get_secret("VWORLD_API_KEY"):
-        parts.append("VWorld ✓")
+        parts.append("VWorld 키✓(연결은 갱신·테스트로 확인)")
         dom = get_secret("VWORLD_DOMAIN") or "pmteampjt26.streamlit.app(기본)"
         parts.append(f"domain={dom}")
     else:

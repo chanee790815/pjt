@@ -12,6 +12,7 @@ from solar_design.utils import get_secret
 
 VWORLD_DATA_URL = "https://api.vworld.kr/req/data"
 VWORLD_ADDR_URL = "https://api.vworld.kr/req/address"
+VWORLD_WFS_URL = "https://api.vworld.kr/req/wfs"
 
 
 def _vworld_key() -> str:
@@ -194,13 +195,59 @@ def get_pnu_at_point(lon: float, lat: float) -> tuple[str | None, str | None]:
     return (pnu, None) if pnu else (None, "PNU 결과 없음 (좌표가 필지 밖일 수 있음)")
 
 
+def _feature_collection_from_body(body: dict) -> tuple[list, dict | None]:
+    """REST(response.result) 또는 WFS(GeoJSON) 공통 파싱."""
+    if body.get("type") == "FeatureCollection":
+        feats = body.get("features") or []
+        return feats, body if feats else None
+    fc = (body.get("response", {}).get("result") or {}).get("featureCollection")
+    feats = (fc or {}).get("features") or []
+    return feats, fc
+
+
+def get_parcel_by_wfs(
+    lon: float,
+    lat: float,
+    *,
+    max_http_attempts: int = 2,
+) -> tuple[dict | None, str | None]:
+    """WFS GetFeature — 2D Data REST와 다른 게이트웨이 경로 (WMS/WFS API)."""
+    key = _vworld_key()
+    if not key:
+        return None, "VWORLD_API_KEY 미설정"
+    domain = _domain_candidates(allow_fallback=False)[0]
+    delta = 0.00008
+    bbox = f"{lon - delta},{lat - delta},{lon + delta},{lat + delta}"
+    params = {
+        "SERVICE": "WFS",
+        "REQUEST": "GetFeature",
+        "TYPENAME": "lp_pa_cbnd_bubun",
+        "VERSION": "1.1.0",
+        "MAXFEATURES": "1",
+        "SRSNAME": "EPSG:4326",
+        "OUTPUT": "application/json",
+        "BBOX": bbox,
+        "KEY": key,
+        "DOMAIN": domain,
+    }
+    body, err = _http_get_json(
+        VWORLD_WFS_URL, params, timeout=25, max_attempts=max_http_attempts
+    )
+    if not body:
+        return None, err or "WFS HTTP 실패"
+    feats, fc = _feature_collection_from_body(body)
+    if not feats or not fc:
+        return None, "WFS: BBOX 내 필지 없음"
+    return _feature_to_parcel(feats[0], fc), None
+
+
 def get_parcel_by_point_direct(
     lon: float,
     lat: float,
     *,
     max_http_attempts: int = 3,
 ) -> tuple[dict | None, str | None]:
-    """getPnu 없이 2D데이터 좌표→필지 (주소 API 502 우회)."""
+    """2D Data REST → 실패 시 WFS (주소 API 생략)."""
     body, err = _get_data_feature(
         {
             "service": "data",
@@ -215,13 +262,17 @@ def get_parcel_by_point_direct(
         primary_domain_only=True,
         max_http_attempts=max_http_attempts,
     )
-    if not body:
-        return None, err
-    fc = (body.get("response", {}).get("result") or {}).get("featureCollection")
-    feats = (fc or {}).get("features") or []
-    if not feats:
-        return None, "좌표 위치에 필지 없음 (geomFilter)"
-    return _feature_to_parcel(feats[0], fc), None
+    if body:
+        feats, fc = _feature_collection_from_body(body)
+        if feats and fc:
+            return _feature_to_parcel(feats[0], fc), None
+        err = err or "좌표 위치에 필지 없음 (geomFilter)"
+    parcel, err_w = get_parcel_by_wfs(lon, lat, max_http_attempts=2)
+    if parcel:
+        return parcel, None
+    rest = err or "2D Data REST 실패"
+    wfs = err_w or "WFS 실패"
+    return None, f"{rest} / WFS: {wfs}"
 
 
 def get_parcel_by_pnu(
@@ -417,12 +468,12 @@ def diagnose_vworld_one_parcel(lon: float, lat: float) -> tuple[list[str], dict 
 
     from solar_design import __version__ as sd_ver
 
-    lines.append(f"모듈 버전 **{sd_ver}** (0.1.2 미만이면 GitHub 코드 재업로드)")
+    lines.append(f"모듈 버전 **{sd_ver}**")
     lines.append(f"✓ Secrets에 VWORLD 키 있음 · domain={_vworld_domain()}")
     lines.append(f"좌표: lon={lon}, lat={lat}")
 
-    lines.append("**① 2D Data** 좌표→필지경계 (getPnu 생략, LP_PA_CBND)…")
-    parcel, err_d = get_parcel_by_point_direct(lon, lat, max_http_attempts=4)
+    lines.append("**① 2D Data REST** 좌표→필지…")
+    parcel, err_d = get_parcel_by_point_direct(lon, lat, max_http_attempts=2)
     if parcel:
         pnu_b = parcel.get("pnu") or "—"
         area = parcel.get("area_m2")
@@ -432,8 +483,11 @@ def diagnose_vworld_one_parcel(lon: float, lat: float) -> tuple[list[str], dict 
             else f"✓ ① 성공 · PNU={pnu_b}"
         )
         return lines, parcel
-    lines.append(f"❌ ① 2D Data 실패: {err_d or LAST_VWORLD_ERROR}")
-    lines.append("→ 개발키 **2D Data API** 체크 · domain 일치 · 1~2분 후 재시도")
+    lines.append(f"❌ ① 실패: {err_d or LAST_VWORLD_ERROR}")
+    lines.append(
+        "→ REST·WFS 모두 실패 시 **Streamlit Cloud → VWorld** 구간 이슈 가능. "
+        "PC `streamlit run` 동일 테스트 권장."
+    )
 
     lines.append("**② 주소 API** getPnu (보조)…")
     pnu, err = get_pnu_at_point(lon, lat)

@@ -21,6 +21,7 @@ from solar_design.utils import (
     render_step_wizard,
     set_sites,
 )
+from solar_design.vworld_cache import is_streamlit_cloud
 
 
 def _render_map(site: dict | None, map_style: str) -> None:
@@ -252,9 +253,22 @@ def view_solar_design() -> None:
     try:
         from solar_design import __version__ as _sdv
 
-        st.caption(f"solar_design **{_sdv}** — 테스트에 `0.1.2` 표시되면 최신 코드 반영됨")
+        st.caption(f"solar_design **{_sdv}** — Cloud 배포 시 **0.1.4** 확인")
     except Exception:
         pass
+
+    if is_streamlit_cloud():
+        with st.expander("☁ Streamlit Cloud · VWorld 1단계 안내", expanded=False):
+            st.markdown(
+                """
+                - **필지 1개**만 체크 → **🧪 2단계 테스트** 또는 **갱신** (일괄 조회는 최소화)
+                - **502·연결 끊김** → **1~2분 후** 같은 버튼 **한 번만** 재시도
+                - 한 번 성공한 좌표는 **24시간 서버 캐시** (같은 필지 재조회 감소)
+                - 로컬 PC에서는 되고 Cloud만 안 되면 **VWorld ↔ Cloud IP** 이슈 — 2단계(DB 캐시) 검토
+                """
+            )
+    else:
+        st.caption("로컬 실행 — VWorld는 PC에서 직접 호출됩니다.")
 
     juso_ok = bool(get_secret("JUSO_API_KEY") or get_secret("JUSO_CONFIRM_KEY"))
 
